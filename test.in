@@ -1,0 +1,57 @@
+# Church numerals
+cons Z
+cons S(n)
+
+# Erasure and Duplication
+cons Erase
+cons Dup(out1, out2) . in
+rule eraseErase: Erase . Erase = ()
+#rule eraseDup: Erase . Dup(a, b) = Erase . a, Erase . b
+rule dupDup: Dup(a, b) . Dup(c, d) = a . c, b . d
+
+rule dupS: S(x) . Dup(a, b) = x . Dup(sa, sb), a . S(sa), b . S(sb)
+rule dupZ: Z . Dup(a, b) = a . Z, b . Z
+rule eraseS: Erase . S(x) = Erase . x
+rule eraseZ: Erase . Z = ()
+
+# Addition
+cons Add(y, res) . x
+rule addZ: Add(y, r) . Z = y . r
+rule addS: Add(y, r) . S(x) = Add(S(y), r) . x
+rule dupAdd: Dup(a, b) . Add(y, r) = a . Add(ya, ra), b . Add(yb, rb), y . Dup(ya, yb), r . Dup(ra, rb)
+rule eraseAdd: Erase . Add(y, r) = Erase . y, Erase . r
+
+# Multiplication
+cons Mult(y, res) . x
+rule multZ: Mult(y, r) . Z = r . Z, y . Erase
+rule multS: Mult(y, r) . S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
+
+# Example: Computations on church numerals
+data y . S(S(S(S(S(Z))))),
+     x . S(S(S(Z))),
+     Add(y, example_3_plus_5) . x
+data Mult(2'c, example_3_times_2) . 3'c
+
+# Lists
+cons Nil
+cons Cons(head, tail) . list
+rule dupCons: Cons(x, xs) . Dup(a, b) = x . Dup(xa, xb), xs . Dup(xsa, xsb), a . Cons(xa, xsa), b . Cons(xb, xsb)
+rule dupNil: Nil . Dup(a, b) = a . Nil, b . Nil
+rule eraseCons: Erase . Cons(x, xs) = Erase . x, Erase . xs
+rule eraseNil: Erase . Nil = ()
+
+cons Length(res) . list
+rule lengthNil: Length(res) . Nil = res . Z
+rule lengthCons: Length(res) . Cons(x, xs) = res . S(lxs), xs . Length(lxs), x . Erase
+
+cons Map(fin, fout, res) . list
+rule MapNil: Map(fin, fout, res) . Nil = res . Nil, fin . Erase, fout.Erase
+rule MapCons: Map(fin, fout, res) . Cons(x, xs) = res . Cons(fouta, xsm), Map(finb, foutb, xsm) . xs, fin . Dup(fina, finb), fout . Dup(fouta, foutb), fina . x
+
+# Example: List operations
+data l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+     l0 . Dup(l0a, l0b),
+     Length(l0_length) . l0a,
+     #fout . S(fin),
+     fin . Add(2'c, fout),
+     Map(fin, fout, l0_mapped) . l0b
