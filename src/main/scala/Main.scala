@@ -7,12 +7,13 @@ import scala.collection.mutable
 
 object AST {
   sealed trait Statement
-  case class Cons(name: Ident, args: Seq[Ident], ret: Option[Ident]) extends Statement {
+  case class Cons(name: Ident, args: Seq[Ident], ret: Option[Ident], der: Option[Deriving]) extends Statement {
     def arity = args.length
     def show: String = {
       val a = if(args.isEmpty) "" else args.map(_.s).mkString("(", ", ", ")")
       val r = if(ret.isEmpty) "" else s" . ${ret.get.show}"
-      s"${name.s}$a$r"
+      val d = if(der.isEmpty) "" else s" deriving ${der.get.show}"
+      s"${name.s}$a$r$d"
     }
   }
   sealed trait Expr {
@@ -31,12 +32,15 @@ object AST {
   case class Data(exprs: Seq[Expr]) extends Statement {
     def show = exprs.map(_.show).mkString(", ")
   }
+  case class Deriving(constructors: Seq[Ident]) {
+    def show = constructors.map(_.show).mkString(", ")
+  }
 }
 
 object Lexical {
   import NoWhitespace._
 
-  val keywords = Set("cons", "rule", "data")
+  val keywords = Set("cons", "rule", "data", "deriving")
 
   def identifier[_: P]: P[String] =
      P( (letter|"_") ~ (letter | digit | "_").rep ).!.filter(!keywords.contains(_))
@@ -79,8 +83,11 @@ object Parser {
   def retOpt[_: P]: P[Option[AST.Ident]] =
     P(  ("." ~ ident).?  )
 
+  def deriving[_ : P]: P[AST.Deriving] =
+    P(  kw("deriving") ~ ident.rep(1, sep=",")  ).map(AST.Deriving(_))
+
   def cons[_: P]: P[AST.Cons] =
-    P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt  ).map(AST.Cons.tupled)
+    P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt ~ deriving.?  ).map(AST.Cons.tupled)
 
   def rule[_: P]: P[AST.Rule] =
     P(  kw("rule") ~/ ident ~ ":" ~ expr ~ "=" ~ exprList  ).map(AST.Rule.tupled)
@@ -96,7 +103,7 @@ object Parser {
 object Main extends App {
   val input = new String(Files.readAllBytes(Path.of("test.in")), StandardCharsets.UTF_8)
   val statements = parse(input, Parser.unit(_), verboseFailures = true).get.value
-  statements.foreach(println)
+  //statements.foreach(println)
 
   class RuleKey(_name1: AST.Ident, _name2: AST.Ident) {
     val (name1, name2) =
@@ -118,6 +125,37 @@ object Main extends App {
   val ruleCuts = mutable.Map.empty[RuleKey, CheckedRule]
   val ruleNames = mutable.Map.empty[AST.Ident, CheckedRule]
   val data = mutable.ArrayBuffer.empty[AST.Data]
+
+  def derive(cons: AST.Cons, id: AST.Ident): AST.Rule = {
+    val name = AST.Ident(s"derived$$${cons.name.s}$$${id.s}")
+    var nextId = 0
+    def genId() = {
+      val s = AST.Ident(s"$$s${nextId}")
+      nextId += 1
+      s
+    }
+    val (cut, reduced) = id.s match {
+      case "Erase" =>
+        val Erase = AST.Ident("Erase")
+        val ids = (0 until cons.arity).map(_ => genId()).toArray
+        val cut = AST.Cut(Erase, AST.Ap(cons.name, ids))
+        val reduced = ids.map(i => AST.Cut(Erase, i))
+        (cut, reduced.toSeq)
+      case "Dup" =>
+        val Dup = AST.Ident("Dup")
+        val ids, aIds, bIds = (0 until cons.arity).map(_ => genId()).toArray
+        val a, b = genId()
+        val cut = AST.Cut(AST.Ap(Dup, Seq(a, b)), AST.Ap(cons.name, ids))
+        val dupPorts = ids.zip(aIds).zip(bIds).map { case ((id, aId), bId) =>
+          AST.Cut(AST.Ap(Dup, Seq(aId, bId)), id)
+        }
+        val recombA = AST.Cut(a, AST.Ap(cons.name, aIds))
+        val recombB = AST.Cut(b, AST.Ap(cons.name, bIds))
+        (cut, recombA :: recombB :: dupPorts.toList)
+      case s => sys.error(s"Don't know how to derive ${name.show}")
+    }
+    AST.Rule(name, cut, reduced)
+  }
 
   def addRule(r: AST.Rule): Unit = {
     def err = sys.error(s"Rule ${r.name.s} is not defined on a cut")
@@ -150,6 +188,9 @@ object Main extends App {
     case c: AST.Cons =>
       if(constrs.contains(c.name)) sys.error(s"Duplicate cons: ${c.name.s}")
       constrs.put(c.name, c)
+      c.der.foreach { der =>
+        der.constructors.foreach(i => addRule(derive(c, i)))
+      }
     case r: AST.Rule => addRule(r)
     case d: AST.Data => data.addOne(d)
   }
@@ -406,12 +447,14 @@ class Interpreter(globals: Symbols, rules: Iterable[Main.CheckedRule]) extends S
         case _ =>
       }
     }
+    var steps = 0
     while(!cuts.isEmpty) {
-      println(s"Remaining reducible cuts: ${cuts.size}")
+      //println(s"Remaining reducible cuts: ${cuts.size}")
+      steps += 1
       val c = cuts.head
       cuts.remove(c)
       val r = ruleImpls(c.ruleKey)
-      println(s"Reducing $c with ${r.r.name.s}: ${c.ruleKey}")
+      //println(s"Reducing $c with ${r.r.name.s}: ${c.ruleKey}")
       val syms = new Symbols(Some(globals))
       val sc = new Scope
       sc.add(r.reduced, syms)
@@ -438,7 +481,8 @@ class Interpreter(globals: Symbols, rules: Iterable[Main.CheckedRule]) extends S
         }
       }
       //println("**** After reduction:")
-      log()
     }
+    println(s"Irreducible after $steps reductions.")
+    log()
   }
 }
