@@ -24,10 +24,12 @@ cons Mult(y, r) . x          deriving Erase, Dup
   cut S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
 
 # Example: Computations on church numerals
-data y . S(S(S(S(S(Z))))),
-     x . S(S(S(Z))),
-     Add(y, example_3_plus_5) . x
-data Mult(2'c, example_3_times_2) . 3'c
+let example_3_plus_5 =
+  y . S(S(S(S(S(Z))))),
+  x . S(S(S(Z))),
+  Add(y, example_3_plus_5) . x
+let example_3_times_2 =
+  Mult(2'c, example_3_times_2) . 3'c
 
 # Lists
 cons Nil                     deriving Erase, Dup
@@ -39,14 +41,15 @@ cons Length(res) . list      deriving Erase, Dup
 
 cons Map(fin, fout, res) . l deriving Erase, Dup
   cut Nil = res . Nil, fin . Erase, fout.Erase
-  cut Cons(x, xs) = res . Cons(fouta, xsm), Map(finb, foutb, xsm) . xs, fin . Dup(fina, finb), fout . Dup(fouta, foutb), fina . x
+  cut Cons(x, xs) = res . Cons(fouta, xsm), xs . Map(finb, foutb, xsm), fin . Dup(x, finb), fout . Dup(fouta, foutb)
 
 # Example: List operations
-data l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
-     l0 . Dup(l0a, l0b),
-     Length(l0_length) . l0a,
-     fin . Add(2'c, fout),
-     Map(fin, fout, l0_mapped) . l0b
+let l0_length, l0_mapped =
+  l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+  l0 . Dup(l0a, l0b),
+  Length(l0_length) . l0a,
+  fin . Add(2'c, fout),
+  Map(fin, fout, l0_mapped) . l0b
 
 # Explicit lambdas
 cons Lambda(in, out)         deriving Erase, Dup
@@ -56,10 +59,8 @@ cons Apply(in, out) . l      deriving Erase, Dup
 # Eample: List mapping with lambdas
 cons Map2(f, res) . l        deriving Erase, Dup
   cut Nil = res . Nil, f . Erase
-  cut Cons(x, xs) =
-    res . Cons(fx, xsm),
-    xs . Map2(fb, xsm),
-    f . Dup(Apply(x, fx), fb)
-data l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
-     f . Lambda(Add(2'c, fout), fout),
-     Map2(f, l0_mapped_lambda) . l0
+  cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . Dup(Apply(x, fx), fb)
+let l0_mapped_lambda =
+  l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+  f . Lambda(Add(2'c, fout), fout),
+  Map2(f, l0_mapped_lambda) . l0

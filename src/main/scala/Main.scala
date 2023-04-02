@@ -16,32 +16,38 @@ object AST {
       s"${name.s}$a$r$d"
     }
   }
-  sealed trait Expr {
+  sealed trait ExprOrCut {
     def show: String
+  }
+  sealed trait Expr extends ExprOrCut {
+    def target: Ident
+    def args: Seq[Expr]
   }
   case class Ident(s: String) extends Expr {
     def show = s
+    def target = this
+    def args = Nil
   }
   case class Ap(target: Ident, args: Seq[Expr]) extends Expr {
     def show = s"${target.show}(${args.map(_.show).mkString(", ")})"
   }
-  case class Cut(left: Expr, right: Expr) extends Expr {
+  case class Cut(left: Expr, right: Expr) extends ExprOrCut {
     def show = s"${left.show} . ${right.show}"
   }
-  case class Rule(cut: Expr, reduced: Seq[Expr]) extends Statement
-  case class Data(exprs: Seq[Expr]) extends Statement {
-    def show = exprs.map(_.show).mkString(", ")
+  case class Rule(cut: Cut, reduced: Seq[Cut]) extends Statement
+  case class Data(free: Seq[Ident], cuts: Seq[Cut]) extends Statement {
+    def show = cuts.map(_.show).mkString(", ")
   }
   case class Deriving(constructors: Seq[Ident]) {
     def show = constructors.map(_.show).mkString(", ")
   }
-  case class ConsRule(rhs: Expr, reduced: Seq[Expr])
+  case class ConsRule(rhs: Expr, reduced: Seq[Cut])
 }
 
 object Lexical {
   import NoWhitespace._
 
-  val keywords = Set("cons", "rule", "data", "deriving", "cut")
+  val keywords = Set("cons", "rule", "let", "deriving", "cut")
 
   def identifier[_: P]: P[String] =
      P( (letter|"_") ~ (letter | digit | "_").rep ).!.filter(!keywords.contains(_))
@@ -64,16 +70,28 @@ object Parser {
   }
 
   def app[_: P]: P[AST.Ap] =
-    P(  ident ~ "(" ~ exprList ~ ")"  ).map(AST.Ap.tupled)
+    P(  ident ~ "(" ~ expr.rep(sep = ",") ~ ")"  ).map(AST.Ap.tupled)
 
-  def expr[_: P]: P[AST.Expr] =
+  def exprOrCut[_: P]: P[AST.ExprOrCut] =
     P(  (app | ident | church) ~ ("." ~ expr).? ).map {
       case (e, None) => e
       case (e, Some(c)) => AST.Cut(e, c)
     }
 
-  def exprList[_: P]: P[Seq[AST.Expr]] =
-    P(  expr.rep(min = 1, sep = ",") | P("()").map(_ => Nil)  )
+  def expr[_: P]: P[AST.Expr] =
+    P(exprOrCut).flatMap {
+      case e: AST.Expr => Pass(e)
+      case e => Fail.opaque("Simple expression required")
+    }
+
+  def cut[_: P]: P[AST.Cut] =
+    P(exprOrCut).flatMap {
+      case e: AST.Cut => Pass(e)
+      case e => Fail.opaque("Cut required")
+    }
+
+  def cutList[_: P]: P[Seq[AST.Cut]] =
+    P(  cut.rep(min = 1, sep = ",") | P("()").map(_ => Nil)  )
 
   def identList[_: P]: P[Seq[AST.Ident]] =
     P(  ident.rep(sep = ",") )
@@ -88,16 +106,16 @@ object Parser {
     P(  kw("deriving") ~/ ident.rep(1, sep=",")  ).map(AST.Deriving(_))
 
   def match1[_: P]: P[AST.ConsRule] =
-    P(  kw("cut") ~/ expr ~ "=" ~ exprList  ).map(AST.ConsRule.tupled)
+    P(  kw("cut") ~/ expr ~ "=" ~ cutList  ).map(AST.ConsRule.tupled)
 
   def cons[_: P]: P[AST.Cons] =
     P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt ~ deriving.? ~ match1.rep  ).map(AST.Cons.tupled)
 
   def rule[_: P]: P[AST.Rule] =
-    P(  kw("rule") ~/ expr ~ "=" ~ exprList  ).map(AST.Rule.tupled)
+    P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map(AST.Rule.tupled)
 
   def data[_: P]: P[AST.Data] =
-    P(  kw("data") ~/ exprList ).map(AST.Data(_))
+    P(  kw("let") ~/ identList ~ "=" ~ cutList ).map(AST.Data.tupled)
 
   def unit[_: P]: P[Seq[AST.Statement]] = P(
     Start ~ (cons | rule | data).rep ~ End
@@ -159,28 +177,47 @@ object Main extends App {
   }
 
   def addRule(r: AST.Rule): Unit = {
-    def err = sys.error(s"Rule ${r.cut.show} is not defined on a cut")
-    def checkApp(e: AST.Expr): (AST.Ident, Seq[AST.Ident]) = e match {
+    def checkCutCell(e: AST.Expr): (AST.Ident, Seq[AST.Ident]) = e match {
       case a: AST.Ap =>
         val args = a.args.map {
           case i: AST.Ident => i
-          case _ => err
+          case _ => sys.error(s"No nested patterns allowed in rule ${r.cut.show}")
         }
         (a.target, args)
       case a: AST.Ident =>
         (a, Nil)
-      case _ => err
     }
-    val impl = r.cut match {
-      case c: AST.Cut =>
-        val (n1, a1) = checkApp(c.left)
-        val (n2, a2) = checkApp(c.right)
-        new CheckedRule(r, n1, a1, n2, a2)
-      case _ => err
-    }
+    val (n1, a1) = checkCutCell(r.cut.left)
+    val (n2, a2) = checkCutCell(r.cut.right)
+    val impl = new CheckedRule(r, n1, a1, n2, a2)
     val key = new RuleKey(impl.name1, impl.name2)
     if(ruleCuts.contains(key)) sys.error(s"Rule ${r.cut.show} duplicates ${impl.name1.s} . ${impl.name2.s}")
     ruleCuts.put(key, impl)
+  }
+
+  def checkLinearity(cuts: Seq[AST.Cut], free: Set[AST.Ident], globals: Symbols): Unit = {
+    final class Usages(var count: Int = 0)
+    val usages = mutable.HashMap.from(free.iterator.map(i => (i, new Usages)))
+    def scan(c: AST.Cut, e: AST.Expr): Unit = {
+      globals.get(e.target) match {
+        case Some(g) =>
+          if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in ${c.show}")
+        case None =>
+          if(e.isInstanceOf[AST.Ap])
+            sys.error(s"Illegal use of non-constructor symbol ${e.target.show} as constructor in ${c.show}")
+          usages.getOrElseUpdate(e.target, new Usages).count += 1
+      }
+      e.args.foreach(a => scan(c, a))
+    }
+    cuts.foreach { c =>
+      scan(c, c.left)
+      scan(c, c.right)
+    }
+    val badFree = free.iterator.map(i => (i, usages(i))).filter(_._2.count != 1).toSeq
+    if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1.show).mkString(", ")} in data ${free.map(_.show).mkString(", ")}")
+    free.foreach(usages.remove)
+    val badLocal = usages.filter(_._2.count != 2).toSeq
+    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badFree.map(_._1.show).mkString(", ")} in data ${free.map(_.show).mkString(", ")}")
   }
 
   statements.foreach {
@@ -199,7 +236,13 @@ object Main extends App {
 
   val globals = new Symbols
   constrs.values.foreach { c =>
-    globals.get(c.name).cons = c
+    globals.getOrAdd(c.name).cons = c
+  }
+
+  data.foreach { d =>
+    val free = d.free.toSet
+    if(free.size != d.free.size) sys.error(s"Duplicate free symbol in ${d.show}")
+    checkLinearity(d.cuts, free, globals)
   }
 
   println("Constructors:")
@@ -210,7 +253,7 @@ object Main extends App {
   data.foreach(r => println(s"- ${r.show}"))
 
   val inter = new Interpreter(globals, ruleCuts.values)
-  data.foreach(d => inter.add(d.exprs, new Symbols(Some(globals))))
+  data.foreach(d => inter.add(d.cuts, new Symbols(Some(globals))))
   inter.log()
   inter.reduce()
 }
@@ -224,20 +267,22 @@ class Symbol(val id: AST.Ident) {
 
 class Symbols(parent: Option[Symbols] = None) {
   private val syms = mutable.HashMap.empty[AST.Ident, Symbol]
-  def get(id: AST.Ident): Symbol = {
+  def getOrAdd(id: AST.Ident): Symbol = {
     val so = parent match {
       case Some(p) => p.syms.get(id)
       case None => None
     }
     so.getOrElse(syms.getOrElseUpdate(id, new Symbol(id)))
   }
-  def getExisting(id: AST.Ident): Symbol = {
+  def get(id: AST.Ident): Option[Symbol] = {
     val so = parent match {
       case Some(p) => p.syms.get(id)
       case None => None
     }
-    so.getOrElse(syms.getOrElse(id, ???))
+    so.orElse(syms.get(id))
   }
+  def apply(id: AST.Ident): Symbol =
+    get(id).getOrElse(sys.error(s"No symbol found for ${id.show}"))
 }
 
 trait Target {
@@ -270,25 +315,24 @@ class Scope {
   val cells = mutable.HashSet.empty[Cell]
   val freeWires = mutable.HashSet.empty[Wire]
 
-  private def addSymbols(es: Iterable[AST.Expr], symbols: Symbols): Unit = {
+  private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
     def f(e: AST.Expr): Unit = e match {
       case i: AST.Ident =>
-        val s = symbols.get(i)
+        val s = symbols.getOrAdd(i)
         if(!s.isCons) s.refs += 1
-      case AST.Cut(l, r) => f(l); f(r)
       case AST.Ap(i, es) => f(i); es.foreach(f)
     }
-    es.foreach(f)
+    cs.foreach { c => f(c.left); f(c.right) }
   }
 
-  def add(exprs: Iterable[AST.Expr], syms: Symbols): Unit = {
-    addSymbols(exprs, syms)
+  def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
+    addSymbols(cuts, syms)
     val bind = mutable.HashMap.empty[Symbol, Wire]
     def create(e: AST.Expr): (Target, Int) = e match {
       case i: AST.Ident =>
-        val s = syms.get(i)
+        val s = syms.getOrAdd(i)
         if(s.isCons) {
-          val s = syms.get(i)
+          val s = syms.getOrAdd(i)
           val c = new Cell(s, s.cons.arity)
           cells.addOne(c)
           (c, 0)
@@ -306,14 +350,8 @@ class Scope {
               (w, 0)
           }
         } else sys.error(s"Non-linear use of ${i.show} in data")
-      case AST.Cut(l, r) =>
-        val (lt, ls) = create(l)
-        val (rt, rs) = create(r)
-        lt.connect(ls, rt, rs)
-        rt.connect(rs, lt, ls)
-        null
       case AST.Ap(i, args) =>
-        val s = syms.get(i)
+        val s = syms.getOrAdd(i)
         assert(s.isCons)
         val c = new Cell(s, s.cons.arity)
         cells.addOne(c)
@@ -325,7 +363,14 @@ class Scope {
         }
         (c, 0)
     }
-    exprs.foreach(create)
+    def createCut(e: AST.Cut): Unit = {
+      val (lt, ls) = create(e.left)
+      val (rt, rs) = create(e.right)
+      lt.connect(ls, rt, rs)
+      rt.connect(rs, lt, ls)
+      null
+    }
+    cuts.foreach(createCut)
   }
 
   private def chainStart(c: Cell): Cell = {
@@ -426,7 +471,7 @@ class Interpreter(globals: Symbols, rules: Iterable[Main.CheckedRule]) extends S
     override def toString = s"$s1 . $s2"
   }
 
-  class RuleImpl(val r: AST.Rule, val reduced: Seq[AST.Expr], val args1: Seq[AST.Ident], val args2: Seq[AST.Ident], val key: RuleKey) {
+  class RuleImpl(val r: AST.Rule, val reduced: Seq[AST.Cut], val args1: Seq[AST.Ident], val args2: Seq[AST.Ident], val key: RuleKey) {
     def args1For(k: RuleKey) = if(k.s1 == key.s1) args1 else args2
     def args2For(k: RuleKey) = if(k.s1 == key.s1) args2 else args1
   }
@@ -434,8 +479,8 @@ class Interpreter(globals: Symbols, rules: Iterable[Main.CheckedRule]) extends S
   def reduce(): Unit = {
     val ruleImpls = new mutable.HashMap[RuleKey, RuleImpl]
     rules.foreach { cr =>
-      val s1 = globals.getExisting(cr.name1)
-      val s2 = globals.getExisting(cr.name2)
+      val s1 = globals(cr.name1)
+      val s2 = globals(cr.name2)
       val rk = new RuleKey(s1, s2)
       ruleImpls.put(rk, new RuleImpl(cr.r, cr.r.reduced, cr.args1, cr.args2, rk))
     }
@@ -462,8 +507,8 @@ class Interpreter(globals: Symbols, rules: Iterable[Main.CheckedRule]) extends S
       sc.add(r.reduced, syms)
       //println("***** Reduction:")
       //sc.log()
-      val a1 = r.args1For(c.ruleKey).map(syms.get)
-      val a2 = r.args2For(c.ruleKey).map(syms.get)
+      val a1 = r.args1For(c.ruleKey).map(syms.getOrAdd)
+      val a2 = r.args2For(c.ruleKey).map(syms.getOrAdd)
       val v1 = a1.zipWithIndex.map { case (s, i) => (s, c.c1.getPort(i+1)) }
       val v2 = a2.zipWithIndex.map { case (s, i) => (s, c.c2.getPort(i+1)) }
       val bind = (v1 ++ v2).toMap
