@@ -7,7 +7,7 @@ import scala.collection.mutable
 
 object AST {
   sealed trait Statement
-  case class Cons(name: Ident, args: Seq[Ident], ret: Option[Ident], der: Option[Deriving]) extends Statement {
+  case class Cons(name: Ident, args: Seq[Ident], ret: Option[Ident], der: Option[Deriving], rules: Seq[ConsRule]) extends Statement {
     def arity = args.length
     def show: String = {
       val a = if(args.isEmpty) "" else args.map(_.s).mkString("(", ", ", ")")
@@ -35,12 +35,13 @@ object AST {
   case class Deriving(constructors: Seq[Ident]) {
     def show = constructors.map(_.show).mkString(", ")
   }
+  case class ConsRule(rhs: Expr, reduced: Seq[Expr])
 }
 
 object Lexical {
   import NoWhitespace._
 
-  val keywords = Set("cons", "rule", "data", "deriving")
+  val keywords = Set("cons", "rule", "data", "deriving", "cut")
 
   def identifier[_: P]: P[String] =
      P( (letter|"_") ~ (letter | digit | "_").rep ).!.filter(!keywords.contains(_))
@@ -84,10 +85,13 @@ object Parser {
     P(  ("." ~ ident).?  )
 
   def deriving[_ : P]: P[AST.Deriving] =
-    P(  kw("deriving") ~ ident.rep(1, sep=",")  ).map(AST.Deriving(_))
+    P(  kw("deriving") ~/ ident.rep(1, sep=",")  ).map(AST.Deriving(_))
+
+  def match1[_: P]: P[AST.ConsRule] =
+    P(  kw("cut") ~/ expr ~ "=" ~ exprList  ).map(AST.ConsRule.tupled)
 
   def cons[_: P]: P[AST.Cons] =
-    P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt ~ deriving.?  ).map(AST.Cons.tupled)
+    P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt ~ deriving.? ~ match1.rep  ).map(AST.Cons.tupled)
 
   def rule[_: P]: P[AST.Rule] =
     P(  kw("rule") ~/ expr ~ "=" ~ exprList  ).map(AST.Rule.tupled)
@@ -185,6 +189,9 @@ object Main extends App {
       constrs.put(c.name, c)
       c.der.foreach { der =>
         der.constructors.foreach(i => addRule(derive(c, i)))
+      }
+      c.rules.foreach { m =>
+        addRule(AST.Rule(AST.Cut(AST.Ap(c.name, c.args), m.rhs), m.reduced))
       }
     case r: AST.Rule => addRule(r)
     case d: AST.Data => data.addOne(d)
