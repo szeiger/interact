@@ -190,6 +190,7 @@ object Main extends App {
       globals.get(e.target) match {
         case Some(g) =>
           if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in $in")
+          if(e.args.length != g.cons.arity) sys.error(s"Wrong arity ${e.args.length} != ${g.cons.arity} when using $g in $in")
         case None =>
           if(e.isInstanceOf[AST.Ap])
             sys.error(s"Illegal use of non-constructor symbol ${e.target.show} as constructor in $in")
@@ -240,11 +241,11 @@ object Main extends App {
   }
 
   println("Constructors:")
-  constrs.values.foreach(c => println(s"- ${c.show}"))
+  constrs.values.foreach(c => println(s"  ${c.show}"))
   println("Rules:")
-  ruleCuts.values.foreach(r => println(s"- ${r.show}"))
+  ruleCuts.values.foreach(r => println(s"  ${r.show}"))
   println("Data:")
-  data.foreach(r => println(s"- ${r.show}"))
+  data.foreach(r => println(s"  ${r.show}"))
 
   val inter = new Interpreter(globals, ruleCuts.values)
   data.foreach(d => inter.add(d.cuts, new Symbols(Some(globals))))
