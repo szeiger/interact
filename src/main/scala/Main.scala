@@ -195,16 +195,16 @@ object Main extends App {
     ruleCuts.put(key, impl)
   }
 
-  def checkLinearity(cuts: Seq[AST.Cut], free: Set[AST.Ident], globals: Symbols): Unit = {
+  def checkLinearity(cuts: Seq[AST.Cut], free: Set[AST.Ident], globals: Symbols)(in: => String): Unit = {
     final class Usages(var count: Int = 0)
     val usages = mutable.HashMap.from(free.iterator.map(i => (i, new Usages)))
     def scan(c: AST.Cut, e: AST.Expr): Unit = {
       globals.get(e.target) match {
         case Some(g) =>
-          if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in ${c.show}")
+          if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in $in")
         case None =>
           if(e.isInstanceOf[AST.Ap])
-            sys.error(s"Illegal use of non-constructor symbol ${e.target.show} as constructor in ${c.show}")
+            sys.error(s"Illegal use of non-constructor symbol ${e.target.show} as constructor in $in")
           usages.getOrElseUpdate(e.target, new Usages).count += 1
       }
       e.args.foreach(a => scan(c, a))
@@ -214,10 +214,10 @@ object Main extends App {
       scan(c, c.right)
     }
     val badFree = free.iterator.map(i => (i, usages(i))).filter(_._2.count != 1).toSeq
-    if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1.show).mkString(", ")} in data ${free.map(_.show).mkString(", ")}")
+    if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1.show).mkString(", ")} in $in")
     free.foreach(usages.remove)
     val badLocal = usages.filter(_._2.count != 2).toSeq
-    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badFree.map(_._1.show).mkString(", ")} in data ${free.map(_.show).mkString(", ")}")
+    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1.show).mkString(", ")} in $in")
   }
 
   statements.foreach {
@@ -240,9 +240,15 @@ object Main extends App {
   }
 
   data.foreach { d =>
-    val free = d.free.toSet
-    if(free.size != d.free.size) sys.error(s"Duplicate free symbol in ${d.show}")
-    checkLinearity(d.cuts, free, globals)
+    val freeSet = d.free.toSet
+    if(freeSet.size != d.free.size) sys.error(s"Duplicate free symbol in ${d.show}")
+    checkLinearity(d.cuts, freeSet, globals)(d.show)
+  }
+  ruleCuts.foreach { case (rk, cr) =>
+    val free = cr.args1 ++ cr.args2
+    val freeSet = free.toSet
+    if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
+    checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
   }
 
   println("Constructors:")
