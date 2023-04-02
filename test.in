@@ -56,7 +56,7 @@ cons Lambda(in, out)         deriving Erase, Dup
 cons Apply(in, out) . l      deriving Erase, Dup
   cut Lambda(li, lo) = li . in, lo . out
 
-# Eample: List mapping with lambdas
+# Example: List mapping with lambdas
 cons Map2(f, res) . l        deriving Erase, Dup
   cut Nil = res . Nil, f . Erase
   cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . Dup(Apply(x, fx), fb)

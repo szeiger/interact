@@ -50,12 +50,10 @@ object Lexical {
   val keywords = Set("cons", "rule", "let", "deriving", "cut")
 
   def identifier[_: P]: P[String] =
-     P( (letter|"_") ~ (letter | digit | "_").rep ).!.filter(!keywords.contains(_))
-  def kw[_: P](s: String) = s ~ !(letter | digit | "_")
-  def letter[_: P]     = P( lowercase | uppercase )
-  def lowercase[_: P]  = P( CharIn("a-z") )
-  def uppercase[_: P]  = P( CharIn("A-Z") )
-  def digit[_: P]      = P( CharIn("0-9") )
+     P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!keywords.contains(_))
+  def kw[_: P](s: String) = P(  s ~ !(letter | digit | "_")  )
+  def letter[_: P] = P( CharIn("a-z") | CharIn("A-Z") )
+  def digit[_: P] = P( CharIn("0-9") )
   def churchLit[_: P] = P(  digit.rep(1).! ~ "'c"  ).map(_.toInt)
 }
 
@@ -72,54 +70,35 @@ object Parser {
   def app[_: P]: P[AST.Ap] =
     P(  ident ~ "(" ~ expr.rep(sep = ",") ~ ")"  ).map(AST.Ap.tupled)
 
-  def exprOrCut[_: P]: P[AST.ExprOrCut] =
-    P(  (app | ident | church) ~ ("." ~ expr).? ).map {
-      case (e, None) => e
-      case (e, Some(c)) => AST.Cut(e, c)
-    }
-
   def expr[_: P]: P[AST.Expr] =
-    P(exprOrCut).flatMap {
-      case e: AST.Expr => Pass(e)
-      case e => Fail.opaque("Simple expression required")
-    }
+    P(  (app | ident | church) )
 
   def cut[_: P]: P[AST.Cut] =
-    P(exprOrCut).flatMap {
-      case e: AST.Cut => Pass(e)
-      case e => Fail.opaque("Cut required")
-    }
+    P(expr ~ "." ~ expr).map(AST.Cut.tupled)
 
   def cutList[_: P]: P[Seq[AST.Cut]] =
     P(  cut.rep(min = 1, sep = ",") | P("()").map(_ => Nil)  )
 
-  def identList[_: P]: P[Seq[AST.Ident]] =
-    P(  ident.rep(sep = ",") )
-
   def paramsOpt[_: P]: P[Seq[AST.Ident]] =
-    P(  ("(" ~ identList ~ ")").?  ).map(_.getOrElse(Nil))
-
-  def retOpt[_: P]: P[Option[AST.Ident]] =
-    P(  ("." ~ ident).?  )
+    P(  ("(" ~ ident.rep(sep = ",") ~ ")").?  ).map(_.getOrElse(Nil))
 
   def deriving[_ : P]: P[AST.Deriving] =
     P(  kw("deriving") ~/ ident.rep(1, sep=",")  ).map(AST.Deriving(_))
 
-  def match1[_: P]: P[AST.ConsRule] =
+  def consRule[_: P]: P[AST.ConsRule] =
     P(  kw("cut") ~/ expr ~ "=" ~ cutList  ).map(AST.ConsRule.tupled)
 
   def cons[_: P]: P[AST.Cons] =
-    P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt ~ deriving.? ~ match1.rep  ).map(AST.Cons.tupled)
+    P(  kw("cons") ~/ ident ~ paramsOpt ~ ("." ~ ident).? ~ deriving.? ~ consRule.rep  ).map(AST.Cons.tupled)
 
   def rule[_: P]: P[AST.Rule] =
     P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map(AST.Rule.tupled)
 
   def data[_: P]: P[AST.Data] =
-    P(  kw("let") ~/ identList ~ "=" ~ cutList ).map(AST.Data.tupled)
+    P(  kw("let") ~/ ident.rep(1, sep = ",") ~ "=" ~ cutList ).map(AST.Data.tupled)
 
-  def unit[_: P]: P[Seq[AST.Statement]] = P(
-    Start ~ (cons | rule | data).rep ~ End
-  )
+  def unit[_: P]: P[Seq[AST.Statement]] =
+    P(  Start ~ (cons | rule | data).rep ~ End  )
 }
 
 object Main extends App {
