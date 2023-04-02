@@ -4,7 +4,7 @@ The interpreter implements interaction nets and combinators as defined in https:
 
 ## Running
 
-There is no proper command line at the moment. Edit `test.in` with your changes, launch `sbt` and then `run` the main class.
+Launch `sbt` and then `runMain Main example.in` in the sbt shell to process [example.in](./example.in).
 
 ## Language
 
@@ -63,7 +63,7 @@ cons Dup(a, b)
 
 ### Rule derivation
 
-Rules that reduce a cut of a constructor and the standard `Erase` and `Dup` combinators can be derived automatically using a `deriving` clause:
+Rules that reduce a cut between a constructor and the standard `Erase` and `Dup` constructors can be derived automatically using a `deriving` clause:
 
 ```
 cons Add(y, r) . x
