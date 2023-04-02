@@ -61,6 +61,6 @@ cons Map2(f, res) . l        deriving Erase, Dup
   cut Nil = res . Nil, f . Erase
   cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . Dup(Apply(x, fx), fb)
 let l0_mapped_lambda =
-  l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+  l0 . 1'c ::  2'c :: 3'c :: Nil,
   f . Lambda(Add(2'c, fout), fout),
   Map2(f, l0_mapped_lambda) . l0

@@ -70,8 +70,17 @@ object Parser {
   def app[_: P]: P[AST.Ap] =
     P(  ident ~ "(" ~ expr.rep(sep = ",") ~ ")"  ).map(AST.Ap.tupled)
 
+  def simpleExpr[_: P]: P[AST.Expr] =
+    P(  (app | ident | church)  )
+
   def expr[_: P]: P[AST.Expr] =
-    P(  (app | ident | church) )
+    P(  simpleExpr.rep(1, "::")  ).map {
+      case Seq(e) => e
+      case es => es.foldRight(null: AST.Expr) {
+        case (e, null) => e
+        case (e, z) => AST.Ap(AST.Ident("Cons"), Seq(e, z))
+      }
+    }
 
   def cut[_: P]: P[AST.Cut] =
     P(expr ~ "." ~ expr).map(AST.Cut.tupled)
@@ -391,6 +400,18 @@ class Scope {
       rem.remove(c)
       if(c.arity > 0) removeChurch(c.getPort(1)._1.asInstanceOf[Cell])
     }
+    def targetOrReplacement(t: Target, p: Int): String = {
+      if(p == 0) show(t) else {
+        helpers.get((t, p)) match {
+          case Some(s) => s
+          case None =>
+            val s = s"$$${nextHelper}"
+            nextHelper += 1
+            helpers.put(t.getPort(p), s)
+            s
+        }
+      }
+    }
     def show(t: Target): String = t match {
       case c @ Church(i) =>
         removeChurch(c)
@@ -399,20 +420,12 @@ class Scope {
         if(!rem.contains(c)) "<error: duplicate>"
         else {
           rem.remove(c)
-          c.aux.map { case (t, p) =>
-            if(p == 0) show(t)
-            else {
-              helpers.get((t, p)) match {
-                case Some(s) => s
-                case None =>
-                  val s = s"$$${nextHelper}"
-                  nextHelper += 1
-                  helpers.put(t.getPort(p), s)
-                  s
-              }
-              //"..."
-            }
-          }.mkString(s"${c.sym}(", ", ", ")")
+          if(c.sym.id.s == "Cons" && c.arity == 2 && c.aux(0)._2 == 0 && c.aux(1)._2 == 0) {
+            val lhs = targetOrReplacement(c.aux(0)._1, c.aux(0)._2)
+            val rhs = targetOrReplacement(c.aux(1)._1, c.aux(1)._2)
+            s"$lhs :: $rhs"
+          } else if(c.arity == 0) c.sym.toString
+          else c.aux.map { case (t, p) => targetOrReplacement(t, p) }.mkString(s"${c.sym}(", ", ", ")")
         }
       case w: Wire => w.sym.toString
     }
