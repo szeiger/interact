@@ -28,7 +28,7 @@ object AST {
   case class Cut(left: Expr, right: Expr) extends Expr {
     def show = s"${left.show} . ${right.show}"
   }
-  case class Rule(name: Ident, cut: Expr, reduced: Seq[Expr]) extends Statement
+  case class Rule(cut: Expr, reduced: Seq[Expr]) extends Statement
   case class Data(exprs: Seq[Expr]) extends Statement {
     def show = exprs.map(_.show).mkString(", ")
   }
@@ -90,7 +90,7 @@ object Parser {
     P(  kw("cons") ~/ ident ~ paramsOpt ~ retOpt ~ deriving.?  ).map(AST.Cons.tupled)
 
   def rule[_: P]: P[AST.Rule] =
-    P(  kw("rule") ~/ ident ~ ":" ~ expr ~ "=" ~ exprList  ).map(AST.Rule.tupled)
+    P(  kw("rule") ~/ expr ~ "=" ~ exprList  ).map(AST.Rule.tupled)
 
   def data[_: P]: P[AST.Data] =
     P(  kw("data") ~/ exprList ).map(AST.Data(_))
@@ -117,17 +117,14 @@ object Main extends App {
   }
 
   class CheckedRule(val r: AST.Rule, val name1: AST.Ident, val args1: Seq[AST.Ident], val name2: AST.Ident, val args2: Seq[AST.Ident]) {
-    def show: String =
-      s"${r.name.s}: ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}"
+    def show: String = s"${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}"
   }
 
   val constrs = mutable.Map.empty[AST.Ident, AST.Cons]
   val ruleCuts = mutable.Map.empty[RuleKey, CheckedRule]
-  val ruleNames = mutable.Map.empty[AST.Ident, CheckedRule]
   val data = mutable.ArrayBuffer.empty[AST.Data]
 
   def derive(cons: AST.Cons, id: AST.Ident): AST.Rule = {
-    val name = AST.Ident(s"derived$$${cons.name.s}$$${id.s}")
     var nextId = 0
     def genId() = {
       val s = AST.Ident(s"$$s${nextId}")
@@ -152,13 +149,13 @@ object Main extends App {
         val recombA = AST.Cut(a, AST.Ap(cons.name, aIds))
         val recombB = AST.Cut(b, AST.Ap(cons.name, bIds))
         (cut, recombA :: recombB :: dupPorts.toList)
-      case s => sys.error(s"Don't know how to derive ${name.show}")
+      case s => sys.error(s"Don't know how to derive ${cons.name.s} . ${id.s}")
     }
-    AST.Rule(name, cut, reduced)
+    AST.Rule(cut, reduced)
   }
 
   def addRule(r: AST.Rule): Unit = {
-    def err = sys.error(s"Rule ${r.name.s} is not defined on a cut")
+    def err = sys.error(s"Rule ${r.cut.show} is not defined on a cut")
     def checkApp(e: AST.Expr): (AST.Ident, Seq[AST.Ident]) = e match {
       case a: AST.Ap =>
         val args = a.args.map {
@@ -178,9 +175,7 @@ object Main extends App {
       case _ => err
     }
     val key = new RuleKey(impl.name1, impl.name2)
-    if(ruleNames.contains(r.name)) sys.error(s"Duplicate rule name ${r.name.s}")
-    if(ruleCuts.contains(key)) sys.error(s"Rule ${r.name.s} duplicates ${impl.name1.s} . ${impl.name2.s}")
-    ruleNames.put(r.name, impl)
+    if(ruleCuts.contains(key)) sys.error(s"Rule ${r.cut.show} duplicates ${impl.name1.s} . ${impl.name2.s}")
     ruleCuts.put(key, impl)
   }
 
@@ -203,7 +198,7 @@ object Main extends App {
   println("Constructors:")
   constrs.values.foreach(c => println(s"- ${c.show}"))
   println("Rules:")
-  ruleNames.values.foreach(r => println(s"- ${r.show}"))
+  ruleCuts.values.foreach(r => println(s"- ${r.show}"))
   println("Data:")
   data.foreach(r => println(s"- ${r.show}"))
 
