@@ -1,3 +1,5 @@
+package de.szeiger.interact
+
 import fastparse._
 
 import java.nio.charset.StandardCharsets
@@ -107,8 +109,9 @@ object Parser {
   def unit[_: P]: P[Seq[AST.Statement]] =
     P(  Start ~ (cons | rule | data).rep ~ End  )
 
-  def parse(file: Path): Seq[AST.Statement] = {
-    val input = new String(Files.readAllBytes(file), StandardCharsets.UTF_8)
+  def parse(input: String): Seq[AST.Statement] =
     fastparse.parse(input, Parser.unit(_), verboseFailures = true).get.value
-  }
+
+  def parse(file: Path): Seq[AST.Statement] =
+    parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8))
 }

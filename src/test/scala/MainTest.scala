@@ -1,3 +1,5 @@
+package de.szeiger.interact
+
 import org.junit.Test
 import org.junit.Assert._
 

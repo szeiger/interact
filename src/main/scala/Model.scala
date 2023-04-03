@@ -1,3 +1,5 @@
+package de.szeiger.interact
+
 import scala.collection.mutable
 
 class CheckedRule(val r: AST.Rule, val name1: AST.Ident, val args1: Seq[AST.Ident], val name2: AST.Ident, val args2: Seq[AST.Ident]) {

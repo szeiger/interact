@@ -1,5 +1,7 @@
 import java.nio.file.Path
 
+import de.szeiger.interact._
+
 object Main extends App {
   val statements = Parser.parse(Path.of(args(0)))
   //statements.foreach(println)
