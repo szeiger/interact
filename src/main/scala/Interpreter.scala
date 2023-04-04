@@ -31,7 +31,7 @@ class Symbols(parent: Option[Symbols] = None) {
   def symbols: Iterator[Symbol] = syms.valuesIterator ++ parent.map(_.symbols).getOrElse(Iterator.empty)
 }
 
-trait Target {
+sealed trait Target {
   def principal: (Target, Int)
   def connect(slot: Int, t: Target, tslot: Int): Unit
   def getPort(slot: Int): (Target, Int)
@@ -51,6 +51,7 @@ final class Wire(val sym: Symbol) extends Target {
 }
 
 final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends Target {
+  var ruleImpl: RuleImpl = _
   private[this] val targets = new Array[Target](arity+1)
   private[this] val ports = new Array[Int](arity+1)
   override def connect(slot: Int, t: Target, tslot: Int) = {
@@ -60,7 +61,6 @@ final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends Target
   override def getPort(slot: Int): (Target, Int) =
     (targets(slot), ports(slot))
   def principal: (Target, Int) = (targets(0), ports(0))
-  def allAux: Iterator[(Target, Int)] = allPorts.drop(1)
   def allPorts: Iterator[(Target, Int)] = targets.iterator.zip(ports.iterator)
   override def toString = s"Cell($sym, $arity, ${allPorts.map { case (t, p) => s"(${if(t == null) "null" else "_"},$p)" }.mkString(", ") })"
 }
@@ -121,7 +121,6 @@ class Scope {
       val (rt, rs) = create(e.right)
       lt.connect(ls, rt, rs)
       rt.connect(rs, lt, ls)
-      null
     }
     cuts.foreach(createCut)
   }
@@ -195,7 +194,7 @@ class Scope {
             val rhs = targetOrReplacement(c.getPort(2)._1, c.getPort(2)._2)
             s"$lhs :: $rhs"
           } else if(c.arity == 0) c.sym.toString
-          else c.allAux.map { case (t, p) => targetOrReplacement(t, p) }.mkString(s"${c.sym}(", ", ", ")")
+          else c.allPorts.drop(1).map { case (t, p) => targetOrReplacement(t, p) }.mkString(s"${c.sym}(", ", ", ")")
         }
       case w: Wire => w.sym.toString
     }
@@ -219,132 +218,125 @@ class Scope {
   }
 }
 
+final case class ProtoCell(sym: Symbol, symId: Int, arity: Int, wires: Array[Int], ports: Array[Int]) {
+  override def toString = s"ProtoCell($sym, $symId, $arity, ${wires.mkString("[",",","]")}, ${ports.mkString("[",",","]")})"
+}
+
+final class RuleImpl(val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int])
+
 class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope {
 
-  final class CutKey(val c1: Cell, val c2: Cell) {
-    override def hashCode(): Int = c1.hashCode() + c2.hashCode()
-    override def equals(obj: Any): Boolean = obj match {
-      case o: CutKey => (c1 == o.c1) && (c2 == o.c2) || (c1 == o.c2) && (c2 == o.c1)
-      case _ => false
-    }
-    override def toString = s"CutKey($c1, $c2)"
-  }
-
-  final case class ProtoCell(sym: Symbol, symId: Int, arity: Int, wires: Array[Int], ports: Array[Int]) {
-    override def toString = s"ProtoCell($sym, $symId, $arity, ${wires.mkString("[",",","]")}, ${ports.mkString("[",",","]")})"
-  }
-
-  final class RuleImpl(val reduced: Seq[AST.Cut], val args1: Seq[AST.Ident], val args2: Seq[AST.Ident], val key: Int) {
-    var protoCells: Array[ProtoCell] = _
-    var freeWires: Array[Int] = _
-    var freePorts: Array[Int] = _
-
-    def prepare(globals: Symbols): Unit = {
-      //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
-      val syms = new Symbols(Some(globals))
-      val sc = new Scope
-      sc.add(reduced, syms)
-      //sc.log()
-      val cells = sc.reachableCells.toArray
-      val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
-      val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
-      val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
-      protoCells = cells.map { c =>
-        new ProtoCell(c.sym, getSymbolId(c.sym), c.arity, c.allPorts.map(_._1).map(lookup).toArray, c.allPorts.map(_._2).toArray)
-      }
-      freeWires = wires.map(w => lookup(w.principal._1))
-      freePorts = wires.map(_.principal._2)
-      //protoCells.foreach(println)
-      //wires.map(_.sym).zip(freeWires).zip(freePorts).map { case ((s, t), p) => s"$s: ($t, $p)" }.foreach(println)
-    }
-
-    def reduce(cut1: Cell, cut2: Cell): Iterable[CutKey] = {
-      val cells = protoCells.map { pc => new Cell(pc.sym, pc.symId, pc.arity) }
-      var i = 0
-      while(i < cells.length) {
-        var j = 0
-        val pc = protoCells(i)
-        while(j < pc.arity+1) {
-          val w = pc.wires(j)
-          if(w >= 0) cells(i).connect(j, cells(w), pc.ports(j))
-          j += 1
-        }
-        i += 1
-      }
-      i = 0
-      def cutTarget(i: Int) = if(i < cut1.arity) cut1.getPort(i+1) else cut2.getPort(i+1-cut1.arity)
-      val ret = new mutable.HashSet[CutKey]
-      while(i < freeWires.length) {
-        val (t, p) = cutTarget(i)
-        val fw = freeWires(i)
-        //println(s"Connecting freeWire($i): $t, $p, $fw")
-        val (wt, wp) =
-          if(fw >= 0) (cells(fw), freePorts(i))
-          else cutTarget(-1-fw)
-        t.connect(p, wt, wp)
-        wt.connect(wp, t, p)
-        if(p == 0 && wp == 0 && t.isInstanceOf[Cell] && wt.isInstanceOf[Cell])
-          ret.addOne(new CutKey(t.asInstanceOf[Cell], wt.asInstanceOf[Cell]))
-        i += 1
-      }
-      //cells.foreach { c => println(s"created $c") }
-      ret
-    }
-  }
-
   private[this] val symIds = mutable.HashMap.from[Symbol, Int](globals.symbols.zipWithIndex)
+  private[this] val symCount = symIds.size
+
+  private[this] val ruleImpls = new Array[RuleImpl](symCount * symCount)
+  rules.foreach { cr =>
+    val s1 = getSymbolId(globals(cr.name1))
+    val s2 = getSymbolId(globals(cr.name2))
+    val rk = mkRuleKey(s1, s2)
+    val ri = createRuleImpl(cr.r.reduced, if(s1 <= s2) cr.args1 else cr.args2, if(s1 <= s2) cr.args2 else cr.args1, globals)
+    ruleImpls(rk) = ri
+  }
+
+  private[this] var cuts = mutable.ArrayBuffer.empty[Cell]
+  private[this] var cut: Cell = null
+
+  def mkRuleKey(s1: Int, s2: Int): Int =
+    if(s1 < s2) s1 * symCount + s2 else s2 * symCount + s1
 
   override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, -1)
 
-  def reduce(): Int = {
-    val symCount = symIds.size
-    def mkRuleKey(s1: Int, s2: Int): Int =
-      if(s1 < s2) s1 * symCount + s2 else s2 * symCount + s1
-    val ruleImpls = new Array[RuleImpl](symCount * symCount)
-    rules.foreach { cr =>
-      val s1 = getSymbolId(globals(cr.name1))
-      val s2 = getSymbolId(globals(cr.name2))
-      val rk = mkRuleKey(s1, s2)
-      val ri = new RuleImpl(cr.r.reduced, if(s1 <= s2) cr.args1 else cr.args2, if(s1 <= s2) cr.args2 else cr.args1, rk)
-      ri.prepare(globals)
-      ruleImpls(rk) = ri
+  def createRuleImpl(reduced: Seq[AST.Cut], args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols): RuleImpl = {
+    //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
+    val syms = new Symbols(Some(globals))
+    val sc = new Scope
+    sc.add(reduced, syms)
+    //sc.log()
+    val cells = sc.reachableCells.toArray
+    val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
+    val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
+    val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
+    val protoCells = cells.map { c =>
+      new ProtoCell(c.sym, getSymbolId(c.sym), c.arity, c.allPorts.map(_._1).map(lookup).toArray, c.allPorts.map(_._2).toArray)
     }
-    val cutsMap = mutable.HashMap.empty[CutKey, RuleImpl]
+    val freeWires = wires.map(w => lookup(w.principal._1))
+    val freePorts = wires.map(_.principal._2)
+    //protoCells.foreach(println)
+    //wires.map(_.sym).zip(freeWires).zip(freePorts).map { case ((s, t), p) => s"$s: ($t, $p)" }.foreach(println)
+    new RuleImpl(protoCells, freeWires, freePorts)
+  }
+
+  def reduce(ri: RuleImpl, cut1: Cell, cut2: Cell): Unit = {
+    val cells = ri.protoCells.map { pc => new Cell(pc.sym, pc.symId, pc.arity) }
+    var i = 0
+    while(i < cells.length) {
+      var j = 0
+      val pc = ri.protoCells(i)
+      while(j < pc.arity+1) {
+        val w = pc.wires(j)
+        if(w >= 0) cells(i).connect(j, cells(w), pc.ports(j))
+        j += 1
+      }
+      i += 1
+    }
+    i = 0
+    def cutTarget(i: Int) = if(i < cut1.arity) cut1.getPort(i+1) else cut2.getPort(i+1-cut1.arity)
+    while(i < ri.freeWires.length) {
+      val (t, p) = cutTarget(i)
+      val fw = ri.freeWires(i)
+      //println(s"Connecting freeWire($i): $t, $p, $fw")
+      val (wt, wp) =
+        if(fw >= 0) (cells(fw), ri.freePorts(i))
+        else cutTarget(-1-fw)
+      t.connect(p, wt, wp)
+      wt.connect(wp, t, p)
+      if(p == 0 && wp == 0 && t.isInstanceOf[Cell] && wt.isInstanceOf[Cell]) {
+        //TODO Also detect inner cuts if the RHS is reducible
+        val ck = t.asInstanceOf[Cell]
+        val ck2 = ck.principal._1.asInstanceOf[Cell]
+        if(ck2.ruleImpl == null) {
+          val ri = ruleImpls(mkRuleKey(ck.symId, ck2.symId))
+          if(ri != null) {
+            ck.ruleImpl = ri
+            if(cut == null) cut = ck
+            else cuts.addOne(ck)
+          }
+        }
+      }
+      i += 1
+    }
+    //cells.foreach { c => println(s"created $c") }
+  }
+
+  def reduce(): Int = {
+    var steps = 0
+    cuts.clear()
     reachableCells.foreach { c =>
       c.principal match {
         case (c2: Cell, 0) =>
           val rk = mkRuleKey(c.symId, c2.symId)
           val ri = ruleImpls(rk)
-          if(ri != null)
-            cutsMap.addOne((new CutKey(c, c2), ri))
+          if(ri != null && c2.ruleImpl == null) {
+            c.ruleImpl = ri
+            cuts.addOne(c)
+          }
         case _ =>
       }
     }
-    val cuts = mutable.ArrayBuffer.from(cutsMap)
-    var steps = 0
     while(!cuts.isEmpty) {
-      var cutRule = cuts.last
+      cut = cuts.last
       cuts.dropRightInPlace(1)
-      while(cutRule != null) {
+      while(cut != null) {
         //println(s"Remaining reducible cuts: ${cuts.size+1}")
         steps += 1
-        val cut = cutRule._1
-        val r = cutRule._2
-        //println(s"Reducing $cut with ${r.r.cut.show}: ${cut.ruleKey}")
-        cutRule = null
-        val (c1, c2) = if(cut.c1.symId <= cut.c2.symId) (cut.c1, cut.c2) else (cut.c2, cut.c1)
-        r.reduce(c1, c2).foreach { ck =>
-          val rk = mkRuleKey(ck.c1.symId, ck.c2.symId)
-          val ri = ruleImpls(rk)
-          if(ri != null) {
-            if(cutRule == null) cutRule = (ck, ri)
-            else cuts.addOne((ck, ri))
-          }
-        }
-        //println("**** After reduction:")
-        //log()
+        val _c1 = cut
+        val _c2 = cut.principal._1.asInstanceOf[Cell]
+        val (c1, c2) = if(_c1.symId <= _c2.symId) (_c1, _c2) else (_c2, _c1)
+        cut = null
+        reduce(_c1.ruleImpl, c1, c2)
       }
     }
+    //println(steps)
     steps
   }
 }
