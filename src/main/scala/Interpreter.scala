@@ -221,12 +221,11 @@ class Scope {
   }
 }
 
-final case class ProtoCell(sym: Symbol, symId: Int, arity: Int, wires: Array[Int], ports: Array[Int]) {
+final case class ProtoCell(sym: Symbol, symId: Int, arity: Int) {
   var ruleImpl: RuleImpl = null
-  override def toString = s"ProtoCell($sym, $symId, $arity, ${wires.mkString("[",",","]")}, ${ports.mkString("[",",","]")}, $ruleImpl)"
 }
 
-final class RuleImpl(val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int])
+final class RuleImpl(val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int], val connections: Array[Int])
 
 class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope {
 
@@ -249,11 +248,11 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
       ris.addOne(ri)
     }
     ris.foreach { ri =>
-      ri.protoCells.iterator.zipWithIndex.foreach { case (pc, i) =>
-        if(pc.wires(0) >= 0 && pc.ports(0) == 0) {
-          val i2 = pc.wires(0)
-          val pc2 = ri.protoCells(i2)
-          if(pc.symId < pc2.symId || (pc.symId == pc2.symId && i < i2)) {
+      ri.connections.grouped(4).foreach { case Array(t1, p1, t2, p2) =>
+        val pc = ri.protoCells(t1)
+        val pc2 = ri.protoCells(t2)
+        if(p1 == 0 && p2 == 0) {
+          if(pc.symId < pc2.symId || (pc.symId == pc2.symId && t1 < t2)) {
             val ri2 = ruleImpls(mkRuleKey(pc.symId, pc2.symId))
             if(ri2 != null) pc.ruleImpl = ri2
           }
@@ -278,13 +277,17 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
-    val protoCells = cells.map { c =>
-      new ProtoCell(c.sym, getSymbolId(c.sym), c.arity, c.allPorts.map(_._1).map(lookup).toArray, c.allPorts.map(_._2).toArray)
+    val protoCells = cells.map { c => new ProtoCell(c.sym, getSymbolId(c.sym), c.arity) }
+    val conns = cells.iterator.zipWithIndex.flatMap { case (c, i) =>
+      c.allPorts.zipWithIndex.flatMap { case ((t, p), j) =>
+        val w = lookup(t)
+        if(w >= 0) Seq(i, j, w, p) else Nil
+      }
     }
     val freeWires = wires.map(w => lookup(w.ptarget))
     val freePorts = wires.map(_.pport)
     //wires.map(_.sym).zip(freeWires).zip(freePorts).map { case ((s, t), p) => s"$s: ($t, $p)" }.foreach(println)
-    new RuleImpl(protoCells, freeWires, freePorts)
+    new RuleImpl(protoCells, freeWires, freePorts, conns.toArray)
   }
 
   def reduce(ri: RuleImpl, cut1: Cell, cut2: Cell): Unit = {
@@ -302,22 +305,20 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
       i += 1
     }
     i = 0
-    while(i < cells.length) {
-      var j = 0
-      val pc = ri.protoCells(i)
-      while(j < pc.arity+1) {
-        val w = pc.wires(j)
-        if(w >= 0) cells(i).connect(j, cells(w), pc.ports(j))
-        j += 1
-      }
-      i += 1
+    val conns = ri.connections
+    while(i < conns.length) {
+      val t1 = conns(i); i += 1
+      val p1 = conns(i); i += 1
+      val t2 = conns(i); i += 1
+      val p2 = conns(i); i += 1
+      cells(t1).connect(p1, cells(t2), p2)
     }
     i = 0
-    def cutTarget(i: Int) = if(i < cut1.arity) (cut1.auxTargets(i), cut1.auxPorts(i)) else (cut2.auxTargets(i-cut1.arity), cut2.auxPorts(i-cut1.arity))
+    @inline def cutTarget(i: Int) = if(i < cut1.arity) (cut1.auxTargets(i), cut1.auxPorts(i)) else (cut2.auxTargets(i-cut1.arity), cut2.auxPorts(i-cut1.arity))
     while(i < ri.freeWires.length) {
-      val (t, p) = cutTarget(i)
       val fw = ri.freeWires(i)
       //println(s"Connecting freeWire($i): $t, $p, $fw")
+      val (t, p) = cutTarget(i)
       val (wt, wp) =
         if(fw >= 0) (cells(fw), ri.freePorts(i))
         else cutTarget(-1-fw)

@@ -11,6 +11,7 @@ lazy val main = (project in file("."))
     libraryDependencies += "com.novocode" % "junit-interface" % "0.11" % "test",
     libraryDependencies += "com.lihaoyi" %% "fastparse" % "3.0.1",
     testOptions += Tests.Argument(TestFrameworks.JUnit, "-a", "-v"),
+    scalacOptions ++= Seq("-feature", "-opt:l:inline", "-opt-inline-from:de.szeiger.interact.*"),
   )
 
 lazy val bench = (project in file("bench"))
