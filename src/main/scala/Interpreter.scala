@@ -2,6 +2,7 @@ package de.szeiger.interact
 
 import scala.annotation.tailrec
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 class Symbol(val id: AST.Ident) {
   var refs = 0
@@ -219,7 +220,8 @@ class Scope {
 }
 
 final case class ProtoCell(sym: Symbol, symId: Int, arity: Int, wires: Array[Int], ports: Array[Int]) {
-  override def toString = s"ProtoCell($sym, $symId, $arity, ${wires.mkString("[",",","]")}, ${ports.mkString("[",",","]")})"
+  var ruleImpl: RuleImpl = null
+  override def toString = s"ProtoCell($sym, $symId, $arity, ${wires.mkString("[",",","]")}, ${ports.mkString("[",",","]")}, $ruleImpl)"
 }
 
 final class RuleImpl(val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int])
@@ -230,15 +232,33 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
   private[this] val symCount = symIds.size
 
   private[this] val ruleImpls = new Array[RuleImpl](symCount * symCount)
-  rules.foreach { cr =>
-    val s1 = getSymbolId(globals(cr.name1))
-    val s2 = getSymbolId(globals(cr.name2))
-    val rk = mkRuleKey(s1, s2)
-    val ri = createRuleImpl(cr.r.reduced, if(s1 <= s2) cr.args1 else cr.args2, if(s1 <= s2) cr.args2 else cr.args1, globals)
-    ruleImpls(rk) = ri
+  createRuleImpls()
+
+  def createRuleImpls(): Unit = {
+    val ris = new ArrayBuffer[RuleImpl]()
+    rules.foreach { cr =>
+      val s1 = getSymbolId(globals(cr.name1))
+      val s2 = getSymbolId(globals(cr.name2))
+      val rk = mkRuleKey(s1, s2)
+      val ri = createRuleImpl(cr.r.reduced, if(s1 <= s2) cr.args1 else cr.args2, if(s1 <= s2) cr.args2 else cr.args1, globals)
+      ruleImpls(rk) = ri
+      ris.addOne(ri)
+    }
+    ris.foreach { ri =>
+      ri.protoCells.iterator.zipWithIndex.foreach { case (pc, i) =>
+        if(pc.wires(0) >= 0 && pc.ports(0) == 0) {
+          val i2 = pc.wires(0)
+          val pc2 = ri.protoCells(i2)
+          if(pc.symId < pc2.symId || (pc.symId == pc2.symId && i < i2)) {
+            val ri2 = ruleImpls(mkRuleKey(pc.symId, pc2.symId))
+            if(ri2 != null) pc.ruleImpl = ri2
+          }
+        }
+      }
+    }
   }
 
-  private[this] var cuts = mutable.ArrayBuffer.empty[Cell]
+  private[this] var cuts = ArrayBuffer.empty[Cell]
   private[this] var cut: Cell = null
 
   def mkRuleKey(s1: Int, s2: Int): Int =
@@ -261,13 +281,20 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     }
     val freeWires = wires.map(w => lookup(w.principal._1))
     val freePorts = wires.map(_.principal._2)
-    //protoCells.foreach(println)
     //wires.map(_.sym).zip(freeWires).zip(freePorts).map { case ((s, t), p) => s"$s: ($t, $p)" }.foreach(println)
     new RuleImpl(protoCells, freeWires, freePorts)
   }
 
   def reduce(ri: RuleImpl, cut1: Cell, cut2: Cell): Unit = {
-    val cells = ri.protoCells.map { pc => new Cell(pc.sym, pc.symId, pc.arity) }
+    val cells = ri.protoCells.map { pc =>
+      val c = new Cell(pc.sym, pc.symId, pc.arity)
+      if(pc.ruleImpl != null) {
+        c.ruleImpl = pc.ruleImpl
+        if(cut == null) cut = c
+        else cuts.addOne(c)
+      }
+      c
+    }
     var i = 0
     while(i < cells.length) {
       var j = 0
@@ -291,7 +318,6 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
       t.connect(p, wt, wp)
       wt.connect(wp, t, p)
       if(p == 0 && wp == 0 && t.isInstanceOf[Cell] && wt.isInstanceOf[Cell]) {
-        //TODO Also detect inner cuts if the RHS is reducible
         val ck = t.asInstanceOf[Cell]
         val ck2 = ck.principal._1.asInstanceOf[Cell]
         if(ck2.ruleImpl == null) {
