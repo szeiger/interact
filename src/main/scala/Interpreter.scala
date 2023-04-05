@@ -312,10 +312,11 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     i = 0
     val conns = ri.connections
     while(i < conns.length) {
-      val t1 = cells(conns(i)); i += 1
-      val p1 = conns(i); i += 1
-      val t2 = cells(conns(i)); i += 1
-      val p2 = conns(i); i += 1
+      val t1 = cells(conns(i))
+      val p1 = conns(i+1)
+      val t2 = cells(conns(i+2))
+      val p2 = conns(i+3)
+      i += 4
       t1.connect(p1, t2, p2)
       t2.connect(p2, t1, p1)
     }
