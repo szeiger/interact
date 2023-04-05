@@ -235,15 +235,18 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
   override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, -1)
 
   private[this] val ruleImpls = new Array[RuleImpl](symCount * symCount)
-  createRuleImpls()
+  private[this] val maxRuleCells = createRuleImpls()
+  private[this] val tempCells = new Array[Cell](maxRuleCells)
 
-  def createRuleImpls(): Unit = {
+  def createRuleImpls(): Int = {
     val ris = new ArrayBuffer[RuleImpl]()
+    var max = 0
     rules.foreach { cr =>
       val s1 = getSymbolId(globals(cr.name1))
       val s2 = getSymbolId(globals(cr.name2))
       val rk = mkRuleKey(s1, s2)
       val ri = createRuleImpl(cr.r.reduced, if(s1 <= s2) cr.args1 else cr.args2, if(s1 <= s2) cr.args2 else cr.args1, globals)
+      if(ri.protoCells.length > max) max = ri.protoCells.length
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
@@ -259,12 +262,13 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         }
       }
     }
+    max
   }
 
   private[this] val cuts = ArrayBuffer.empty[Cell]
   private[this] var cut: Cell = null
 
-  def mkRuleKey(s1: Int, s2: Int): Int =
+  @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) s1 * symCount + s2 else s2 * symCount + s1
 
   def createRuleImpl(reduced: Seq[AST.Cut], args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols): RuleImpl = {
@@ -278,22 +282,25 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
     val protoCells = cells.map { c => new ProtoCell(c.sym, getSymbolId(c.sym), c.arity) }
-    val conns = cells.iterator.zipWithIndex.flatMap { case (c, i) =>
-      c.allPorts.zipWithIndex.flatMap { case ((t, p), j) =>
+    val conns = mutable.HashSet.empty[Seq[Int]]
+    cells.iterator.zipWithIndex.foreach { case (c, i) =>
+      c.allPorts.zipWithIndex.foreach { case ((t, p), j) =>
         val w = lookup(t)
-        if(w >= 0) Seq(i, j, w, p) else Nil
+        if(w >= 0) {
+          if(!conns.contains(Seq(w, p, i, j)))
+            conns.add(Seq(i, j, w, p))
+        }
       }
     }
     val freeWires = wires.map(w => lookup(w.ptarget))
     val freePorts = wires.map(_.pport)
     //wires.map(_.sym).zip(freeWires).zip(freePorts).map { case ((s, t), p) => s"$s: ($t, $p)" }.foreach(println)
-    new RuleImpl(protoCells, freeWires, freePorts, conns.toArray)
+    new RuleImpl(protoCells, freeWires, freePorts, conns.iterator.flatten.toArray)
   }
 
-  def reduce(ri: RuleImpl, cut1: Cell, cut2: Cell): Unit = {
+  def reduce(ri: RuleImpl, cut1: Cell, cut2: Cell, cells: Array[Cell]): Unit = {
     var i = 0
-    val cells = new Array[Cell](ri.protoCells.length)
-    while(i < cells.length) {
+    while(i < ri.protoCells.length) {
       val pc = ri.protoCells(i)
       val c = new Cell(pc.sym, pc.symId, pc.arity)
       if(pc.ruleImpl != null) {
@@ -307,11 +314,12 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     i = 0
     val conns = ri.connections
     while(i < conns.length) {
-      val t1 = conns(i); i += 1
+      val t1 = cells(conns(i)); i += 1
       val p1 = conns(i); i += 1
-      val t2 = conns(i); i += 1
+      val t2 = cells(conns(i)); i += 1
       val p2 = conns(i); i += 1
-      cells(t1).connect(p1, cells(t2), p2)
+      t1.connect(p1, t2, p2)
+      t2.connect(p2, t1, p1)
     }
     i = 0
     @inline def cutTarget(i: Int) = if(i < cut1.arity) (cut1.auxTargets(i), cut1.auxPorts(i)) else (cut2.auxTargets(i-cut1.arity), cut2.auxPorts(i-cut1.arity))
@@ -338,7 +346,7 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
       }
       i += 1
     }
-    //cells.foreach { c => println(s"created $c") }
+    //cells.take(ri.protoCells.length).foreach { c => println(s"created $c") }
   }
 
   def reduce(): Int = {
@@ -365,7 +373,7 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         val _c2 = cut.ptarget.asInstanceOf[Cell]
         val (c1, c2) = if(_c1.symId <= _c2.symId) (_c1, _c2) else (_c2, _c1)
         cut = null
-        reduce(_c1.ruleImpl, c1, c2)
+        reduce(_c1.ruleImpl, c1, c2, tempCells)
       }
     }
     //println(steps)
