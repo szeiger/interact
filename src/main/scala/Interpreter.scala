@@ -255,10 +255,8 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         val pc = ri.protoCells(t1)
         val pc2 = ri.protoCells(t2)
         if(p1 == 0 && p2 == 0) {
-          if(pc.symId < pc2.symId || (pc.symId == pc2.symId && t1 < t2)) {
-            val ri2 = ruleImpls(mkRuleKey(pc.symId, pc2.symId))
-            if(ri2 != null) pc.ruleImpl = ri2
-          }
+          val ri2 = ruleImpls(mkRuleKey(pc.symId, pc2.symId))
+          if(ri2 != null) pc.ruleImpl = ri2
         }
       }
     }
