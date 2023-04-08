@@ -1,6 +1,8 @@
 package de.szeiger.interact.mt
 
-import de.szeiger.interact.{AST, Symbol, Symbols, CheckedRule, BaseInterpreter}
+import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Symbol, Symbols}
+
+import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -8,16 +10,21 @@ sealed abstract class WireOrCell
 
 final class Wire(var leftCell: Cell, var leftPort: Int, var rightCell: Cell, var rightPort: Int) extends WireOrCell {
   var ruleImpl: RuleImpl = _
+  val principals = new AtomicInteger((if(leftCell != null && leftPort == 0) 1 else 0) + (if(rightCell != null && rightPort == 0) 1 else 0))
   @inline def connect(slot: Int, t: Cell, p: Int): Unit = {
     if(slot == 0) { leftCell = t; leftPort = p }
     else { rightCell = t; rightPort = p }
   }
-  @inline def getCell(i: Int): (Cell, Int) =
-    if(i == 0) (leftCell, leftPort) else (rightCell, rightPort)
+  @inline def getOppositeCell(i: Int): Cell =
+    if(i == 0) rightCell else leftCell
+  @inline def getOppositeCellAndPort(i: Int): (Cell, Int) =
+    if(i == 0) (rightCell, rightPort) else (leftCell, leftPort)
   def validate(): Unit = {
-    if(leftCell != null) assert(leftCell.getPort(leftPort) == (this, 0))
-    if(rightCell != null) assert(rightCell.getPort(rightPort) == (this, 1))
+    if(leftCell != null) assert(leftCell.getWireAndPort(leftPort) == (this, 0))
+    if(rightCell != null) assert(rightCell.getWireAndPort(rightPort) == (this, 1))
+    assert(principals.get() == (if(leftCell != null && leftPort == 0) 1 else 0) + (if(rightCell != null && rightPort == 0) 1 else 0))
   }
+  override def toString = s"Wire($leftCell, $leftPort, $rightCell, $rightPort, ${principals.get()})"
 }
 
 object Wire {
@@ -36,16 +43,16 @@ final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends WireOr
       auxPorts(slot-1) = p
     }
   }
-  def getPort(slot: Int): (Wire, Int) =
+  def getWireAndPort(slot: Int): (Wire, Int) =
     if(slot == 0) (ptarget, pport)
     else (auxTargets(slot-1), auxPorts(slot-1))
   def getCell(p: Int): (Cell, Int) = {
     val (w, wp) = if(p == 0) (ptarget, pport) else (auxTargets(p-1), auxPorts(p-1))
     if(w == null) null
-    else w.getCell(1-wp)
+    else w.getOppositeCellAndPort(wp)
   }
   def allPorts: Iterator[(Wire, Int)] = Iterator.single((ptarget, pport)) ++ auxTargets.iterator.zip(auxPorts.iterator)
-  def allCells: Iterator[((Wire, Int), (Cell, Int))] = (0 to arity).iterator.map { i => (getPort(i), getCell(i)) }
+  def allCells: Iterator[((Wire, Int), (Cell, Int))] = (0 to arity).iterator.map { i => (getWireAndPort(i), getCell(i)) }
   override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case (t, p) => s"(${if(t == null) "null" else "_"},$p)" }.mkString(", ") })"
 }
 
@@ -72,8 +79,12 @@ class Scope {
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
     def connectAny(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
       (t1, t2) match {
-        case (t1: Wire, t2: Cell) => connect(t2, p2, t1, p1)
-        case (t1: Cell, t2: Wire) => connect(t1, p1, t2, p2)
+        case (t1: Wire, t2: Cell) =>
+          connect(t2, p2, t1, p1)
+          if(p2 == 0) t1.principals.incrementAndGet()
+        case (t1: Cell, t2: Wire) =>
+          connect(t1, p1, t2, p2)
+          if(p1 == 0) t2.principals.incrementAndGet()
         case (t1: Cell, t2: Cell) =>
           val w = new Wire(t1, p1, t2, p2)
           t1.connect(p1, w, 0)
@@ -98,6 +109,7 @@ class Scope {
             case Some(w) => (w, 1)
             case None =>
               val w = new Wire(null, 0, null, 0)
+              w.principals.set(0)
               bind.put(s, w)
               (w, 0)
           }
@@ -117,7 +129,6 @@ class Scope {
       val (lt, ls) = create(e.left)
       val (rt, rs) = create(e.right)
       connectAny(lt, ls, rt, rs)
-      connectAny(rt, rs, lt, ls)
     }
     cuts.foreach(createCut)
   }
@@ -201,7 +212,9 @@ class Scope {
   }
 }
 
-final case class ProtoCell(sym: Symbol, symId: Int, arity: Int)
+final case class ProtoCell(sym: Symbol, symId: Int, arity: Int) {
+  def createCell = new Cell(sym, symId, arity)
+}
 
 final class RuleImpl(cr: CheckedRule, val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int], val connections: Array[Int], val ruleImpls: Array[RuleImpl]) {
   def log(): Unit = {
@@ -289,76 +302,58 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) s1 * symCount + s2 else s2 * symCount + s1
 
-  def reduce(cut: Wire, cells: Array[Cell]): Unit = {
-    val ri = cut.ruleImpl
-    val (c1, c2) = if(cut.leftCell.symId <= cut.rightCell.symId) (cut.leftCell, cut.rightCell) else (cut.rightCell, cut.leftCell)
+  def addCut(w: Wire, ri: RuleImpl): Unit = {
+    w.ruleImpl = ri
+    if(nextCut == null) nextCut = w
+    else cuts.addOne(w)
+  }
+
+  def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
     var i = 0
     while(i < ri.protoCells.length) {
-      val pc = ri.protoCells(i)
-      val c = new Cell(pc.sym, pc.symId, pc.arity)
-      cells(i) = c
+      cells(i) = ri.protoCells(i).createCell
       i += 1
     }
     i = 0
-    val conns = ri.connections
-    while(i < conns.length) {
-      val t1 = cells(conns(i))
-      val p1 = conns(i+1)
-      val t2 = cells(conns(i+2))
-      val p2 = conns(i+3)
+    while(i < ri.connections.length) {
+      val t1 = cells(ri.connections(i))
+      val p1 = ri.connections(i+1)
+      val t2 = cells(ri.connections(i+2))
+      val p2 = ri.connections(i+3)
       val ri2 = ri.ruleImpls(i/4)
       i += 4
       val w = new Wire(t1, p1, t2, p2)
       t1.connect(p1, w, 0)
       t2.connect(p2, w, 1)
-      if(ri2 != null) {
-        w.ruleImpl = ri2
-        if(nextCut == null) nextCut = w
-        else cuts.addOne(w)
-      }
+      if(ri2 != null) addCut(w, ri2)
     }
     i = 0
     @inline def cutTarget(i: Int) =
       if(i < c1.arity) (c1.auxTargets(i), c1.auxPorts(i)) else (c2.auxTargets(i-c1.arity), c2.auxPorts(i-c1.arity))
-    @inline def maybeCreateCut(t: Wire): Unit = {
-      if(t.ruleImpl == null) {
-        val ri = ruleImpls(mkRuleKey(t))
-        if(ri != null) {
-          t.ruleImpl = ri
-          if(nextCut == null) nextCut = t
-          else cuts.addOne(t)
-        }
-      }
+    def createCut(t: Wire): Unit = {
+      val ri = ruleImpls(mkRuleKey(t))
+      if(ri != null) addCut(t, ri)
     }
     while(i < ri.freeWires.length) {
       val fw = ri.freeWires(i)
       val (t, p) = cutTarget(i)
       if(fw >= 0) {
-        //println(s"Connecting freeWire($i): $t, $p, $fw")
         val (wt, wp) = (cells(fw), ri.freePorts(i))
         connect(wt, wp, t, p)
-        val tc = t.getCell(1-p)
-        if(tc._2 == 0 && wp == 0 && tc._1.symId != -1 && wt.symId != -1)
-          maybeCreateCut(t)
+        if(wp == 0 && t.principals.incrementAndGet() == 2 && t.getOppositeCell(p).symId >= 0 && wt.symId >= 0)
+          createCut(t)
       } else {
         //TODO: Don't remove wires
         val (w2, p2) = cutTarget(-1-fw)
-        val (wt, wp) = w2.getCell(1-p2)
+        val (wt, wp) = w2.getOppositeCellAndPort(p2)
         if(i < -1-fw) {
-          //println(s"Connecting freeWire($i): $t, $p, $fw")
           connect(wt, wp, t, p)
-          val tc = t.getCell(1-p)
-          if(tc._2 == 0 && wp == 0 && tc._1.symId != -1 && wt.symId != -1)
-            maybeCreateCut(t)
+          if(wp == 0 && t.principals.incrementAndGet() == 2 && t.getOppositeCell(p).symId >= 0 && wt.symId >= 0)
+            createCut(t)
         }
       }
       i += 1
     }
-    //cells.take(ri.protoCells.length).foreach { c => println(s"created $c") }
-    //cells.take(ri.protoCells.length).foreach { c =>
-    //  assert(c.ptarget != null)
-    //  c.auxTargets.foreach { w => assert(w != null) }
-    //}
   }
 
   def reduce(): Int = {
@@ -385,7 +380,8 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         //println(s"Reducing $c with ${c.ruleImpl}")
         //c.ruleImpl.log()
         nextCut = null
-        reduce(c, tempCells)
+        val (c1, c2) = if(c.leftCell.symId <= c.rightCell.symId) (c.leftCell, c.rightCell) else (c.rightCell, c.leftCell)
+        reduce(c.ruleImpl, c1, c2, tempCells)
         //validate()
         //println("After reduction:")
         //log()
