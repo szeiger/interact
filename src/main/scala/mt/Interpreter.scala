@@ -6,13 +6,9 @@ import scala.collection.mutable.ArrayBuffer
 
 sealed abstract class WireOrCell
 
-final class Wire extends WireOrCell {
+final class Wire(var leftCell: Cell, var leftPort: Int, var rightCell: Cell, var rightPort: Int) extends WireOrCell {
   var ruleImpl: RuleImpl = _
-  var leftCell: Cell = _
-  var leftPort: Int = _
-  var rightCell: Cell = _
-  var rightPort: Int = _
-  def connect(slot: Int, t: Cell, p: Int): Unit = {
+  @inline def connect(slot: Int, t: Cell, p: Int): Unit = {
     if(slot == 0) { leftCell = t; leftPort = p }
     else { rightCell = t; rightPort = p }
   }
@@ -68,37 +64,22 @@ class Scope {
     cs.foreach { c => f(c.left); f(c.right) }
   }
 
-  @inline def connect(t1: Wire, p1: Int, t2: Cell, p2: Int): Unit =
-    connect(t2, p2, t1, p1)
-
   @inline def connect(t1: Cell, p1: Int, t2: Wire, p2: Int): Unit = {
     t1.connect(p1, t2, p2)
     t2.connect(p2, t1, p1)
   }
 
-  @inline def connect(t1: Wire, p1: Int, t2: Wire, p2: Int): Unit = {
-    val (tc1, tp1) = t1.getCell(1-p1)
-    connect(tc1, tp1, t2, p2)
-  }
-
-  @inline def connect(t1: Cell, p1: Int, t2: Cell, p2: Int): Unit = {
-    val w = new Wire
-    t1.connect(p1, w, 0)
-    w.connect(0, t1, p1)
-    t2.connect(p2, w, 1)
-    w.connect(1, t2, p2)
-  }
-
-  def connect(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
-    (t1, t2) match {
-      case (t1: Wire, t2: Cell) => connect(t1, p1, t2, p2)
-      case (t1: Wire, t2: Wire) => connect(t1, p1, t2, p2)
-      case (t1: Cell, t2: Wire) => connect(t1, p1, t2, p2)
-      case (t1: Cell, t2: Cell) => connect(t1, p1, t2, p2)
-    }
-  }
-
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
+    def connectAny(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
+      (t1, t2) match {
+        case (t1: Wire, t2: Cell) => connect(t2, p2, t1, p1)
+        case (t1: Cell, t2: Wire) => connect(t1, p1, t2, p2)
+        case (t1: Cell, t2: Cell) =>
+          val w = new Wire(t1, p1, t2, p2)
+          t1.connect(p1, w, 0)
+          t2.connect(p2, w, 1)
+      }
+    }
     addSymbols(cuts, syms)
     val bind = mutable.HashMap.empty[Symbol, Wire]
     def create(e: AST.Expr): (WireOrCell, Int) = e match {
@@ -116,7 +97,7 @@ class Scope {
           bind.get(s) match {
             case Some(w) => (w, 1)
             case None =>
-              val w = new Wire
+              val w = new Wire(null, 0, null, 0)
               bind.put(s, w)
               (w, 0)
           }
@@ -128,15 +109,15 @@ class Scope {
         args.zipWithIndex.foreach { case (a, idx) =>
           val p = idx + 1
           val (at, ap) = create(a)
-          connect(c, p, at, ap)
+          connectAny(c, p, at, ap)
         }
         (c, 0)
     }
     def createCut(e: AST.Cut): Unit = {
       val (lt, ls) = create(e.left)
       val (rt, rs) = create(e.right)
-      connect(lt, ls, rt, rs)
-      connect(rt, rs, lt, ls)
+      connectAny(lt, ls, rt, rs)
+      connectAny(rt, rs, lt, ls)
     }
     cuts.foreach(createCut)
   }
@@ -280,11 +261,8 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     sc.validate()
     //sc.log()
     val cells = sc.reachableCells.filter(_.symId != -1).toArray
-    //println("cells: "+cells.mkString("; "))
     val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
-    //println("freeLookup: "+freeLookup.mkString("; "))
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
-    //println("wires: "+wires.mkString("; "))
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
     val protoCells = cells.map { c => new ProtoCell(c.sym, getSymbolId(c.sym), c.arity) }
     val conns = mutable.HashSet.empty[Seq[Int]]
@@ -297,12 +275,8 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         }
       }
     }
-    val freeWires = wires.map { w =>
-      //println(s"looking up $w: ${w.getCell(0)._1}")
-      lookup(w.getCell(0)._1)
-    }
+    val freeWires = wires.map { w => lookup(w.getCell(0)._1) }
     val freePorts = wires.map(_.getCell(0)._2)
-    //wires.map(_.sym).zip(freeWires).zip(freePorts).map { case ((s, t), p) => s"$s: ($t, $p)" }.foreach(println)
     new RuleImpl(cr, protoCells, freeWires, freePorts, conns.iterator.flatten.toArray, new Array(conns.size))
   }
 
@@ -316,7 +290,6 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     if(s1 < s2) s1 * symCount + s2 else s2 * symCount + s1
 
   def reduce(cut: Wire, cells: Array[Cell]): Unit = {
-    //TODO: Detect cuts *after* connecting everything
     val ri = cut.ruleImpl
     val (c1, c2) = if(cut.leftCell.symId <= cut.rightCell.symId) (cut.leftCell, cut.rightCell) else (cut.rightCell, cut.leftCell)
     var i = 0
@@ -335,9 +308,9 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
       val p2 = conns(i+3)
       val ri2 = ri.ruleImpls(i/4)
       i += 4
-      val w = new Wire
-      connect(t1, p1, w, 0)
-      connect(t2, p2, w, 1)
+      val w = new Wire(t1, p1, t2, p2)
+      t1.connect(p1, w, 0)
+      t2.connect(p2, w, 1)
       if(ri2 != null) {
         w.ruleImpl = ri2
         if(nextCut == null) nextCut = w
@@ -347,7 +320,7 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     i = 0
     @inline def cutTarget(i: Int) =
       if(i < c1.arity) (c1.auxTargets(i), c1.auxPorts(i)) else (c2.auxTargets(i-c1.arity), c2.auxPorts(i-c1.arity))
-    def maybeCreateCut(t: Wire): Unit = {
+    @inline def maybeCreateCut(t: Wire): Unit = {
       if(t.ruleImpl == null) {
         val ri = ruleImpls(mkRuleKey(t))
         if(ri != null) {
