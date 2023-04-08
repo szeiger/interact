@@ -41,6 +41,10 @@ class InterpreterBenchmark {
   }
 
   @Benchmark
-  def mult(bh: Blackhole): Unit =
-    bh.consume(multModel.createInterpreter.reduce())
+  def multMT(bh: Blackhole): Unit =
+    bh.consume(multModel.createMTInterpreter.reduce())
+
+  @Benchmark
+  def multST(bh: Blackhole): Unit =
+    bh.consume(multModel.createSTInterpreter.reduce())
 }

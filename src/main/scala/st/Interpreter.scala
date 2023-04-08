@@ -1,36 +1,9 @@
-package de.szeiger.interact
+package de.szeiger.interact.st
 
+import de.szeiger.interact.{AST, Symbol, Symbols, CheckedRule, BaseInterpreter}
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
-class Symbol(val id: AST.Ident) {
-  var refs = 0
-  var cons: AST.Cons = null
-  def isCons = cons != null
-  override def toString = id.show
-}
-
-class Symbols(parent: Option[Symbols] = None) {
-  private val syms = mutable.HashMap.empty[AST.Ident, Symbol]
-  def getOrAdd(id: AST.Ident): Symbol = {
-    val so = parent match {
-      case Some(p) => p.syms.get(id)
-      case None => None
-    }
-    so.getOrElse(syms.getOrElseUpdate(id, new Symbol(id)))
-  }
-  def get(id: AST.Ident): Option[Symbol] = {
-    val so = parent match {
-      case Some(p) => p.syms.get(id)
-      case None => None
-    }
-    so.orElse(syms.get(id))
-  }
-  def apply(id: AST.Ident): Symbol =
-    get(id).getOrElse(sys.error(s"No symbol found for ${id.show}"))
-  def symbols: Iterator[Symbol] = syms.valuesIterator ++ parent.map(_.symbols).getOrElse(Iterator.empty)
-}
 
 sealed abstract class Target(val sym: Symbol) {
   var ptarget: Target = _
@@ -164,7 +137,7 @@ class Scope {
   }
 
   def log(): Unit = {
-    println(s"Free wires: ${freeWires.map(_.sym).mkString(", ")}")
+    println(s"  Free wires: ${freeWires.map(_.sym).mkString(", ")}")
     val rem = mutable.HashSet.from(reachableCells)
     val helpers = mutable.HashMap.empty[(Target, Int), String]
     var nextHelper = 0
@@ -201,7 +174,7 @@ class Scope {
         }
       case w: Wire => w.sym.toString
     }
-    println("Cells:")
+    println("  Cells:")
     while(rem.nonEmpty) {
       val c = chainStart(rem.head)
       val p = c.ptarget match {
@@ -216,7 +189,7 @@ class Scope {
             s"$s . "
         }
       }
-      println(s"  $p${show(c)}")
+      println(s"    $p${show(c)}")
     }
   }
 }
@@ -227,7 +200,7 @@ final case class ProtoCell(sym: Symbol, symId: Int, arity: Int) {
 
 final class RuleImpl(val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int], val connections: Array[Int])
 
-class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope {
+class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope with BaseInterpreter {
 
   private[this] val symIds = mutable.HashMap.from[Symbol, Int](globals.symbols.zipWithIndex)
   private[this] val symCount = symIds.size

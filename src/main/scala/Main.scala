@@ -14,7 +14,8 @@ object Main extends App {
   println("Data:")
   model.data.foreach(r => println(s"  ${r.show}"))
 
-  val inter = model.createInterpreter
+  val inter = model.createMTInterpreter
+  println("Initial state:")
   inter.log()
   val steps = inter.reduce()
   println(s"Irreducible after $steps reductions.")

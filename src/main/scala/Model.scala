@@ -17,6 +17,39 @@ class RuleKey(_name1: AST.Ident, _name2: AST.Ident) {
   }
 }
 
+class Symbol(val id: AST.Ident) {
+  var refs = 0
+  var cons: AST.Cons = null
+  def isCons = cons != null
+  override def toString = id.show
+}
+
+class Symbols(parent: Option[Symbols] = None) {
+  private val syms = mutable.HashMap.empty[AST.Ident, Symbol]
+  def getOrAdd(id: AST.Ident): Symbol = {
+    val so = parent match {
+      case Some(p) => p.syms.get(id)
+      case None => None
+    }
+    so.getOrElse(syms.getOrElseUpdate(id, new Symbol(id)))
+  }
+  def get(id: AST.Ident): Option[Symbol] = {
+    val so = parent match {
+      case Some(p) => p.syms.get(id)
+      case None => None
+    }
+    so.orElse(syms.get(id))
+  }
+  def apply(id: AST.Ident): Symbol =
+    get(id).getOrElse(sys.error(s"No symbol found for ${id.show}"))
+  def symbols: Iterator[Symbol] = syms.valuesIterator ++ parent.map(_.symbols).getOrElse(Iterator.empty)
+}
+
+trait BaseInterpreter {
+  def log(): Unit
+  def reduce(): Int
+}
+
 class Model(val statements: Seq[AST.Statement]) {
   val constrs = mutable.Map.empty[AST.Ident, AST.Cons]
   val ruleCuts = mutable.Map.empty[RuleKey, CheckedRule]
@@ -128,8 +161,14 @@ class Model(val statements: Seq[AST.Statement]) {
     checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
   }
 
-  def createInterpreter: Interpreter = {
-    val i = new Interpreter(globals, ruleCuts.values)
+  def createSTInterpreter: BaseInterpreter = {
+    val i = new st.Interpreter(globals, ruleCuts.values)
+    data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
+    i
+  }
+
+  def createMTInterpreter: BaseInterpreter = {
+    val i = new mt.Interpreter(globals, ruleCuts.values)
     data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
     i
   }
