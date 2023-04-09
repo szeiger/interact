@@ -7,11 +7,16 @@ import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+import BitOps._
+
 sealed abstract class WireOrCell
 
 final class Wire(var leftCell: Cell, var leftPort: Int, var rightCell: Cell, var rightPort: Int) extends WireOrCell {
   var ruleImpl: RuleImpl = _
-  val principals = new AtomicInteger((if(leftCell != null && leftPort == 0) 1 else 0) + (if(rightCell != null && rightPort == 0) 1 else 0))
+  private[this] val principals = new AtomicInteger((if(leftCell != null && leftPort == 0) 1 else 0) + (if(rightCell != null && rightPort == 0) 1 else 0))
+  def getPrincipals = principals.get
+  def resetPrincipals: Unit = principals.set(0)
+  def incPrincipals = principals.incrementAndGet()
   @inline def connect(slot: Int, t: Cell, p: Int): Unit = {
     if(slot == 0) { leftCell = t; leftPort = p }
     else { rightCell = t; rightPort = p }
@@ -80,10 +85,10 @@ class Scope {
       (t1, t2) match {
         case (t1: Wire, t2: Cell) =>
           connect(t2, p2, t1, p1)
-          if(p2 == 0) t1.principals.incrementAndGet()
+          if(p2 == 0) t1.incPrincipals
         case (t1: Cell, t2: Wire) =>
           connect(t1, p1, t2, p2)
-          if(p1 == 0) t2.principals.incrementAndGet()
+          if(p1 == 0) t2.incPrincipals
         case (t1: Cell, t2: Cell) =>
           val w = new Wire(t1, p1, t2, p2)
           t1.connect(p1, w, 0)
@@ -108,7 +113,7 @@ class Scope {
             case Some(w) => (w, 1)
             case None =>
               val w = new Wire(null, 0, null, 0)
-              w.principals.set(0)
+              w.resetPrincipals
               bind.put(s, w)
               (w, 0)
           }
@@ -239,13 +244,13 @@ final class RuleImpl(cr: CheckedRule, final val protoCells: Array[ProtoCell], fi
       println("  Free wires:")
       freeWires.zip(freePorts).foreach { case (w, p) => println(s"  - ($w, $p)") }
       println("  Connections:")
-      connections.grouped(4).zip(ruleImpls).foreach { case (c, ri) => println(s"  - ${c.mkString(",")}: $ri")}
+      connections.zip(ruleImpls).foreach { case (c, ri) => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}: $ri")}
     }
   }
   override def toString = if(cr == null) "<boundaryRuleImpl>" else cr.show
 }
 
-class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope with BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope with BaseInterpreter { self =>
   private[this] final val boundarySym = new Symbol(new AST.Ident("$Boundary"))
   private[this] final val allSymbols = globals.symbols ++ Seq(boundarySym)
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
@@ -261,8 +266,8 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
   private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, null, null)
   private[this] final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val maxRuleCells = createRuleImpls()
-  private[this] final val tempCells = new Array[Cell](maxRuleCells)
 
+  private[this] val cuts = ArrayBuffer.empty[Wire]
 
   def createRuleImpls(): Int = {
     val ris = new ArrayBuffer[RuleImpl]()
@@ -281,7 +286,11 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     val allConss = symIds.iterator.filter(s => s._1.isCons || s._2 == boundarySymId).map(_._2)
     allConss.foreach(s => ruleImpls(mkRuleKey(s, boundarySymId)) = boundaryRuleImpl)
     ris.foreach { ri =>
-      ri.connections.grouped(4).zipWithIndex.foreach { case (Array(t1, p1, t2, p2), i) =>
+      ri.connections.zipWithIndex.foreach { case (c, i) =>
+        val t1 = byte0(c)
+        val p1 = byte1(c)
+        val t2 = byte2(c)
+        val p2 = byte3(c)
         val pc = ri.protoCells(t1)
         val pc2 = ri.protoCells(t2)
         if(p1 == 0 && p2 == 0)
@@ -303,21 +312,18 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
     val protoCells = cells.map { c => new ProtoCell(c.sym, getSymbolId(c.sym), c.arity) }
-    val conns = mutable.HashSet.empty[Seq[Int]]
+    val conns = mutable.HashSet.empty[Int]
     cells.iterator.zipWithIndex.foreach { case (c, i) =>
       c.allCells.zipWithIndex.foreach { case ((_, (t, p)), j) =>
         val w = lookup(t)
-        if(w >= 0 && !conns.contains(Seq(w, p, i, j)))
-          conns.add(Seq(i, j, w, p))
+        if(w >= 0 && !conns.contains(checkedIntOfBytes(w, p, i, j)))
+          conns.add(checkedIntOfBytes(i, j, w, p))
       }
     }
     val freeWires = wires.map { w => lookup(w.getCell(0)._1) }
     val freePorts = wires.map(_.getCell(0)._2)
-    new RuleImpl(cr, protoCells, freeWires, freePorts, conns.iterator.flatten.toArray, new Array(conns.size))
+    new RuleImpl(cr, protoCells, freeWires, freePorts, conns.toArray, new Array(conns.size))
   }
-
-  private[this] val cuts = ArrayBuffer.empty[Wire]
-  private[this] var nextCut: Wire = null
 
   @inline def mkRuleKey(w: Wire): Int =
     mkRuleKey(w.leftCell.symId, w.rightCell.symId)
@@ -325,84 +331,114 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  def addCut(w: Wire, ri: RuleImpl): Unit = {
-    //println(s"Adding cut on $w using $ri")
-    w.ruleImpl = ri
-    if(nextCut == null) nextCut = w
-    else cuts.addOne(w)
-  }
+  private[this] final class InterpreterThread {
+    private[this] var nextCut: Wire = null
+    private[this] final val tempCells = new Array[Cell](maxRuleCells)
 
-  @inline def createCut(t: Wire): Unit = {
-    val ri = ruleImpls(mkRuleKey(t))
-    //println(s"createCut ${t.leftCell.sym} . ${t.rightCell.sym} = $ri")
-    if(ri != null) addCut(t, ri)
-  }
-
-  def removeBoundary(cut: Wire): Unit = {
-    val (b, o) = if(cut.leftCell.symId == boundarySymId) (cut.leftCell, cut.rightCell) else (cut.rightCell,cut.leftCell)
-    val w = b.auxTargets(0)
-    connect(o, 0, w, b.auxPorts(0))
-    if(w.principals.incrementAndGet() == 2) createCut(w)
-  }
-
-  def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
-    var i = 0
-    while(i < ri.protoCells.length) {
-      cells(i) = ri.protoCells(i).createCell
-      i += 1
+    def addCut(w: Wire, ri: RuleImpl): Unit = {
+      //println(s"Adding cut on $w using $ri")
+      w.ruleImpl = ri
+      if(nextCut == null) nextCut = w
+      else cuts.addOne(w)
     }
-    i = 0
-    while(i < ri.connections.length) {
-      val t1 = cells(ri.connections(i))
-      val p1 = ri.connections(i+1)
-      val t2 = cells(ri.connections(i+2))
-      val p2 = ri.connections(i+3)
-      val ri2 = ri.ruleImpls(i/4)
-      val w = new Wire(t1, p1, t2, p2)
-      t1.connect(p1, w, 0)
-      t2.connect(p2, w, 1)
-      if(ri2 != null) addCut(w, ri2)
-      i += 4
+
+    @inline def createCut(t: Wire): Unit = {
+      val ri = ruleImpls(mkRuleKey(t))
+      //println(s"createCut ${t.leftCell.sym} . ${t.rightCell.sym} = $ri")
+      if(ri != null) addCut(t, ri)
     }
-    i = 0
-    @inline def cutTarget(i: Int) =
-      if(i < c1.arity) (c1.auxTargets(i), c1.auxPorts(i)) else (c2.auxTargets(i-c1.arity), c2.auxPorts(i-c1.arity))
-    while(i < ri.freeWires.length) {
-      val fw = ri.freeWires(i)
-      val (t, p) = cutTarget(i)
-      if(fw >= 0) { // Connect cut wire to new cell
-        val (ct, cp) = (cells(fw), ri.freePorts(i))
-        connect(ct, cp, t, p)
-        if(cp == 0 && t.principals.incrementAndGet() == 2)
-          createCut(t)
-      } else if(i < -1-fw) { // Connect 2 cut wires
-        val (t2, p2) = cutTarget(-1-fw)
-        // Always remove one wire (not mt-safe)
-        //val (wt, wp) = t2.getOppositeCellAndPort(p2)
-        //connect(wt, wp, t, p)
-        //if(wp == 0 && t.principals.incrementAndGet() == 2)
-        if(t.principals.get() == 1) { // take ownership of opposing cell on t
-          val (wt, wp) = t.getOppositeCellAndPort(p)
-          connect(wt, wp, t2, p2)
-          if(wp == 0 && t2.principals.incrementAndGet() == 2) createCut(t2)
-        } else if(t2.principals.get() == 1) { // take ownership of opposing cell on t2
-          val (wt, wp) = t2.getOppositeCellAndPort(p2)
-          connect(wt, wp, t, p)
-          if(wp == 0 && t.principals.incrementAndGet() == 2) createCut(t)
-        } else { // ownership unclear -> insert boundary
-          val b = new Cell(boundarySym, boundarySymId, 1)
-          connect(b, 0, t, p)
-          connect(b, 1, t2, p2)
-          if(t.principals.incrementAndGet() == 2) createCut(t)
+
+    def removeBoundary(cut: Wire): Unit = {
+      val (b, o) = if(cut.leftCell.symId == boundarySymId) (cut.leftCell, cut.rightCell) else (cut.rightCell,cut.leftCell)
+      val w = b.auxTargets(0)
+      connect(o, 0, w, b.auxPorts(0))
+      if(w.incPrincipals == 2) createCut(w)
+    }
+
+    def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
+      var i = 0
+      while(i < ri.protoCells.length) {
+        cells(i) = ri.protoCells(i).createCell
+        i += 1
+      }
+      i = 0
+      while(i < ri.connections.length) {
+        val conn = ri.connections(i)
+        val t1 = cells(byte0(conn))
+        val p1 = byte1(conn)
+        val t2 = cells(byte2(conn))
+        val p2 = byte3(conn)
+        val ri2 = ri.ruleImpls(i)
+        val w = new Wire(t1, p1, t2, p2)
+        t1.connect(p1, w, 0)
+        t2.connect(p2, w, 1)
+        if(ri2 != null) addCut(w, ri2)
+        i += 1
+      }
+      i = 0
+      @inline def cutTarget(i: Int) =
+        if(i < c1.arity) (c1.auxTargets(i), c1.auxPorts(i)) else (c2.auxTargets(i-c1.arity), c2.auxPorts(i-c1.arity))
+      while(i < ri.freeWires.length) {
+        val fw = ri.freeWires(i)
+        val (t, p) = cutTarget(i)
+        if(fw >= 0) { // Connect cut wire to new cell
+          val (ct, cp) = (cells(fw), ri.freePorts(i))
+          connect(ct, cp, t, p)
+          if(cp == 0 && t.incPrincipals == 2)
+            createCut(t)
+        } else if(i < -1-fw) { // Connect 2 cut wires
+          val (t2, p2) = cutTarget(-1-fw)
+          // Always remove one wire (not mt-safe)
+          //val (wt, wp) = t2.getOppositeCellAndPort(p2)
+          //connect(wt, wp, t, p)
+          //if(wp == 0 && t.principals.incrementAndGet() == 2)
+          if(t.getPrincipals == 1) { // take ownership of opposing cell on t
+            val (wt, wp) = t.getOppositeCellAndPort(p)
+            connect(wt, wp, t2, p2)
+            if(wp == 0 && t2.incPrincipals == 2) createCut(t2)
+          } else if(t2.getPrincipals == 1) { // take ownership of opposing cell on t2
+            val (wt, wp) = t2.getOppositeCellAndPort(p2)
+            connect(wt, wp, t, p)
+            if(wp == 0 && t.incPrincipals == 2) createCut(t)
+          } else { // ownership unclear -> insert boundary
+            val b = new Cell(boundarySym, boundarySymId, 1)
+            connect(b, 0, t, p)
+            connect(b, 1, t2, p2)
+            if(t.incPrincipals == 2) createCut(t)
+          }
+        }
+        i += 1
+      }
+    }
+
+    def reduce(): Int = {
+      var steps = 0
+      while(!cuts.isEmpty) {
+        nextCut = cuts.last
+        cuts.dropRightInPlace(1)
+        while(nextCut != null) {
+          //println(s"Remaining reducible cuts: ${cuts.size+1}")
+          steps += 1
+          val c = nextCut
+          //println(s"Reducing $c with ${c.ruleImpl}")
+          //c.ruleImpl.log()
+          nextCut = null
+          if(c.ruleImpl eq boundaryRuleImpl) removeBoundary(c)
+          else {
+            val (c1, c2) = if(c.leftCell.symId <= c.rightCell.symId) (c.leftCell, c.rightCell) else (c.rightCell, c.leftCell)
+            reduce(c.ruleImpl, c1, c2, tempCells)
+          }
+          //validate()
+          //println("After reduction:")
+          //log()
         }
       }
-      i += 1
+      steps
     }
   }
 
   def reduce(): Int = {
     //validate()
-    var steps = 0
     cuts.clear()
     reachableCells.foreach { c =>
       val w = c.ptarget
@@ -414,28 +450,25 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         }
       }
     }
-    while(!cuts.isEmpty) {
-      nextCut = cuts.last
-      cuts.dropRightInPlace(1)
-      while(nextCut != null) {
-        //println(s"Remaining reducible cuts: ${cuts.size+1}")
-        steps += 1
-        val c = nextCut
-        //println(s"Reducing $c with ${c.ruleImpl}")
-        //c.ruleImpl.log()
-        nextCut = null
-        if(c.ruleImpl eq boundaryRuleImpl) removeBoundary(c)
-        else {
-          val (c1, c2) = if(c.leftCell.symId <= c.rightCell.symId) (c.leftCell, c.rightCell) else (c.rightCell, c.leftCell)
-          reduce(c.ruleImpl, c1, c2, tempCells)
-        }
-        //validate()
-        //println("After reduction:")
-        //log()
-      }
-    }
+    val it = new InterpreterThread()
+    val steps = it.reduce()
     //log()
     //println(steps)
     steps
+  }
+}
+
+object BitOps {
+  @inline def byte0(i: Int): Int = i & 0xFF
+  @inline def byte1(i: Int): Int = (i & (0xFF << 8)) >>> 8
+  @inline def byte2(i: Int): Int = (i & (0xFF << 16)) >>> 16
+  @inline def byte3(i: Int): Int = (i & (0xFF << 24)) >>> 24
+  @inline def intOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+  def checkedIntOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = {
+    assert(b0 <= 255)
+    assert(b1 <= 255)
+    assert(b2 <= 255)
+    assert(b3 <= 255)
+    intOfBytes(b0, b1, b2, b3)
   }
 }
