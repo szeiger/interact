@@ -6,22 +6,32 @@ import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import org.junit.runners.Parameterized.Parameters
 
-import java.nio.file.Path
+import java.io.{ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters._
 
 @RunWith(classOf[Parameterized])
 class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String) {
 
-  @Test
-  def test1(): Unit = {
-    val statements = Parser.parse(Path.of("src/test/resources/test1.in"))
+  def checkFile(basePath: String): Int = {
+    val statements = Parser.parse(Path.of(basePath+".in"))
     val model = new Model(statements)
     val inter = newInterpreter(model)
-    //inter.log()
     val steps = inter.reduce()
-    //println(s"Irreducible after $steps reductions.")
-    //inter.log()
-    assertEquals(128, steps)
+    val out = new ByteArrayOutputStream()
+    inter.log(new PrintStream(out, true, StandardCharsets.UTF_8))
+    val s = out.toString(StandardCharsets.UTF_8)
+    val check = Files.readString(Path.of(basePath+".check"), StandardCharsets.UTF_8)
+    assertEquals(check.trim, s.trim)
+    steps
+  }
+
+  @Test
+  def test1(): Unit = {
+    val steps = checkFile("src/test/resources/test1")
+    // mt is non-deterministic due to extra boundary cells
+    if(interpreterName == "st") assertEquals(128, steps)
   }
 
   @Test

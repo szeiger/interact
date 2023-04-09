@@ -1,6 +1,8 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.{AST, Symbol, Symbols, CheckedRule, BaseInterpreter}
+import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Symbol, Symbols}
+
+import java.io.PrintStream
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -136,8 +138,9 @@ class Scope {
     s.iterator
   }
 
-  def log(): Unit = {
-    println(s"  Free wires: ${freeWires.map(_.sym).mkString(", ")}")
+  def log(out: PrintStream): Unit = {
+    val freeWireNames = freeWires.map(_.sym.toString)
+    out.println(s"  Free wires: ${freeWireNames.toSeq.sorted.mkString(", ")}")
     val rem = mutable.HashSet.from(reachableCells)
     val helpers = mutable.HashMap.empty[(Target, Int), String]
     var nextHelper = 0
@@ -174,22 +177,30 @@ class Scope {
         }
       case w: Wire => w.sym.toString
     }
-    println("  Cells:")
+    out.println("  Cells:")
+    val buf = mutable.ArrayBuffer.empty[(String, String)]
     while(rem.nonEmpty) {
       val c = chainStart(rem.head)
       val p = c.ptarget match {
         case null => ""
-        case w: Wire => s"${w.sym} . "
+        case w: Wire => w.sym.toString
         case t => helpers.get((t, c.pport)) match {
-          case Some(s) => s"$s . "
+          case Some(s) => s
           case None =>
             val s = s"$$${nextHelper}"
             nextHelper += 1
             helpers.put(t.getPort(c.pport), s)
-            s"$s . "
+            s
         }
       }
-      println(s"    $p${show(c)}")
+      buf.addOne((p, show(c)))
+    }
+    val sorted = buf.zipWithIndex.toIndexedSeq.sortBy { case ((l, r), idx) =>
+      val f = freeWireNames.contains(l)
+      (!f, if(f) l else "", idx)
+    }
+    sorted.foreach { case ((l, r), idx) =>
+      out.println(s"    ${l} . ${r}")
     }
   }
 }

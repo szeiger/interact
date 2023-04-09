@@ -1,5 +1,6 @@
 package de.szeiger.interact
 
+import java.io.PrintStream
 import scala.collection.mutable
 
 class CheckedRule(val r: AST.Rule, val name1: AST.Ident, val args1: Seq[AST.Ident], val name2: AST.Ident, val args2: Seq[AST.Ident]) {
@@ -46,7 +47,8 @@ class Symbols(parent: Option[Symbols] = None) {
 }
 
 trait BaseInterpreter {
-  def log(): Unit
+  final def log(): Unit = log(System.out)
+  def log(out: PrintStream): Unit
   def reduce(): Int
 }
 
