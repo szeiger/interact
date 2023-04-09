@@ -210,11 +210,11 @@ class Scope {
   }
 }
 
-final case class ProtoCell(sym: Symbol, symId: Int, arity: Int) {
+final class ProtoCell(final val sym: Symbol, final val symId: Int, final val arity: Int) {
   def createCell = new Cell(sym, symId, arity)
 }
 
-final class RuleImpl(cr: CheckedRule, val protoCells: Array[ProtoCell], val freeWires: Array[Int], val freePorts: Array[Int], val connections: Array[Int], val ruleImpls: Array[RuleImpl]) {
+final class RuleImpl(cr: CheckedRule, final val protoCells: Array[ProtoCell], final val freeWires: Array[Int], final val freePorts: Array[Int], final val connections: Array[Int], final val ruleImpls: Array[RuleImpl]) {
   def log(): Unit = {
     println("  Proto cells:")
     protoCells.foreach(pc => println(s"  - $pc"))
@@ -340,15 +340,13 @@ class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope 
         connect(wt, wp, t, p)
         if(wp == 0 && t.principals.incrementAndGet() == 2)
           createCut(t)
-      } else {
+      } else if(i < -1-fw) {
         //TODO: Don't remove wires
         val (w2, p2) = cutTarget(-1-fw)
         val (wt, wp) = w2.getOppositeCellAndPort(p2)
-        if(i < -1-fw) {
-          connect(wt, wp, t, p)
-          if(wp == 0 && t.principals.incrementAndGet() == 2)
-            createCut(t)
-        }
+        connect(wt, wp, t, p)
+        if(wp == 0 && t.principals.incrementAndGet() == 2)
+          createCut(t)
       }
       i += 1
     }
