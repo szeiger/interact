@@ -109,6 +109,7 @@ class Model(val statements: Seq[AST.Statement]) {
   def checkLinearity(cuts: Seq[AST.Cut], free: Set[AST.Ident], globals: Symbols)(in: => String): Unit = {
     final class Usages(var count: Int = 0)
     val usages = mutable.HashMap.from(free.iterator.map(i => (i, new Usages)))
+    val toScan = mutable.Queue.empty[(AST.Cut, AST.Expr)]
     def scan(c: AST.Cut, e: AST.Expr): Unit = {
       globals.get(e.target) match {
         case Some(g) =>
@@ -119,11 +120,15 @@ class Model(val statements: Seq[AST.Statement]) {
             sys.error(s"Illegal use of non-constructor symbol ${e.target.show} as constructor in $in")
           usages.getOrElseUpdate(e.target, new Usages).count += 1
       }
-      e.args.foreach(a => scan(c, a))
+      e.args.foreach(a => toScan.enqueue((c, a)))
     }
     cuts.foreach { c =>
       scan(c, c.left)
       scan(c, c.right)
+    }
+    while(!toScan.isEmpty) {
+      val (c, e) = toScan.dequeue()
+      scan(c, e)
     }
     val badFree = free.iterator.map(i => (i, usages(i))).filter(_._2.count != 1).toSeq
     if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1.show).mkString(", ")} in $in")
@@ -169,7 +174,7 @@ class Model(val statements: Seq[AST.Statement]) {
     i
   }
 
-  def createMTInterpreter: BaseInterpreter = {
+  def createMTInterpreter: mt.Interpreter = {
     val i = new mt.Interpreter(globals, ruleCuts.values)
     data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
     i

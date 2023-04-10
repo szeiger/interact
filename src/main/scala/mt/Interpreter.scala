@@ -97,44 +97,56 @@ class Scope {
     }
     addSymbols(cuts, syms)
     val bind = mutable.HashMap.empty[Symbol, Wire]
-    def create(e: AST.Expr): (WireOrCell, Int) = e match {
-      case i: AST.Ident =>
-        val s = syms.getOrAdd(i)
-        if(s.isCons) {
+    val toCreate = mutable.Queue.empty[(AST.Expr, Cell, Int)]
+    def create(e: AST.Expr, cCell: Cell, cPort: Int): (WireOrCell, Int) = {
+      val (wr, pr) = e match {
+        case i: AST.Ident =>
           val s = syms.getOrAdd(i)
+          if(s.isCons) {
+            val s = syms.getOrAdd(i)
+            val c = new Cell(s, getSymbolId(s), s.cons.arity)
+            (c, 0)
+          } else if(s.refs == 1) {
+            val c = new Cell(s, 0, 0)
+            freeWires.addOne(c)
+            (c, 0)
+          } else if(s.refs == 2) {
+            bind.get(s) match {
+              case Some(w) => (w, 1)
+              case None =>
+                val w = new Wire(null, 0, null, 0)
+                w.resetPrincipals
+                bind.put(s, w)
+                (w, 0)
+            }
+          } else sys.error(s"Non-linear use of ${i.show} in data")
+        case AST.Ap(i, args) =>
+          val s = syms.getOrAdd(i)
+          assert(s.isCons)
           val c = new Cell(s, getSymbolId(s), s.cons.arity)
-          (c, 0)
-        } else if(s.refs == 1) {
-          val c = new Cell(s, 0, 0)
-          freeWires.addOne(c)
-          (c, 0)
-        } else if(s.refs == 2) {
-          bind.get(s) match {
-            case Some(w) => (w, 1)
-            case None =>
-              val w = new Wire(null, 0, null, 0)
-              w.resetPrincipals
-              bind.put(s, w)
-              (w, 0)
+          args.zipWithIndex.foreach { case (a, idx) =>
+            val p = idx + 1
+            toCreate.enqueue((a, c, p))
+            //val (at, ap) = create(a)
+            //connectAny(c, p, at, ap)
           }
-        } else sys.error(s"Non-linear use of ${i.show} in data")
-      case AST.Ap(i, args) =>
-        val s = syms.getOrAdd(i)
-        assert(s.isCons)
-        val c = new Cell(s, getSymbolId(s), s.cons.arity)
-        args.zipWithIndex.foreach { case (a, idx) =>
-          val p = idx + 1
-          val (at, ap) = create(a)
-          connectAny(c, p, at, ap)
-        }
-        (c, 0)
+          (c, 0)
+      }
+      if(cCell != null) connectAny(cCell, cPort, wr, pr)
+      (wr, pr)
     }
     def createCut(e: AST.Cut): Unit = {
-      val (lt, ls) = create(e.left)
-      val (rt, rs) = create(e.right)
+      val (lt, ls) = create(e.left, null, 0)
+      val (rt, rs) = create(e.right, null, 0)
       connectAny(lt, ls, rt, rs)
     }
-    cuts.foreach(createCut)
+    cuts.foreach { c =>
+      createCut(c)
+      while(!toCreate.isEmpty) {
+        val (e, c, p) = toCreate.dequeue()
+        create(e, c, p)
+      }
+    }
   }
 
   def validate(): Unit = {
@@ -143,15 +155,20 @@ class Scope {
   }
 
   object Church {
-    def unapply(c: Cell): Option[Int] = {
-      if(c.sym.id.s == "Z" && c.arity == 0) Some(0)
-      else if(c.sym.id.s == "S" && c.arity == 1) {
-        c.getCell(1) match {
-          case (BoundaryTarget(c2), 0) => unapply(c2).map(_ + 1)
-          case (c2, 0) => unapply(c2).map(_ + 1)
-          case _ => None
-        }
-      } else None
+    def unapply(_c: Cell): Option[Int] = {
+      var acc = 0
+      var c = _c
+      while(true) {
+        if(c.sym.id.s == "Z" && c.arity == 0) return Some(acc)
+        else if(c.sym.id.s == "S" && c.arity == 1) {
+          c.getCell(1) match {
+            case (BoundaryTarget(c2), 0) => c = c2; acc += 1
+            case (c2, 0) => c = c2; acc += 1
+            case _ => return None
+          }
+        } else return None
+      }
+      return None
     }
   }
 
@@ -184,10 +201,8 @@ class Scope {
     s.iterator
   }
 
-  def log(out: PrintStream): Unit = {
+  def getCutLogs(): Iterator[(Wire, String, String, Option[String])] = {
     val freeWireNames = freeWires.map(_.sym.toString)
-    out.println(s"  Free wires: ${freeWireNames.toSeq.sorted.mkString(", ")}")
-    out.println("  Cells:")
     val cuts = mutable.HashSet.from(reachableCells.filter(_.getCell(0)._2 == 0)).map { c =>
       val w1 = c.ptarget
       val w2 = c.getCell(0)._1.ptarget
@@ -213,18 +228,22 @@ class Scope {
       case c if c.arity == 0 => c.sym.toString
       case c => c.allCells.drop(1).map { case ((w, _), (t, p)) => targetOrReplacement(w, t, p) }.mkString(s"${c.sym}(", ", ", ")")
     }
-    val strs = cuts.iterator.flatMap { case w @ Wire(c1, _, c2, _) =>
-      val cut = if(w.ruleImpl != null) "*" else "."
-      if(c1.symId == 0) (c1.sym.toString, cut, show(c2)) :: Nil
-      else if(c2.symId == 0) (c2.sym.toString, cut, show(c1)) :: Nil
-      else Seq((explicit(w), cut, show(c1)), (explicit(w), cut, show(c2)))
+    val strs = cuts.iterator.map { case w @ Wire(c1, _, c2, _) =>
+      if(c1.symId == 0) (w, c1.sym.toString, show(c2), None)
+      else if(c2.symId == 0) (w, c2.sym.toString, show(c1), None)
+      else (w, explicit(w), show(c1), Some(show(c2)))
     }
-    val sorted = strs.zipWithIndex.toIndexedSeq.sortBy { case ((l, c, r), idx) =>
+    strs.zipWithIndex.toIndexedSeq.sortBy { case ((w, l, r, o), idx) =>
       val f = freeWireNames.contains(l)
       (!f, if(f) l else "", idx)
-    }
-    sorted.foreach { case ((l, c, r), idx) =>
-      out.println(s"    ${l} $c ${r}")
+    }.iterator.map(_._1)
+  }
+
+  def log(out: PrintStream): Unit = {
+    getCutLogs().foreach { case (w, l, r, o) =>
+      val c = if(w.ruleImpl != null) "*" else "."
+      out.println(s"  ${l} $c ${r}")
+      o.foreach(r2 => out.println(s"  ${l} $c ${r2}"))
     }
   }
 }
@@ -266,8 +285,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, null, null)
   private[this] final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val maxRuleCells = createRuleImpls()
-
-  private[this] val cuts = ArrayBuffer.empty[Wire]
 
   def createRuleImpls(): Int = {
     val ris = new ArrayBuffer[RuleImpl]()
@@ -331,15 +348,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  private[this] final class InterpreterThread {
-    private[this] var nextCut: Wire = null
+  private[this] final class InterpreterThread extends (Wire => Unit) {
+    private[Interpreter] var nextCut: Wire = null
     private[this] final val tempCells = new Array[Cell](maxRuleCells)
+    private[Interpreter] var steps = 0
 
     def addCut(w: Wire, ri: RuleImpl): Unit = {
       //println(s"Adding cut on $w using $ri")
       w.ruleImpl = ri
       if(nextCut == null) nextCut = w
-      else cuts.addOne(w)
+      else queue.addOne(w)
     }
 
     @inline def createCut(t: Wire): Unit = {
@@ -411,51 +429,79 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
       }
     }
 
-    def reduce(): Int = {
-      var steps = 0
-      while(!cuts.isEmpty) {
-        nextCut = cuts.last
-        cuts.dropRightInPlace(1)
-        while(nextCut != null) {
-          //println(s"Remaining reducible cuts: ${cuts.size+1}")
-          steps += 1
-          val c = nextCut
-          //println(s"Reducing $c with ${c.ruleImpl}")
-          //c.ruleImpl.log()
-          nextCut = null
-          if(c.ruleImpl eq boundaryRuleImpl) removeBoundary(c)
-          else {
-            val (c1, c2) = if(c.leftCell.symId <= c.rightCell.symId) (c.leftCell, c.rightCell) else (c.rightCell, c.leftCell)
-            reduce(c.ruleImpl, c1, c2, tempCells)
-          }
-          //validate()
-          //println("After reduction:")
-          //log()
-        }
+    def processLocalCut(): Unit = {
+      //println(s"Remaining reducible cuts: ${cuts.size+1}")
+      steps += 1
+      val c = nextCut
+      //println(s"Reducing $c with ${c.ruleImpl}")
+      //c.ruleImpl.log()
+      nextCut = null
+      if(c.ruleImpl eq boundaryRuleImpl) removeBoundary(c)
+      else {
+        val (c1, c2) = if(c.leftCell.symId <= c.rightCell.symId) (c.leftCell, c.rightCell) else (c.rightCell, c.leftCell)
+        reduce(c.ruleImpl, c1, c2, tempCells)
       }
-      steps
+      //validate()
+      //println("After reduction:")
+      //log()
+    }
+
+    def apply(w: Wire): Unit = {
+      assert(nextCut == null)
+      nextCut = w
+      while(nextCut != null) processLocalCut()
     }
   }
 
-  def reduce(): Int = {
-    //validate()
-    cuts.clear()
+  def detectInitialCuts(): Unit = {
     reachableCells.foreach { c =>
       val w = c.ptarget
       if(w.ruleImpl == null && w.leftPort == 0 && w.rightPort == 0) {
         val ri = ruleImpls(mkRuleKey(w))
         if(ri != null) {
           w.ruleImpl = ri
-          cuts.addOne(w)
+          queue.addOne(w)
         }
       }
     }
-    val it = new InterpreterThread()
-    val steps = it.reduce()
+  }
+
+  def reduce1(w: Wire): Unit = {
+    queue.clear()
+    val t = new InterpreterThread()
+    t.nextCut = w
+    t.processLocalCut()
+  }
+
+  private[this] val workerThreads = (0 until 1).map(_ => new InterpreterThread)
+
+  private[this] val pool = new Workers[Wire](workerThreads)
+  private[this] val queue: mutable.Growable[Wire] = pool
+  def reduce(): Int = {
+    //validate()
+    detectInitialCuts()
+    pool.start()
+    pool.awaitEmpty()
+    pool.shutdown()
     //log()
     //println(steps)
-    steps
+    workerThreads.iterator.map(_.steps).sum
   }
+
+//  private[this] val queue = mutable.ArrayBuffer.empty[Wire]
+//  def reduce(): Int = {
+//    //validate()
+//    detectInitialCuts()
+//    val w = workerThreads(0)
+//    while(!queue.isEmpty) {
+//      val c = queue.last
+//      queue.dropRightInPlace(1)
+//      w.apply(c)
+//    }
+//    //log()
+//    //println(steps)
+//    workerThreads.iterator.map(_.steps).sum
+//  }
 }
 
 object BitOps {

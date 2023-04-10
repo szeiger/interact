@@ -140,7 +140,6 @@ class Scope {
 
   def log(out: PrintStream): Unit = {
     val freeWireNames = freeWires.map(_.sym.toString)
-    out.println(s"  Free wires: ${freeWireNames.toSeq.sorted.mkString(", ")}")
     val rem = mutable.HashSet.from(reachableCells)
     val helpers = mutable.HashMap.empty[(Target, Int), String]
     var nextHelper = 0
@@ -177,7 +176,6 @@ class Scope {
         }
       case w: Wire => w.sym.toString
     }
-    out.println("  Cells:")
     val buf = mutable.ArrayBuffer.empty[(String, String)]
     while(rem.nonEmpty) {
       val c = chainStart(rem.head)
@@ -200,7 +198,7 @@ class Scope {
       (!f, if(f) l else "", idx)
     }
     sorted.foreach { case ((l, r), idx) =>
-      out.println(s"    ${l} . ${r}")
+      out.println(s"  ${l} . ${r}")
     }
   }
 }

@@ -11,8 +11,8 @@ object Main extends App {
   model.constrs.values.foreach(c => println(s"  ${c.show}"))
   println("Rules:")
   model.ruleCuts.values.foreach(r => println(s"  ${r.show}"))
-  println("Data:")
-  model.data.foreach(r => println(s"  ${r.show}"))
+  //println("Data:")
+  //model.data.foreach(r => println(s"  ${r.show}"))
 
   val inter = model.createMTInterpreter
   println("Initial state:")

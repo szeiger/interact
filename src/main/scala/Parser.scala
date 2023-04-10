@@ -29,7 +29,18 @@ object AST {
     def args = Nil
   }
   case class Ap(target: Ident, args: Seq[Expr]) extends Expr {
-    def show = s"${target.show}(${args.map(_.show).mkString(", ")})"
+    def show = {
+      val buf = new StringBuffer().append(target.show).append("(")
+      val it = args.iterator
+      var first = true
+      while(it.hasNext) {
+        val a = it.next()
+        if(!first) buf.append(", ")
+        buf.append(a.show)
+      }
+      buf.append(")")
+      buf.toString
+    }
   }
   case class Cut(left: Expr, right: Expr) extends ExprOrCut {
     def show = s"${left.show} . ${right.show}"
