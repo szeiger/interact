@@ -269,7 +269,7 @@ final class RuleImpl(cr: CheckedRule, final val protoCells: Array[ProtoCell], fi
   override def toString = if(cr == null) "<boundaryRuleImpl>" else cr.show
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends Scope with BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends Scope with BaseInterpreter { self =>
   private[this] final val boundarySym = new Symbol(new AST.Ident("$Boundary"))
   private[this] final val allSymbols = globals.symbols ++ Seq(boundarySym)
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
@@ -473,35 +473,30 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
     t.processLocalCut()
   }
 
-  private[this] val workerThreads = (0 until 1).map(_ => new InterpreterThread)
+  private[this] val workerThreads = (0 until 1.max(numThreads)).map(_ => new InterpreterThread).toSeq
+  private[this] val pool = if(numThreads == 0) null else new Workers[Wire](workerThreads)
+  private[this] val queue: mutable.Growable[Wire] = if(numThreads == 0) mutable.ArrayBuffer.empty[Wire] else pool
 
-  private[this] val pool = new Workers[Wire](workerThreads)
-  private[this] val queue: mutable.Growable[Wire] = pool
   def reduce(): Int = {
     //validate()
     detectInitialCuts()
-    pool.start()
-    pool.awaitEmpty()
-    pool.shutdown()
+    if(numThreads == 0) {
+      val w = workerThreads(0)
+      val queue = this.queue.asInstanceOf[mutable.ArrayBuffer[Wire]]
+      while(!queue.isEmpty) {
+        val c = queue.last
+        queue.dropRightInPlace(1)
+        w.apply(c)
+      }
+    } else {
+      pool.start()
+      pool.awaitEmpty()
+      pool.shutdown()
+    }
     //log()
     //println(steps)
     workerThreads.iterator.map(_.steps).sum
   }
-
-//  private[this] val queue = mutable.ArrayBuffer.empty[Wire]
-//  def reduce(): Int = {
-//    //validate()
-//    detectInitialCuts()
-//    val w = workerThreads(0)
-//    while(!queue.isEmpty) {
-//      val c = queue.last
-//      queue.dropRightInPlace(1)
-//      w.apply(c)
-//    }
-//    //log()
-//    //println(steps)
-//    workerThreads.iterator.map(_.steps).sum
-//  }
 }
 
 object BitOps {

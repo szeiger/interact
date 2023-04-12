@@ -57,6 +57,8 @@ object MainTest {
   def interpreters =
     Seq[(Model => BaseInterpreter, String)](
       (_.createSTInterpreter, "st"),
-      (_.createMTInterpreter, "mt")
+      (_.createMTInterpreter(0), "mt0"),
+      (_.createMTInterpreter(1), "mt1"),
+      (_.createMTInterpreter(4), "mt4")
     ).map { case (f, s) => Array[AnyRef](f, s) }.asJava
 }

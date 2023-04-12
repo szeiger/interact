@@ -174,8 +174,8 @@ class Model(val statements: Seq[AST.Statement]) {
     i
   }
 
-  def createMTInterpreter: mt.Interpreter = {
-    val i = new mt.Interpreter(globals, ruleCuts.values)
+  def createMTInterpreter(numThreads: Int) : mt.Interpreter = {
+    val i = new mt.Interpreter(globals, ruleCuts.values, numThreads)
     data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
     i
   }
