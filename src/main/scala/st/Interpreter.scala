@@ -116,14 +116,19 @@ class Scope {
   }
 
   object Church {
-    def unapply(c: Cell): Option[Int] = {
-      if(c.sym.id.s == "Z" && c.arity == 0) Some(0)
-      else if(c.sym.id.s == "S" && c.arity == 1) {
-        c.getPort(1) match {
-          case (c2: Cell, 0) => unapply(c2).map(_ + 1)
-          case _ => None
-        }
-      } else None
+    def unapply(_c: Cell): Option[Int] = {
+      var acc = 0
+      var c = _c
+      while(true) {
+        if(c.sym.id.s == "Z" && c.arity == 0) return Some(acc)
+        else if(c.sym.id.s == "S" && c.arity == 1) {
+          c.getPort(1) match {
+            case (c2: Cell, 0) => c = c2; acc += 1
+            case _ => return None
+          }
+        } else return None
+      }
+      return None
     }
   }
 

@@ -35,6 +35,9 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
   }
 
   @Test
+  def test2(): Unit = checkFile("src/test/resources/test2")
+
+  @Test
   def testReduceRHS(): Unit = {
     val statements = Parser.parse(
       """cons A(x)

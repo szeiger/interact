@@ -14,7 +14,7 @@ class Workers[T](processors: Iterable[T => Unit]) extends mutable.Growable[T] {
   private[this] val endMarker = new AnyRef
   private[this] val monitor = new AnyRef
   private[this] var state = 0
-  @volatile private[this] var latch: CountDownLatch = new CountDownLatch(1)
+  @volatile private[this] var latch: CountDownLatch = _
 
   class Worker(p: T => Unit) extends Runnable {
     def run(): Unit = {
@@ -26,10 +26,7 @@ class Workers[T](processors: Iterable[T => Unit]) extends mutable.Growable[T] {
           try p(item.asInstanceOf[T])
           finally monitor.synchronized {
             active -= 1
-            if(active == 0) {
-              latch.countDown()
-              latch = new CountDownLatch(1)
-            }
+            if(active == 0 && latch != null) latch.countDown()
           }
         }
       }
@@ -51,8 +48,14 @@ class Workers[T](processors: Iterable[T => Unit]) extends mutable.Growable[T] {
   }
 
   def awaitEmpty(): Unit = {
-    assert(monitor.synchronized(state) == 1)
+    monitor.synchronized {
+      assert(state == 1)
+      if(active == 0) return
+      latch = new CountDownLatch(1)
+    }
     latch.await()
+    //assert(active == 0)
+    //assert(queue.isEmpty)
   }
 
   def shutdown(): Unit = monitor.synchronized {
