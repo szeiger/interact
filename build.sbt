@@ -1,10 +1,15 @@
-scalaVersion in Global := "2.13.10"
+//scalaVersion in Global := "2.13.10"
 
-cancelable in Global := false
+//cancelable in Global := false
 
 scalacOptions ++= Seq("-feature")
 
 fork in Test := true
+
+Global / resolvers += "scala-integration" at
+  "https://scala-ci.typesafe.com/artifactory/scala-integration/"
+
+Global / scalaVersion := "2.13.11-bin-28eef15"
 
 lazy val main = (project in file("."))
   .settings(
