@@ -551,16 +551,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
 }
 
 object BitOps {
-  @inline def byte0(i: Int): Int = i & 0xFF
-  @inline def byte1(i: Int): Int = (i & (0xFF << 8)) >>> 8
-  @inline def byte2(i: Int): Int = (i & (0xFF << 16)) >>> 16
-  @inline def byte3(i: Int): Int = (i & (0xFF << 24)) >>> 24
-  @inline def intOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+  @inline def byte0(i: Int): Int = (i & 0xFF).toByte
+  @inline def byte1(i: Int): Int = ((i & (0xFF << 8)) >>> 8).toByte
+  @inline def byte2(i: Int): Int = ((i & (0xFF << 16)) >>> 16).toByte
+  @inline def byte3(i: Int): Int = ((i & (0xFF << 24)) >>> 24).toByte
+  @inline def intOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = b0.toByte&0xFF | ((b1.toByte&0xFF) << 8) | ((b2.toByte&0xFF) << 16) | ((b3.toByte&0xFF) << 24)
   def checkedIntOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = {
-    assert(b0 <= 255)
-    assert(b1 <= 255)
-    assert(b2 <= 255)
-    assert(b3 <= 255)
+    assert(b0 >= -128 && b0 <= 127)
+    assert(b1 >= -128 && b1 <= 127)
+    assert(b2 >= -128 && b2 <= 127)
+    assert(b3 >= -128 && b3 <= 127)
     intOfBytes(b0, b1, b2, b3)
   }
 }
