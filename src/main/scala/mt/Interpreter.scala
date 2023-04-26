@@ -11,39 +11,31 @@ import BitOps._
 
 sealed trait WireOrCell
 
-final class Wire(_leftCell: Cell, _leftPort: Int, _rightCell: Cell, _rightPort: Int)
-    extends WireRef(null, false, _leftCell, _leftPort, new AtomicInteger((if(_leftCell != null && _leftPort == 0) 1 else 0) + (if(_rightCell != null && _rightPort == 0) 1 else 0)))
-    with WireOrCell {
-  @inline def ref0: WireRef = this
-  final val ref1: WireRef = new WireRef(this, true, _rightCell, _rightPort, principals)
-  @inline def ref(p: Boolean): WireRef = if(p) ref1 else ref0
-  var ruleImpl: RuleImpl = _
-  //@jdk.internal.vm.annotation.Contended
-  def validate(): Unit = {
-    if(ref0.cell != null) assert(ref0.cell.getWireRef(ref0.cellPort) == ref0)
-    if(ref1.cell != null) assert(ref1.cell.getWireRef(ref1.cellPort) == ref1)
-    assert(principals.get() == ref0.principalCount + ref1.principalCount)
+object Wire {
+  def apply(c1: Cell, p1: Int, c2: Cell, p2: Int): WireRef = {
+    val a = new AtomicInteger()
+    val w1 = new WireRef(c1, p1, a)
+    val w2 = new WireRef(c2, p2, a)
+    w1.oppo = w2
+    w2.oppo = w1
+    // Atomic write after construction for safe publication of oppo fields
+    a.set((if(c1 != null && p1 == 0) 1 else 0) + (if(c2 != null && p2 == 0) 1 else 0))
+    w1
   }
-  override def toString = s"Wire(${ref0.cell}, ${ref0.cellPort}, ${ref1.cell}, ${ref1.cellPort}, ${principals.get()})"
 }
 
-class WireRef(_w: Wire, val p: Boolean, var cell: Cell, var cellPort: Int, protected[this] val principals: AtomicInteger) {
-  val w: Wire = if(_w == null) this.asInstanceOf[Wire] else _w
+final class WireRef(var cell: Cell, var cellPort: Int, principals: AtomicInteger) extends WireOrCell {
+  var oppo: WireRef = _
+  var ruleImpl: RuleImpl = _
   def connectInc(t: Cell, p: Int): Int = {
     cell = t;
     cellPort = p
     if(p == 0) principals.incrementAndGet() else -1
   }
-  @inline def opposite: (Cell, Int) = {
-    val o = w.ref(!p)
-    (o.cell, o.cellPort)
-  }
-  def principalCount = if(cellPort == 0 && cell != null) 1 else 0
+  @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
   def getPrincipals = principals.get
-}
-
-object Wire {
-  def unapply(w: Wire): Some[(Cell, Int, Cell, Int)] = Some((w.ref0.cell, w.ref0.cellPort, w.ref1.cell, w.ref1.cellPort))
+  def validate(): Unit =
+    if(cell != null) assert(cell.getWireRef(cellPort) == this)
 }
 
 final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends WireOrCell {
@@ -62,7 +54,7 @@ final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends WireOr
   }
   def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
   def allCells: Iterator[(WireRef, (Cell, Int))] = (0 to arity).iterator.map { i => (getWireRef(i), getCell(i)) }
-  override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w.w == null) "null" else "_"},${w.p})" }.mkString(", ") })"
+  override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
 class Scope {
@@ -88,18 +80,18 @@ class Scope {
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
     def connectAny(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
       (t1, t2) match {
-        case (t1: Wire, t2: Cell) =>
-          connectInc(t2, p2, t1.ref(p1 != 0))
-        case (t1: Cell, t2: Wire) =>
-          connectInc(t1, p1, t2.ref(p2 != 0))
+        case (t1: WireRef, t2: Cell) =>
+          connectInc(t2, p2, t1)
+        case (t1: Cell, t2: WireRef) =>
+          connectInc(t1, p1, t2)
         case (t1: Cell, t2: Cell) =>
-          val w = new Wire(t1, p1, t2, p2)
-          t1.connect(p1, w.ref0)
-          t2.connect(p2, w.ref1)
+          val w = Wire(t1, p1, t2, p2)
+          t1.connect(p1, w)
+          t2.connect(p2, w.oppo)
       }
     }
     addSymbols(cuts, syms)
-    val bind = mutable.HashMap.empty[Symbol, Wire]
+    val bind = mutable.HashMap.empty[Symbol, WireRef]
     val toCreate = mutable.Queue.empty[(AST.Expr, Cell, Int)]
     def create(e: AST.Expr, cCell: Cell, cPort: Int): (WireOrCell, Int) = {
       val (wr, pr) = e match {
@@ -117,8 +109,8 @@ class Scope {
             bind.get(s) match {
               case Some(w) => (w, 1)
               case None =>
-                val w = new Wire(null, 0, null, 0)
-                bind.put(s, w)
+                val w = Wire(null, 0, null, 0)
+                bind.put(s, w.oppo)
                 (w, 0)
             }
           } else sys.error(s"Non-linear use of ${i.show} in data")
@@ -129,8 +121,6 @@ class Scope {
           args.zipWithIndex.foreach { case (a, idx) =>
             val p = idx + 1
             toCreate.enqueue((a, c, p))
-            //val (at, ap) = create(a)
-            //connectAny(c, p, at, ap)
           }
           (c, 0)
       }
@@ -152,7 +142,7 @@ class Scope {
   }
 
   def validate(): Unit = {
-    val wires =  reachableCells.flatMap(_.allPorts).map(_.w).toSet
+    val wires =  reachableCells.flatMap(_.allPorts).toSet
     wires.foreach(_.validate())
   }
 
@@ -203,21 +193,23 @@ class Scope {
     s.iterator
   }
 
-  def getCutLogs(): Iterator[(Wire, String, String, Option[String])] = {
+  def getCutLogs(): Iterator[(WireRef, String, String, Option[String])] = {
     val freeWireNames = freeWires.map(_.sym.toString)
+    val leaders = mutable.HashMap.empty[WireRef, WireRef]
+    def leader(w: WireRef): WireRef = leaders.getOrElse(w, leaders.getOrElseUpdate(w.oppo, w))
     val cuts = mutable.HashSet.from(reachableCells.filter(_.getCell(0)._2 == 0)).map { c =>
-      val w1 = c.pref.w
-      val w2 = c.getCell(0)._1.pref.w
+      val w1 = leader(c.pref)
+      val w2 = leader(c.getCell(0)._1.pref)
       assert(w1 == w2)
-      c.pref.w
+      w1
     }
     var nextTemp = -1
-    val helpers = mutable.Map.empty[Wire, String]
-    def explicit(w: Wire): String = helpers.getOrElseUpdate(w, {
+    val helpers = mutable.Map.empty[WireRef, String]
+    def explicit(w: WireRef): String = helpers.getOrElseUpdate(w, {
       nextTemp += 1
       "$" + nextTemp
     })
-    def targetOrReplacement(w: Wire, t: Cell, p: Int): String = helpers.get(w) match {
+    def targetOrReplacement(w: WireRef, t: Cell, p: Int): String = helpers.get(w) match {
       case Some(s) => s
       case None if p == 0 => show(t)
       case None => explicit(w)
@@ -228,12 +220,15 @@ class Scope {
       case ListCons(c1, c2) => s"${show(c1)} :: ${show(c2)}"
       case BoundaryTarget(c1) => show(c1)
       case c if c.arity == 0 => c.sym.toString
-      case c => c.allCells.drop(1).map { case (wr, (t, p)) => targetOrReplacement(wr.w, t, p) }.mkString(s"${c.sym}(", ", ", ")")
+      case c => c.allCells.drop(1).map { case (wr, (t, p)) => targetOrReplacement(leader(wr), t, p) }.mkString(s"${c.sym}(", ", ", ")")
     }
-    val strs = cuts.iterator.map { case w @ Wire(c1, _, c2, _) =>
-      if(c1.symId == 0) (w, c1.sym.toString, show(c2), None)
-      else if(c2.symId == 0) (w, c2.sym.toString, show(c1), None)
-      else (w, explicit(w), show(c1), Some(show(c2)))
+    val strs = cuts.iterator.map { w =>
+      val l = leader(w)
+      val c1 = l.cell
+      val c2 = l.oppo.cell
+      if(c1.symId == 0) (l, c1.sym.toString, show(c2), None)
+      else if(c2.symId == 0) (l, c2.sym.toString, show(c1), None)
+      else (l, explicit(w), show(c1), Some(show(c2)))
     }
     strs.zipWithIndex.toIndexedSeq.sortBy { case ((w, l, r, o), idx) =>
       val f = freeWireNames.contains(l)
@@ -347,18 +342,18 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     new RuleImpl(cr, protoCells, freeWires, freePorts, conns.toArray, new Array(conns.size))
   }
 
-  @inline def mkRuleKey(w: Wire): Int =
-    mkRuleKey(w.ref0.cell.symId, w.ref1.cell.symId)
+  @inline def mkRuleKey(w: WireRef): Int =
+    mkRuleKey(w.cell.symId, w.oppo.cell.symId)
 
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  private[this] final class InterpreterThread extends (Wire => Unit) {
-    private[Interpreter] var nextCut: Wire = null
+  private[this] final class InterpreterThread extends (WireRef => Unit) {
+    private[Interpreter] var nextCut: WireRef = null
     private[this] final val tempCells = new Array[Cell](maxRuleCells)
     private[Interpreter] var steps = 0
 
-    def addCut(w: Wire, ri: RuleImpl): Unit = {
+    def addCut(w: WireRef, ri: RuleImpl): Unit = {
       //println(s"Adding cut on $w using $ri")
       w.ruleImpl = ri
       assert(w != null)
@@ -366,16 +361,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       else queue.addOne(w)
     }
 
-    @inline def createCut(t: Wire): Unit = {
+    @inline def createCut(t: WireRef): Unit = {
       val ri = ruleImpls(mkRuleKey(t))
       //println(s"createCut ${t.leftCell.sym} . ${t.rightCell.sym} = $ri")
       if(ri != null) addCut(t, ri)
     }
 
-    def removeBoundary(cut: Wire): Unit = {
-      val (b, o) = if(cut.ref0.cell.symId == boundarySymId) (cut.ref0.cell, cut.ref1.cell) else (cut.ref1.cell,cut.ref0.cell)
+    def removeBoundary(cut: WireRef): Unit = {
+      val (b, o) = if(cut.cell.symId == boundarySymId) (cut.cell, cut.oppo.cell) else (cut.oppo.cell,cut.cell)
       val wr = b.auxRefs(0)
-      if(connectInc(o, 0, wr) == 2) createCut(wr.w)
+      if(connectInc(o, 0, wr) == 2) createCut(wr)
     }
 
     def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
@@ -391,9 +386,9 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
         val p1 = byte1(conn)
         val t2 = cells(byte2(conn))
         val p2 = byte3(conn)
-        val w = new Wire(t1, p1, t2, p2)
-        t1.connect(p1, w.ref0)
-        t2.connect(p2, w.ref1)
+        val w = Wire(t1, p1, t2, p2)
+        t1.connect(p1, w)
+        t2.connect(p2, w.oppo)
         val ri2 = ri.ruleImpls(i)
         if(ri2 != null) addCut(w, ri2)
         i += 1
@@ -405,7 +400,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       @inline
       def connectFreeToInternal(cIdx: Int, cp: Int, cutIdx: Int): Unit = {
         val wr = cutTarget(cutIdx)
-        if(connectInc(cells(cIdx), cp, wr) == 2) createCut(wr.w)
+        if(connectInc(cells(cIdx), cp, wr) == 2) createCut(wr)
       }
 
       // Connect 2 cut wires
@@ -415,14 +410,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
         val wr2 = cutTarget(cutIdx2)
         if(wr1.getPrincipals == 1) { // take ownership of opposing cell on t
           val (wt, wp) = wr1.opposite
-          if(connectInc(wt, wp, wr2) == 2) createCut(wr2.w)
+          if(connectInc(wt, wp, wr2) == 2) createCut(wr2)
         } else if(wr2.getPrincipals == 1) { // take ownership of opposing cell on t2
           val (wt, wp) = wr2.opposite
-          if(connectInc(wt, wp, wr1) == 2) createCut(wr1.w)
+          if(connectInc(wt, wp, wr1) == 2) createCut(wr1)
         } else { // ownership unclear -> insert boundary
           val b = new Cell(boundarySym, boundarySymId, 1)
           connectInc(b, 1, wr2)
-          if(connectInc(b, 0, wr1) == 2) createCut(wr1.w)
+          if(connectInc(b, 0, wr1) == 2) createCut(wr1)
         }
       }
 
@@ -445,7 +440,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       nextCut = null
       if(c.ruleImpl eq boundaryRuleImpl) removeBoundary(c)
       else {
-        val (c1, c2) = if(c.ref0.cell.symId <= c.ref1.cell.symId) (c.ref0.cell, c.ref1.cell) else (c.ref1.cell, c.ref0.cell)
+        val (c1, c2) = if(c.cell.symId <= c.oppo.cell.symId) (c.cell, c.oppo.cell) else (c.oppo.cell, c.cell)
         reduce(c.ruleImpl, c1, c2, tempCells)
       }
       //validate()
@@ -453,7 +448,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       //log()
     }
 
-    def apply(w: Wire): Unit = {
+    def apply(w: WireRef): Unit = {
       assert(nextCut == null)
       nextCut = w
       while(nextCut != null) processLocalCut()
@@ -462,8 +457,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
 
   def detectInitialCuts(): Unit = {
     reachableCells.foreach { c =>
-      val w = c.pref.w
-      if(w.ruleImpl == null && w.ref0.cellPort == 0 && w.ref1.cellPort == 0) {
+      val w = c.pref
+      if(w.ruleImpl == null && w.oppo.ruleImpl == null && w.cellPort == 0 && w.oppo.cellPort == 0) {
         val ri = ruleImpls(mkRuleKey(w))
         if(ri != null) {
           w.ruleImpl = ri
@@ -473,7 +468,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     }
   }
 
-  def reduce1(w: Wire): Unit = {
+  def reduce1(w: WireRef): Unit = {
     queue.clear()
     val t = new InterpreterThread()
     t.nextCut = w
@@ -481,15 +476,15 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   }
 
   private[this] val workerThreads = (0 until 1.max(numThreads)).map(_ => new InterpreterThread).toSeq
-  private[this] val pool = if(numThreads == 0) null else new Workers[Wire](workerThreads)
-  private[this] val queue: mutable.Growable[Wire] = if(numThreads == 0) mutable.ArrayBuffer.empty[Wire] else pool
+  private[this] val pool = if(numThreads == 0) null else new Workers[WireRef](workerThreads)
+  private[this] val queue: mutable.Growable[WireRef] = if(numThreads == 0) mutable.ArrayBuffer.empty[WireRef] else pool
 
   def reduce(): Int = {
     //validate()
     detectInitialCuts()
     if(numThreads == 0) {
       val w = workerThreads(0)
-      val queue = this.queue.asInstanceOf[mutable.ArrayBuffer[Wire]]
+      val queue = this.queue.asInstanceOf[mutable.ArrayBuffer[WireRef]]
       while(!queue.isEmpty) {
         val c = queue.last
         queue.dropRightInPlace(1)
