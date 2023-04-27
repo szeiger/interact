@@ -12,29 +12,39 @@ import BitOps._
 sealed trait WireOrCell
 
 object Wire {
+  def apply(): WireRef = {
+    val a = new AtomicInteger()
+    val w1 = new WireRef(null, 0, a)
+    val w2 = new WireRef(null, 0, a)
+    w1.oppo = w2
+    w2.oppo = w1
+    // Atomic write after construction for safe publication of oppo fields
+    a.set(0)
+    w1
+  }
   def apply(c1: Cell, p1: Int, c2: Cell, p2: Int): WireRef = {
     val a = new AtomicInteger()
     val w1 = new WireRef(c1, p1, a)
     val w2 = new WireRef(c2, p2, a)
     w1.oppo = w2
     w2.oppo = w1
+    c1.connect(p1, w1)
+    c2.connect(p2, w2)
     // Atomic write after construction for safe publication of oppo fields
-    a.set((if(c1 != null && p1 == 0) 1 else 0) + (if(c2 != null && p2 == 0) 1 else 0))
+    a.set((if(p1 == 0) 1 else 0) + (if(p2 == 0) 1 else 0))
     w1
   }
 }
 
 final class WireRef(var cell: Cell, var cellPort: Int, principals: AtomicInteger) extends WireOrCell {
   var oppo: WireRef = _
-  def connectInc(t: Cell, p: Int): Int = {
+  @inline def connectInc(t: Cell, p: Int): Int = {
     cell = t;
     cellPort = p
     if(p == 0) principals.incrementAndGet() else -1
   }
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
   def getPrincipals = principals.get
-  def validate(): Unit =
-    if(cell != null) assert(cell.getWireRef(cellPort) == this)
 }
 
 final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends WireOrCell {
@@ -47,7 +57,7 @@ final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends WireOr
   def getWireRef(slot: Int): WireRef =
     if(slot == 0) pref
     else auxRefs(slot-1)
-  @inline def getCell(p: Int): (Cell, Int) = {
+  def getCell(p: Int): (Cell, Int) = {
     val w = getWireRef(p)
     if(w == null) null else w.opposite
   }
@@ -84,9 +94,7 @@ class Scope {
         case (t1: Cell, t2: WireRef) =>
           connectInc(t1, p1, t2)
         case (t1: Cell, t2: Cell) =>
-          val w = Wire(t1, p1, t2, p2)
-          t1.connect(p1, w)
-          t2.connect(p2, w.oppo)
+          Wire(t1, p1, t2, p2)
       }
     }
     addSymbols(cuts, syms)
@@ -108,7 +116,7 @@ class Scope {
             bind.get(s) match {
               case Some(w) => (w, 1)
               case None =>
-                val w = Wire(null, 0, null, 0)
+                val w = Wire()
                 bind.put(s, w.oppo)
                 (w, 0)
             }
@@ -142,7 +150,7 @@ class Scope {
 
   def validate(): Unit = {
     val wires =  reachableCells.flatMap(_.allPorts).toSet
-    wires.foreach(_.validate())
+    wires.foreach(w => w.cell == null || w.cell.getWireRef(w.cellPort) == w)
   }
 
   object Church {
@@ -384,8 +392,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
         val t2 = cells(byte2(conn))
         val p2 = byte3(conn)
         val w = Wire(t1, p1, t2, p2)
-        t1.connect(p1, w)
-        t2.connect(p2, w.oppo)
         val ri2 = ri.ruleImpls(i)
         if(ri2 != null) addCut(w, ri2)
         i += 1
@@ -421,7 +427,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       i = 0
       while(i < ri.freeWires.length) {
         val fw = ri.freeWires(i)
-        val wr = cutTarget(i)
         if(fw >= 0) connectFreeToInternal(fw, ri.freePorts(i), i)
         else if(i < -1-fw) connectFreeToFree(i, -1-fw)
         i += 1
@@ -506,9 +511,9 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
 
 object BitOps {
   @inline def byte0(i: Int): Int = (i & 0xFF).toByte
-  @inline def byte1(i: Int): Int = ((i & (0xFF << 8)) >>> 8).toByte
-  @inline def byte2(i: Int): Int = ((i & (0xFF << 16)) >>> 16).toByte
-  @inline def byte3(i: Int): Int = ((i & (0xFF << 24)) >>> 24).toByte
+  @inline def byte1(i: Int): Int = ((i >>> 8) & 0xFF).toByte
+  @inline def byte2(i: Int): Int = ((i >>> 16) & 0xFF).toByte
+  @inline def byte3(i: Int): Int = ((i >>> 24) & 0xFF).toByte
   @inline def intOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = b0.toByte&0xFF | ((b1.toByte&0xFF) << 8) | ((b2.toByte&0xFF) << 16) | ((b3.toByte&0xFF) << 24)
   def checkedIntOfBytes(b0: Int, b1: Int, b2: Int, b3: Int): Int = {
     assert(b0 >= -128 && b0 <= 127)
