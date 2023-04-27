@@ -17,7 +17,7 @@ object Debug extends App {
     print("> ")
     val in = Console.in.readLine()
     if(in == "q") None
-    else in.toIntOption.filter(i => i >= 0 && i < cuts.length && cuts(i)._1.ruleImpl != null) match {
+    else in.toIntOption.filter(i => i >= 0 && i < cuts.length && inter.getRuleImpl(cuts(i)._1) != null) match {
       case None => readLine()
       case o => o
     }
@@ -26,7 +26,7 @@ object Debug extends App {
   while(cuts.nonEmpty) {
     println(s"At step $step:")
     cuts.zipWithIndex.foreach { case ((w, l, r, o), idx) =>
-      val (i1, i2) = if(w.ruleImpl != null) (s"[$idx]", "   ") else ("   ", "   ")
+      val (i1, i2) = if(inter.getRuleImpl(w) != null) (s"[$idx]", "   ") else ("   ", "   ")
       o match {
         case Some(r2) =>
           val (s1, s2) = if(r.length < r2.length) (r, r2) else (r2, r)

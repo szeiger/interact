@@ -26,7 +26,6 @@ object Wire {
 
 final class WireRef(var cell: Cell, var cellPort: Int, principals: AtomicInteger) extends WireOrCell {
   var oppo: WireRef = _
-  var ruleImpl: RuleImpl = _
   def connectInc(t: Cell, p: Int): Int = {
     cell = t;
     cellPort = p
@@ -238,9 +237,8 @@ class Scope {
 
   def log(out: PrintStream): Unit = {
     getCutLogs().foreach { case (w, l, r, o) =>
-      val c = if(w.ruleImpl != null) "*" else "."
-      out.println(s"  ${l} $c ${r}")
-      o.foreach(r2 => out.println(s"  ${l} $c ${r2}"))
+      out.println(s"  ${l} . ${r}")
+      o.foreach(r2 => out.println(s"  ${l} . ${r2}"))
     }
   }
 }
@@ -348,17 +346,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  private[this] final class InterpreterThread extends (WireRef => Unit) {
+  private[this] final class InterpreterThread extends (((WireRef, RuleImpl)) => Unit) {
     private[Interpreter] var nextCut: WireRef = null
+    private[Interpreter] var nextRule: RuleImpl = null
     private[this] final val tempCells = new Array[Cell](maxRuleCells)
     private[Interpreter] var steps = 0
 
     def addCut(w: WireRef, ri: RuleImpl): Unit = {
       //println(s"Adding cut on $w using $ri")
-      w.ruleImpl = ri
-      assert(w != null)
-      if(nextCut == null) nextCut = w
-      else queue.addOne(w)
+      if(nextCut == null) { nextCut = w; nextRule = ri }
+      else queue.addOne((w, ri))
     }
 
     @inline def createCut(t: WireRef): Unit = {
@@ -438,53 +435,59 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       //println(s"Reducing $c with ${c.ruleImpl}")
       //c.ruleImpl.log()
       nextCut = null
-      if(c.ruleImpl eq boundaryRuleImpl) removeBoundary(c)
+      val ri = nextRule
+      if(ri eq boundaryRuleImpl) removeBoundary(c)
       else {
         val (c1, c2) = if(c.cell.symId <= c.oppo.cell.symId) (c.cell, c.oppo.cell) else (c.oppo.cell, c.cell)
-        reduce(c.ruleImpl, c1, c2, tempCells)
+        reduce(ri, c1, c2, tempCells)
       }
       //validate()
       //println("After reduction:")
       //log()
     }
 
-    def apply(w: WireRef): Unit = {
+    def apply(data: (WireRef, RuleImpl)): Unit = {
       assert(nextCut == null)
-      nextCut = w
+      nextCut = data._1
+      nextRule = data._2
       while(nextCut != null) processLocalCut()
     }
   }
 
   def detectInitialCuts(): Unit = {
+    val detected = mutable.HashSet.empty[WireRef]
     reachableCells.foreach { c =>
       val w = c.pref
-      if(w.ruleImpl == null && w.oppo.ruleImpl == null && w.cellPort == 0 && w.oppo.cellPort == 0) {
-        val ri = ruleImpls(mkRuleKey(w))
-        if(ri != null) {
-          w.ruleImpl = ri
-          queue.addOne(w)
+      val ri = ruleImpls(mkRuleKey(w))
+      if(ri != null) {
+        if(w.cellPort == 0 && w.oppo.cellPort == 0 && !detected.contains(w.oppo)) {
+          detected.addOne(w)
+          queue.addOne((w, ri))
         }
       }
     }
   }
 
+  // Used by the debugger
+  def getRuleImpl(w: WireRef): RuleImpl = ruleImpls(mkRuleKey(w))
   def reduce1(w: WireRef): Unit = {
     queue.clear()
     val t = new InterpreterThread()
     t.nextCut = w
+    t.nextRule = getRuleImpl(w)
     t.processLocalCut()
   }
 
   private[this] val workerThreads = (0 until 1.max(numThreads)).map(_ => new InterpreterThread).toSeq
-  private[this] val pool = if(numThreads == 0) null else new Workers[WireRef](workerThreads)
-  private[this] val queue: mutable.Growable[WireRef] = if(numThreads == 0) mutable.ArrayBuffer.empty[WireRef] else pool
+  private[this] val pool = if(numThreads == 0) null else new Workers[(WireRef, RuleImpl)](workerThreads)
+  private[this] val queue: mutable.Growable[(WireRef, RuleImpl)] = if(numThreads == 0) mutable.ArrayBuffer.empty else pool
 
   def reduce(): Int = {
     //validate()
     detectInitialCuts()
     if(numThreads == 0) {
       val w = workerThreads(0)
-      val queue = this.queue.asInstanceOf[mutable.ArrayBuffer[WireRef]]
+      val queue = this.queue.asInstanceOf[mutable.ArrayBuffer[(WireRef, RuleImpl)]]
       while(!queue.isEmpty) {
         val c = queue.last
         queue.dropRightInPlace(1)
