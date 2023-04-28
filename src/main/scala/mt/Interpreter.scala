@@ -6,8 +6,9 @@ import java.io.PrintStream
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
 import BitOps._
+
+import scala.annotation.tailrec
 
 sealed trait WireOrCell
 
@@ -36,15 +37,31 @@ object Wire {
   }
 }
 
-final class WireRef(var cell: Cell, var cellPort: Int, principals: AtomicInteger) extends WireOrCell {
+final class WireRef(var cell: Cell, var cellPort: Int, var principals: AtomicInteger) extends WireOrCell {
   var oppo: WireRef = _
-  @inline def connectInc(t: Cell, p: Int): Int = {
+  @inline private[this] def incLocked(pr0: AtomicInteger): Int = {
+    var pr1 = pr0
+    val v = pr1.incrementAndGet()
+    if(v >= -10) return v
+    while(pr1 eq pr0) {
+      pr1.get() // force a volatile read
+      pr1 = principals
+    }
+    pr1.incrementAndGet()
+  }
+  @inline def connectIncLocked(t: Cell, p: Int): Int = {
     cell = t;
     cellPort = p
-    if(p == 0) principals.incrementAndGet() else -1
+    if(p == 0) incLocked(principals) else -1
   }
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
-  def getPrincipals = principals.get
+  @inline def getPrincipals = principals.get
+  @inline def tryLock: Boolean = {
+    val p = getPrincipals
+    p >= 0 && principals.compareAndSet(p, p-10)
+  }
+  @tailrec @inline def lock: Unit = if(!tryLock) lock
+  @inline def unlock: Unit = principals.addAndGet(10)
 }
 
 final class Cell(val sym: Symbol, val symId: Int, val arity: Int) extends WireOrCell {
@@ -81,18 +98,18 @@ class Scope {
     cs.foreach { c => f(c.left); f(c.right) }
   }
 
-  @inline def connectInc(t1: Cell, p1: Int, wr2: WireRef): Int = {
+  @inline def connectIncLocked(t1: Cell, p1: Int, wr2: WireRef): Int = {
     t1.connect(p1, wr2)
-    wr2.connectInc(t1, p1)
+    wr2.connectIncLocked(t1, p1)
   }
 
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
     def connectAny(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
       (t1, t2) match {
         case (t1: WireRef, t2: Cell) =>
-          connectInc(t2, p2, t1)
+          connectIncLocked(t2, p2, t1)
         case (t1: Cell, t2: WireRef) =>
-          connectInc(t1, p1, t2)
+          connectIncLocked(t1, p1, t2)
         case (t1: Cell, t2: Cell) =>
           Wire(t1, p1, t2, p2)
       }
@@ -161,7 +178,6 @@ class Scope {
         if(c.sym.id.s == "Z" && c.arity == 0) return Some(acc)
         else if(c.sym.id.s == "S" && c.arity == 1) {
           c.getCell(1) match {
-            case (BoundaryTarget(c2), 0) => c = c2; acc += 1
             case (c2, 0) => c = c2; acc += 1
             case _ => return None
           }
@@ -177,15 +193,6 @@ class Scope {
         val (c1, p1) = c.getCell(1)
         val (c2, p2) = c.getCell(2)
         if(p1 == 0 && p2 == 0) Some((c1, c2)) else None
-      } else None
-    }
-  }
-
-  object BoundaryTarget {
-    def unapply(c: Cell): Option[Cell] = {
-      if(c.sym.id.s == "$Boundary" && c.arity == 1) {
-        val (c1, p1) = c.getCell(1)
-        if(p1 == 0) Some(c1) else None
       } else None
     }
   }
@@ -225,7 +232,6 @@ class Scope {
       case Church(i) => s"$i'c"
       case c if c.symId == 0 => c.sym.toString
       case ListCons(c1, c2) => s"${show(c1)} :: ${show(c2)}"
-      case BoundaryTarget(c1) => show(c1)
       case c if c.arity == 0 => c.sym.toString
       case c => c.allCells.drop(1).map { case (wr, (t, p)) => targetOrReplacement(leader(wr), t, p) }.mkString(s"${c.sym}(", ", ", ")")
     }
@@ -261,25 +267,19 @@ final class RuleImpl(cr: CheckedRule, final val protoCells: Array[ProtoCell],
   final val connections: Array[Int], final val ruleImpls: Array[RuleImpl]) {
   def symIdForCell(idx: Int) = protoCells(idx).symId
   def log(): Unit = {
-    if(cr == null)
-      println("<boundaryRuleImpl>")
-    else {
-      println("  Proto cells:")
-      protoCells.foreach(pc => println(s"  - $pc"))
-      println("  Free wires:")
-      freeWires.zip(freePorts).foreach { case (w, p) => println(s"  - ($w, $p)") }
-      println("  Connections:")
-      connections.zip(ruleImpls).foreach { case (c, ri) => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}: $ri")}
-    }
+    println("  Proto cells:")
+    protoCells.foreach(pc => println(s"  - $pc"))
+    println("  Free wires:")
+    freeWires.zip(freePorts).foreach { case (w, p) => println(s"  - ($w, $p)") }
+    println("  Connections:")
+    connections.zip(ruleImpls).foreach { case (c, ri) => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}: $ri")}
   }
-  override def toString = if(cr == null) "<boundaryRuleImpl>" else cr.show
+  override def toString = cr.show
 }
 
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends Scope with BaseInterpreter { self =>
-  private[this] final val boundarySym = new Symbol(new AST.Ident("$Boundary"))
-  private[this] final val allSymbols = globals.symbols ++ Seq(boundarySym)
+  private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
-  private[this] final val boundarySymId = symIds(boundarySym)
   private[this] final val symBits = {
     val sz = symIds.size
     val high = Integer.highestOneBit(sz)
@@ -288,7 +288,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
 
   override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
-  private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, null, null)
   private[this] final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val maxRuleCells = createRuleImpls()
 
@@ -311,8 +310,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
-    val allConss = symIds.iterator.filter(s => s._1.isCons || s._2 == boundarySymId).map(_._2)
-    allConss.foreach(s => ruleImpls(mkRuleKey(s, boundarySymId)) = boundaryRuleImpl)
     ris.foreach { ri =>
       ri.connections.zipWithIndex.foreach { case (IntOfBytes(t1, p1, t2, p2), i) =>
         if(p1 == 0 && p2 == 0)
@@ -372,12 +369,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       if(ri != null) addCut(t, ri)
     }
 
-    def removeBoundary(cut: WireRef): Unit = {
-      val (b, o) = if(cut.cell.symId == boundarySymId) (cut.cell, cut.oppo.cell) else (cut.oppo.cell,cut.cell)
-      val wr = b.auxRefs(0)
-      if(connectInc(o, 0, wr) == 2) createCut(wr)
-    }
-
     def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
       var i = 0
       while(i < ri.protoCells.length) {
@@ -403,7 +394,18 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       @inline
       def connectFreeToInternal(cIdx: Int, cp: Int, cutIdx: Int): Unit = {
         val wr = cutTarget(cutIdx)
-        if(connectInc(cells(cIdx), cp, wr) == 2) createCut(wr)
+        if(connectIncLocked(cells(cIdx), cp, wr) == 2) createCut(wr)
+      }
+
+      @tailrec @inline
+      def lock2(wr1: WireRef, wr2: WireRef): Boolean = {
+        wr1.lock
+        if(wr1.oppo eq wr2) false
+        else if(wr2.tryLock) true
+        else {
+          wr1.unlock
+          lock2(wr2, wr1)
+        }
       }
 
       // Connect 2 cut wires
@@ -411,16 +413,22 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       def connectFreeToFree(cutIdx1: Int, cutIdx2: Int): Unit = {
         val wr1 = cutTarget(cutIdx1)
         val wr2 = cutTarget(cutIdx2)
-        if(wr1.getPrincipals == 1) { // take ownership of opposing cell on t
+        /*if(wr1.getPrincipals == 1) { // take ownership of opposing cell on t
           val (wt, wp) = wr1.opposite
-          if(connectInc(wt, wp, wr2) == 2) createCut(wr2)
+          if(connectIncLocked(wt, wp, wr2) == 2) createCut(wr2)
         } else if(wr2.getPrincipals == 1) { // take ownership of opposing cell on t2
           val (wt, wp) = wr2.opposite
-          if(connectInc(wt, wp, wr1) == 2) createCut(wr1)
-        } else { // ownership unclear -> insert boundary
-          val b = new Cell(boundarySym, boundarySymId, 1)
-          connectInc(b, 1, wr2)
-          if(connectInc(b, 0, wr1) == 2) createCut(wr1)
+          if(connectIncLocked(wt, wp, wr1) == 2) createCut(wr1)
+        } else*/ if(lock2(wr1, wr2)) { // ownership unclear -> lock and join wires
+          val wr1o = wr1.oppo
+          val wr2o = wr2.oppo
+          val wr1p = wr1.principals
+          val wr2p = wr2.principals
+          wr1o.oppo = wr2o
+          wr2o.oppo = wr1o
+          val wr1pc = wr1p.getAndAdd(-100)
+          wr1o.principals = wr2p
+          if(wr2p.addAndGet(wr1pc + 20) == 2) createCut(wr1o)
         }
       }
 
@@ -441,11 +449,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       //c.ruleImpl.log()
       nextCut = null
       val ri = nextRule
-      if(ri eq boundaryRuleImpl) removeBoundary(c)
-      else {
-        val (c1, c2) = if(c.cell.symId <= c.oppo.cell.symId) (c.cell, c.oppo.cell) else (c.oppo.cell, c.cell)
-        reduce(ri, c1, c2, tempCells)
-      }
+      val (c1, c2) = if(c.cell.symId <= c.oppo.cell.symId) (c.cell, c.oppo.cell) else (c.oppo.cell, c.cell)
+      reduce(ri, c1, c2, tempCells)
       //validate()
       //println("After reduction:")
       //log()
