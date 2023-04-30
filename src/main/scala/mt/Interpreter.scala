@@ -8,6 +8,8 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import BitOps._
 
+import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
+import java.util.concurrent.{CountDownLatch, ForkJoinPool, ForkJoinWorkerThread, RecursiveAction, TimeUnit}
 import scala.annotation.tailrec
 
 sealed trait WireOrCell
@@ -285,11 +287,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val high = Integer.highestOneBit(sz)
     if(sz == high) Integer.numberOfTrailingZeros(high) else Integer.numberOfTrailingZeros(high)+1
   }
+  private val unfinished = new AtomicInteger(0)
+  private var latch: CountDownLatch = _
+  private val totalSteps = new AtomicInteger(0)
 
   override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
   private[this] final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val maxRuleCells = createRuleImpls()
+
+  def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
   def createRuleImpls(): Int = {
     val ris = new ArrayBuffer[RuleImpl]()
@@ -351,25 +358,33 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  private[this] final class InterpreterThread extends (((WireRef, RuleImpl)) => Unit) {
-    private[Interpreter] var nextCut: WireRef = null
-    private[Interpreter] var nextRule: RuleImpl = null
-    private[this] final val tempCells = new Array[Cell](maxRuleCells)
+  private[this] class ActionWorker(pool: ForkJoinPool) extends ForkJoinWorkerThread(pool) {
+    final val tempCells = createTempCells()
+  }
+
+  private[this] class Action(_startCut: WireRef, _startRule: RuleImpl) extends RecursiveAction {
+    private[Interpreter] var nextCut: WireRef = _startCut
+    private[Interpreter] var nextRule: RuleImpl = _startRule
+    private[Interpreter] var tempCells: Array[Cell] = _
     private[Interpreter] var steps = 0
 
-    def addCut(w: WireRef, ri: RuleImpl): Unit = {
-      //println(s"Adding cut on $w using $ri")
-      if(nextCut == null) { nextCut = w; nextRule = ri }
-      else queue.addOne((w, ri))
+    protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = {
+      unfinished.incrementAndGet()
+      new Action(wr, ri).fork()
     }
 
-    @inline def createCut(t: WireRef): Unit = {
+    @inline private[this] final def addCut(wr: WireRef, ri: RuleImpl): Unit = {
+      if(nextCut == null) { nextCut = wr; nextRule = ri }
+      else enqueueCut(wr, ri)
+    }
+
+    @inline private[this] final def createCut(t: WireRef): Unit = {
       val ri = ruleImpls(mkRuleKey(t))
       //println(s"createCut ${t.leftCell.sym} . ${t.rightCell.sym} = $ri")
       if(ri != null) addCut(t, ri)
     }
 
-    def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
+    private[this] def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
       var i = 0
       while(i < ri.protoCells.length) {
         cells(i) = ri.protoCells(i).createCell
@@ -442,75 +457,79 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     }
 
     def processLocalCut(): Unit = {
-      //println(s"Remaining reducible cuts: ${cuts.size+1}")
-      steps += 1
       val c = nextCut
-      //println(s"Reducing $c with ${c.ruleImpl}")
-      //c.ruleImpl.log()
       nextCut = null
       val ri = nextRule
       val (c1, c2) = if(c.cell.symId <= c.oppo.cell.symId) (c.cell, c.oppo.cell) else (c.oppo.cell, c.cell)
       reduce(ri, c1, c2, tempCells)
-      //validate()
-      //println("After reduction:")
-      //log()
     }
 
-    def apply(data: (WireRef, RuleImpl)): Unit = {
-      assert(nextCut == null)
-      nextCut = data._1
-      nextRule = data._2
-      while(nextCut != null) processLocalCut()
+    def processLocalCuts(): Unit = {
+      while(nextCut != null) {
+        steps += 1
+        processLocalCut()
+      }
+    }
+
+    def compute(): Unit = {
+      this.tempCells = Thread.currentThread().asInstanceOf[ActionWorker].tempCells
+      processLocalCuts()
+      totalSteps.addAndGet(steps)
+      if(unfinished.decrementAndGet() == 0) latch.countDown()
     }
   }
 
-  def detectInitialCuts(): Unit = {
+  def detectInitialCuts: ArrayBuffer[(WireRef, RuleImpl)] = {
     val detected = mutable.HashSet.empty[WireRef]
+    val buf = ArrayBuffer.empty[(WireRef, RuleImpl)]
     reachableCells.foreach { c =>
       val w = c.pref
       val ri = ruleImpls(mkRuleKey(w))
       if(ri != null) {
         if(w.cellPort == 0 && w.oppo.cellPort == 0 && !detected.contains(w.oppo)) {
           detected.addOne(w)
-          queue.addOne((w, ri))
+          buf.addOne((w, ri))
         }
       }
     }
+    buf
   }
 
   // Used by the debugger
   def getRuleImpl(w: WireRef): RuleImpl = ruleImpls(mkRuleKey(w))
   def reduce1(w: WireRef): Unit = {
-    queue.clear()
-    val t = new InterpreterThread()
-    t.nextCut = w
-    t.nextRule = getRuleImpl(w)
-    t.processLocalCut()
+    val a = new Action(w, getRuleImpl(w)) {
+      protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = ()
+      this.tempCells = createTempCells()
+    }
+    a.processLocalCut()
   }
 
-  private[this] val workerThreads = (0 until 1.max(numThreads)).map(_ => new InterpreterThread).toSeq
-  private[this] val pool = if(numThreads == 0) null else new Workers[(WireRef, RuleImpl)](workerThreads)
-  private[this] val queue: mutable.Growable[(WireRef, RuleImpl)] = if(numThreads == 0) mutable.ArrayBuffer.empty else pool
-
   def reduce(): Int = {
-    //validate()
-    detectInitialCuts()
+    totalSteps.set(0)
+    val initial = detectInitialCuts
     if(numThreads == 0) {
-      val w = workerThreads(0)
-      val queue = this.queue.asInstanceOf[mutable.ArrayBuffer[(WireRef, RuleImpl)]]
-      while(!queue.isEmpty) {
-        val c = queue.last
-        queue.dropRightInPlace(1)
-        w.apply(c)
+      val a = new Action(null, null) {
+        protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne((wr, ri))
+        this.tempCells = createTempCells()
       }
+      while(initial.nonEmpty) {
+        val c = initial.last
+        initial.dropRightInPlace(1)
+        a.nextCut = c._1
+        a.nextRule = c._2
+        a.processLocalCuts()
+      }
+      a.steps
     } else {
-      pool.start()
-      pool.awaitEmpty()
+      latch = new CountDownLatch(1)
+      val pool = new ForkJoinPool(numThreads, new ActionWorker(_), null, numThreads > 1)
+      unfinished.addAndGet(initial.length)
+      initial.foreach { case (wr, ri) => pool.execute(new Action(wr, ri)) }
+      while(unfinished.get() != 0) latch.await()
       pool.shutdown()
+      totalSteps.get()
     }
-    //log()
-    //println(steps)
-    workerThreads.iterator.map(_.steps).sum
   }
 }
 

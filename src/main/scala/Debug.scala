@@ -7,7 +7,6 @@ object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Model(statements)
   val inter = model.createMTInterpreter(0)
-  inter.detectInitialCuts()
 
   var step = 0
   var cuts = inter.getCutLogs().toIndexedSeq
