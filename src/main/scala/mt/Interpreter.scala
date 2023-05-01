@@ -394,13 +394,31 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
         w.processAll()
       }
       w.resetSteps
-    } else {
+    } else if(numThreads <= 1000) {
       latch = new CountDownLatch(1)
       val pool = new ForkJoinPool(numThreads, new ActionWorkerThread(_, this), null, numThreads > 1)
       unfinished.addAndGet(initial.length)
       initial.foreach { case (wr, ri) => pool.execute(new Action(wr, ri)) }
       while(unfinished.get() != 0) latch.await()
       pool.shutdown()
+      totalSteps.get()
+    } else {
+      class Adapter(workers: Workers[(WireRef, RuleImpl)]) extends (((WireRef, RuleImpl)) => Unit) {
+        val worker = new PerThreadWorker(self) {
+          protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = workers.addOne((wr, ri))
+        }
+        override def apply(t: (WireRef, RuleImpl)): Unit = {
+          worker.setNext(t._1, t._2)
+          worker.processAll()
+          worker.inter.addTotalSteps(worker.resetSteps)
+          worker.inter.decUnfinished()
+        }
+      }
+      val workers = new Workers[(WireRef, RuleImpl)](numThreads-1000, new Adapter(_))
+      workers.start()
+      initial.foreach { case (wr, ri) => workers.addOne((wr, ri)) }
+      workers.awaitEmpty()
+      workers.shutdown()
       totalSteps.get()
     }
   }

@@ -8,13 +8,15 @@ import java.util.concurrent.TimeUnit
 @BenchmarkMode(Array(Mode.AverageTime))
 @Fork(value = 1, jvmArgsAppend = Array("-Xmx16g", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
 @Threads(1)
-@Warmup(iterations = 10)
-@Measurement(iterations = 10)
+@Warmup(iterations = 20)
+@Measurement(iterations = 20)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
 
-  @Param(Array("-1", "0", "1", "4"))
+  @Param(Array("-1", "0", "1", "4", "1001", "1004"))
+  //@Param(Array("1", "4"))
+  //@Param(Array("0"))
   private var mode: Int = _
 
   private val prelude =
@@ -77,4 +79,11 @@ class InterpreterBenchmark {
   @Benchmark
   def mult3(bh: Blackhole): Unit =
     bh.consume(getInterpreter(multModel3).reduce())
+
+//  @Benchmark
+//  def createInterpreter(bh: Blackhole): Unit = {
+//    bh.consume(getInterpreter(multModel1))
+//    bh.consume(getInterpreter(multModel2))
+//    bh.consume(getInterpreter(multModel3))
+//  }
 }

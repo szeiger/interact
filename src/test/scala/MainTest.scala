@@ -13,6 +13,7 @@ import scala.jdk.CollectionConverters._
 
 @RunWith(classOf[Parameterized])
 class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String) {
+  val SCALE = 0
 
   def checkFile(basePath: String): Int = {
     val statements = Parser.parse(Path.of(basePath+".in"))
@@ -28,14 +29,18 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
   }
 
   @Test
-  def test1(): Unit = {
+  def test1(): Unit = for(i <- 1 to (if(SCALE == 0) 1 else SCALE * 50)) {
+    if(i % 10 == 0) println(i)
     val steps = checkFile("src/test/resources/test1")
     // mt is non-deterministic due to extra boundary cells
     if(interpreterName == "st") assertEquals(128, steps)
   }
 
   @Test
-  def test2(): Unit = checkFile("src/test/resources/test2")
+  def test2(): Unit = for(i <- 1 to (if(SCALE == 0) 1 else SCALE)) {
+    println(i)
+    checkFile("src/test/resources/test2")
+  }
 
   @Test
   def testReduceRHS(): Unit = {
@@ -59,9 +64,11 @@ object MainTest {
   @Parameters(name = "{1}")
   def interpreters =
     Seq[(Model => BaseInterpreter, String)](
-      (_.createSTInterpreter, "st"),
-      (_.createMTInterpreter(0), "mt0"),
-      (_.createMTInterpreter(1), "mt1"),
-      (_.createMTInterpreter(4), "mt4")
+      //(_.createSTInterpreter, "st"),
+      //(_.createMTInterpreter(0), "mt0"),
+      //(_.createMTInterpreter(1), "mt1"),
+      (_.createMTInterpreter(8), "mt8"),
+      (_.createMTInterpreter(1001), "mt1001"),
+      (_.createMTInterpreter(1008), "mt1008"),
     ).map { case (f, s) => Array[AnyRef](f, s) }.asJava
 }

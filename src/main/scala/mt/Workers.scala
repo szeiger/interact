@@ -3,10 +3,10 @@ package de.szeiger.interact.mt
 import java.util.concurrent.{BlockingQueue, CountDownLatch, LinkedBlockingQueue}
 import scala.collection.mutable
 
-class Workers[T](processors: Iterable[T => Unit]) extends mutable.Growable[T] {
+class Workers[T](numThreads: Int, createProcessor: Workers[T] => T => Unit) extends mutable.Growable[T] {
   private[this] val queue: BlockingQueue[AnyRef] = new LinkedBlockingQueue[AnyRef]()
-  private[this] val threads: Array[Thread] = processors.iterator.map { p =>
-    val t = new Thread(new Worker(p))
+  private[this] val threads: Array[Thread] = (1 to numThreads).iterator.map { _ =>
+    val t = new Thread(new Worker(createProcessor(this)))
     t.setDaemon(true)
     t
   }.toArray

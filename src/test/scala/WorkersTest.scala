@@ -3,11 +3,7 @@ package de.szeiger.interact.mt
 import org.junit.Assert._
 import org.junit.Test
 
-import java.io.{ByteArrayOutputStream, PrintStream}
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicInteger
-import scala.jdk.CollectionConverters._
 
 class WorkersTest {
 
@@ -24,7 +20,7 @@ class WorkersTest {
         }
       }
     }
-    lazy val ws = new Workers[Task]((0 until 8).map(_ => new Processor))
+    lazy val ws = new Workers[Task](8, _ => new Processor)
     ws.addOne(Task())
     ws.start()
     ws.addOne(Task(Task(Task(), Task(Task(), Task())), Task(Task(), Task(), Task())))
