@@ -25,6 +25,7 @@ class WorkersTest {
     ws.start()
     ws.addOne(Task(Task(Task(), Task(Task(), Task())), Task(Task(), Task(), Task())))
     ws.awaitEmpty()
+    ws.start()
     assertEquals(11, count.get())
     ws.addOne(Task(Task(Task(), Task(Task(), Task())), Task(Task(), Task(), Task())))
     ws.awaitEmpty()

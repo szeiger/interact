@@ -1,5 +1,6 @@
 package de.szeiger.interact.mt
 
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{BlockingQueue, CountDownLatch, LinkedBlockingQueue}
 import scala.collection.mutable
 
@@ -10,10 +11,9 @@ class Workers[T](numThreads: Int, createProcessor: Workers[T] => T => Unit) exte
     t.setDaemon(true)
     t
   }.toArray
-  private[this] var active = 0
+  private[this] val active = new AtomicInteger()
+  private[this] var started = false
   private[this] val endMarker = new AnyRef
-  private[this] val monitor = new AnyRef
-  private[this] var state = 0
   @volatile private[this] var latch: CountDownLatch = _
 
   class Worker(p: T => Unit) extends Runnable {
@@ -24,43 +24,34 @@ class Workers[T](numThreads: Int, createProcessor: Workers[T] => T => Unit) exte
         if(item eq endMarker) done = true
         else {
           try p(item.asInstanceOf[T])
-          finally monitor.synchronized {
-            active -= 1
-            if(active == 0 && latch != null) latch.countDown()
-          }
+          if(active.addAndGet(-1) == 0) latch.countDown()
         }
       }
     }
   }
 
-  def start(): Unit = monitor.synchronized {
-    assert(state == 0)
-    threads.foreach(_.start)
-    state = 1
+  def start(): Unit = {
+    active.incrementAndGet()
+    latch = new CountDownLatch(1)
+    if(!started) {
+      threads.foreach(_.start)
+      started = true
+    }
   }
 
   def clear(): Unit = queue.clear()
 
-  def addOne(item: T): this.type = monitor.synchronized {
-    active += 1
+  def addOne(item: T): this.type = {
+    active.incrementAndGet()
     queue.add(item.asInstanceOf[AnyRef])
     this
   }
 
   def awaitEmpty(): Unit = {
-    monitor.synchronized {
-      assert(state == 1)
-      if(active == 0) return
-      latch = new CountDownLatch(1)
-    }
-    latch.await()
-    //assert(active == 0)
-    //assert(queue.isEmpty)
+    if(active.addAndGet(-1) != 0)
+      latch.await()
   }
 
-  def shutdown(): Unit = monitor.synchronized {
-    assert(state == 1)
+  def shutdown(): Unit =
     (0 until threads.length).foreach { _ => queue.add(endMarker) }
-    state = 2
-  }
 }
