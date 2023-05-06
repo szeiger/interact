@@ -1,6 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Symbol, Symbols}
+import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.io.PrintStream
 import java.util.concurrent.atomic.AtomicInteger
@@ -49,7 +50,7 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, private[this]
   @inline def getPrincipals = principals.get
   @inline def tryLock: Boolean = {
     val p = getPrincipals
-    p >= 0 && principals.compareAndSet(p, p-10)
+    p >= 0 && principals.weakCompareAndSetVolatile(p, p-10)
   }
   @tailrec @inline def lock: Unit = if(!tryLock) { Thread.onSpinWait(); lock }
   @inline def unlock: Unit = principals.addAndGet(10)
@@ -282,7 +283,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
 
   def addTotalSteps(i: Int): Unit = totalSteps.addAndGet(i)
   def incUnfinished(): Unit = unfinished.incrementAndGet()
-  def decUnfinished(): Unit = if(unfinished.decrementAndGet() == 0) latch.countDown()
+  def decUnfinished(i: Int): Unit = if(unfinished.addAndGet(-i) == 0) latch.countDown()
+  def getUnfinished(): Int = unfinished.get()
 
   override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
@@ -403,21 +405,32 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       pool.shutdown()
       totalSteps.get()
     } else {
-      class Adapter(workers: Workers[(WireRef, RuleImpl)]) extends (((WireRef, RuleImpl)) => Unit) {
+      latch = new CountDownLatch(1)
+      class Adapter extends Worker[(WireRef, RuleImpl)] {
+        var dec = 0
         val worker = new PerThreadWorker(self) {
-          protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = workers.addOne((wr, ri))
+          protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = {
+            inter.incUnfinished()
+            add((wr, ri))
+          }
         }
         override def apply(t: (WireRef, RuleImpl)): Unit = {
           worker.setNext(t._1, t._2)
           worker.processAll()
           worker.inter.addTotalSteps(worker.resetSteps)
-          worker.inter.decUnfinished()
+          dec += 1
+        }
+        override def maybeEmpty(): Unit = {
+          //println(s"done: $dec, unfinished: ${worker.inter.getUnfinished()}")
+          worker.inter.decUnfinished(dec)
+          dec = 0
         }
       }
-      val workers = new Workers[(WireRef, RuleImpl)](numThreads-1000, new Adapter(_))
+      val workers = new Workers[(WireRef, RuleImpl)](numThreads-1000, 8, _ => new Adapter)
+      unfinished.addAndGet(initial.length)
       workers.start()
-      initial.foreach { case (wr, ri) => workers.addOne((wr, ri)) }
-      workers.awaitEmpty()
+      initial.foreach { case (wr, ri) => workers.add((wr, ri)) }
+      while(unfinished.get() != 0) latch.await()
       workers.shutdown()
       totalSteps.get()
     }
@@ -430,7 +443,7 @@ final class Action(startCut: WireRef, startRule: RuleImpl) extends RecursiveActi
     w.setNext(startCut, startRule)
     w.processAll()
     w.inter.addTotalSteps(w.resetSteps)
-    w.inter.decUnfinished()
+    w.inter.decUnfinished(1)
   }
 }
 
@@ -489,7 +502,8 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     @inline
     def connectFreeToInternal(cIdx: Int, cp: Int, cutIdx: Int): Unit = {
       val wr = cutTarget(cutIdx)
-      if(wr.connect(cells(cIdx), cp) == 2) createCut(wr)
+      if(wr.connect(cells(cIdx), cp) == 2)
+        createCut(wr)
     }
 
     @tailrec @inline

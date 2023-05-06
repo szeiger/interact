@@ -64,9 +64,9 @@ object MainTest {
   @Parameters(name = "{1}")
   def interpreters =
     Seq[(Model => BaseInterpreter, String)](
-      //(_.createSTInterpreter, "st"),
-      //(_.createMTInterpreter(0), "mt0"),
-      //(_.createMTInterpreter(1), "mt1"),
+      (_.createSTInterpreter, "st"),
+      (_.createMTInterpreter(0), "mt0"),
+      (_.createMTInterpreter(1), "mt1"),
       (_.createMTInterpreter(8), "mt8"),
       (_.createMTInterpreter(1001), "mt1001"),
       (_.createMTInterpreter(1008), "mt1008"),
