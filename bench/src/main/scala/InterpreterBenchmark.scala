@@ -66,6 +66,7 @@ class InterpreterBenchmark {
 
   def getInterpreter(m: Model): BaseInterpreter =
     if(mode == -1) m.createSTInterpreter
+    else if(mode == -2) m.createST2Interpreter
     else m.createMTInterpreter(mode)
 
   @Benchmark

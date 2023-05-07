@@ -65,6 +65,7 @@ object MainTest {
   def interpreters =
     Seq[(Model => BaseInterpreter, String)](
       (_.createSTInterpreter, "st"),
+      (_.createST2Interpreter, "st2"),
       (_.createMTInterpreter(0), "mt0"),
       (_.createMTInterpreter(1), "mt1"),
       (_.createMTInterpreter(8), "mt8"),

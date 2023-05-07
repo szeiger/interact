@@ -179,4 +179,10 @@ class Model(val statements: Seq[AST.Statement]) {
     data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
     i
   }
+
+  def createST2Interpreter : st2.Interpreter = {
+    val i = new st2.Interpreter(globals, ruleCuts.values)
+    data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
+    i
+  }
 }
