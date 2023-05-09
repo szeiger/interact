@@ -84,7 +84,7 @@ class Model(val statements: Seq[AST.Statement]) {
         (cut, recombA :: recombB :: dupPorts.toList)
       case s => sys.error(s"Don't know how to derive ${cons.name.s} . ${id.s}")
     }
-    AST.Rule(cut, reduced)
+    AST.Rule(cut, reduced, true)
   }
 
   def addRule(r: AST.Rule): Unit = {
@@ -145,7 +145,7 @@ class Model(val statements: Seq[AST.Statement]) {
         der.constructors.foreach(i => addRule(derive(c, i)))
       }
       c.rules.foreach { m =>
-        addRule(AST.Rule(AST.Cut(AST.Ap(c.name, c.args), m.rhs), m.reduced))
+        addRule(AST.Rule(AST.Cut(AST.Ap(c.name, c.args), m.rhs), m.reduced, false))
       }
     case r: AST.Rule => addRule(r)
     case d: AST.Data => data.addOne(d)

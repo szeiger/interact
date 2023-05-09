@@ -34,7 +34,7 @@ object AST {
   case class Cut(left: Expr, right: Expr) extends ExprOrCut {
     def show = s"${left.show} . ${right.show}"
   }
-  case class Rule(cut: Cut, reduced: Seq[Cut]) extends Statement
+  case class Rule(cut: Cut, reduced: Seq[Cut], derived: Boolean) extends Statement
   case class Data(free: Seq[Ident], cuts: Seq[Cut]) extends Statement {
     def show = cuts.map(_.show).mkString(", ")
   }
@@ -101,7 +101,7 @@ object Parser {
     P(  kw("cons") ~/ ident ~ paramsOpt ~ ("." ~ ident).? ~ deriving.? ~ consRule.rep  ).map(AST.Cons.tupled)
 
   def rule[_: P]: P[AST.Rule] =
-    P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map(AST.Rule.tupled)
+    P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map { case (c, e) => AST.Rule(c, e, false) }
 
   def data[_: P]: P[AST.Data] =
     P(  kw("let") ~/ ident.rep(1, sep = ",") ~ "=" ~ cutList ).map(AST.Data.tupled)
