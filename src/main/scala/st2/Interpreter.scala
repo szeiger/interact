@@ -4,6 +4,7 @@ import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.io.PrintStream
+import java.util.Arrays
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.annotation.{switch, tailrec}
@@ -15,18 +16,19 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, _oppo: WireRe
 
   final val oppo: WireRef = if(_oppo != null) _oppo else new WireRef(_oppoCell, _oppoPort, this, null, 0)
 
-  @inline def connect(t: Cell, p: Int): Boolean = {
-    t.setWire(p, this)
-    cell = t;
-    cellPort = p
-    p == 0 && oppo.cellPort == 0
+  def connect(t: Cell, p: Int): Boolean = {
+    cell = t; cellPort = p
+    if(p == 0) { t.pref = this; oppo.cellPort == 0 }
+    else { t.setAuxRef(p-1, this); false }
   }
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
 }
 
 final class Cell(final val sym: Symbol, final val symId: Int, final val arity: Int) extends WireOrCell {
   final var pref: WireRef = _
-  final val auxRefs = new Array[WireRef](arity)
+  private[this] final val auxRefs = new Array[WireRef](arity)
+  def auxRef(i: Int): WireRef = auxRefs(i)
+  def setAuxRef(i: Int, wr: WireRef): Unit = auxRefs(i) = wr
   @inline def setWire(slot: Int, w: WireRef) = {
     if(slot == 0) pref = w;
     else auxRefs(slot-1) = w
@@ -41,6 +43,7 @@ final class Cell(final val sym: Symbol, final val symId: Int, final val arity: I
   def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
   def allCells: Iterator[(WireRef, (Cell, Int))] = (0 to arity).iterator.map { i => (getWireRef(i), getCell(i)) }
   override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+  def copy() = new Cell(sym, symId, arity)
 }
 
 class Scope {
@@ -217,20 +220,18 @@ final class ProtoCell(final val sym: Symbol, final val symId: Int, final val ari
   override def toString = s"ProtoCell($sym, $symId, $arity)"
 }
 
-final class RuleImpl(cr: CheckedRule, final val protoCells: Array[ProtoCell],
+final class RuleImpl(final val protoCells: Array[ProtoCell],
   final val freeWires: Array[Int], final val freePorts: Array[Int],
-  final val connections: Array[Int], final val ruleImpls: Array[RuleImpl],
+  final val connections: Array[Int],
   final val ruleType: Int, final val derivedMainSymId: Int) {
-  def symIdForCell(idx: Int) = protoCells(idx).symId
   def log(): Unit = {
     println("  Proto cells:")
     protoCells.foreach(pc => println(s"  - $pc"))
     println("  Free wires:")
     freeWires.zip(freePorts).foreach { case (w, p) => println(s"  - ($w, $p)") }
     println("  Connections:")
-    connections.zip(ruleImpls).foreach { case (c, ri) => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}: $ri")}
+    connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
   }
-  override def toString = cr.show
 }
 
 object RuleImpl {
@@ -280,26 +281,19 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
         } else RuleImpl.TYPE_DEFAULT
       val ri =
         if(ruleType == RuleImpl.TYPE_DEFAULT) {
-          val ri = createRuleImpl(cr, cr.r.reduced,
+          val ri = createRuleImpl(cr.r.reduced,
             if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1,
             globals, ruleType, s1id)
           if(ri.protoCells.length > max) max = ri.protoCells.length
           ri
-        } else new RuleImpl(cr, null, null, null, null, null, ruleType, s1id)
+        } else new RuleImpl(null, null, null, null, ruleType, s1id)
       ruleImpls(rk) = ri
       ris.addOne(ri)
-    }
-    ris.foreach { ri =>
-      if(ri.connections != null)
-        ri.connections.zipWithIndex.foreach { case (IntOfBytes(t1, p1, t2, p2), i) =>
-          if(p1 == 0 && p2 == 0)
-            ri.ruleImpls(i) = ruleImpls(mkRuleKey(ri.symIdForCell(t1), ri.symIdForCell(t2)))
-        }
     }
     max
   }
 
-  def createRuleImpl(cr: CheckedRule, reduced: Seq[AST.Cut], args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols,
+  def createRuleImpl(reduced: Seq[AST.Cut], args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols,
     ruleType: Int, derivedMainSymId: Int): RuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
@@ -322,7 +316,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
     }
     val freeWires = wires.map { w => lookup(w.getCell(0)._1) }
     val freePorts = wires.map(_.getCell(0)._2)
-    new RuleImpl(cr, protoCells, freeWires, freePorts, conns.toArray, new Array(conns.size), ruleType, derivedMainSymId)
+    new RuleImpl(protoCells, freeWires, freePorts, conns.toArray, ruleType, derivedMainSymId)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =
@@ -331,16 +325,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  def detectInitialCuts: ArrayBuffer[(WireRef, RuleImpl)] = {
+  def detectInitialCuts: CutBuffer = {
     val detected = mutable.HashSet.empty[WireRef]
-    val buf = ArrayBuffer.empty[(WireRef, RuleImpl)]
+    val buf = new CutBuffer(16)
     reachableCells.foreach { c =>
       val w = c.pref
       val ri = ruleImpls(mkRuleKey(w))
       if(ri != null) {
         if(w.cellPort == 0 && w.oppo.cellPort == 0 && !detected.contains(w.oppo)) {
           detected.addOne(w)
-          buf.addOne((w, ri))
+          buf.addOne(w, ri)
         }
       }
     }
@@ -361,15 +355,37 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
     totalSteps = 0
     val initial = detectInitialCuts
     val w = new PerThreadWorker(this) {
-      protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne((wr, ri))
+      protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne(wr, ri)
     }
     while(initial.nonEmpty) {
-      val (wr, ri) = initial.last
-      initial.dropRightInPlace(1)
+      val (wr, ri) = initial.pop()
       w.setNext(wr, ri)
       w.processAll()
     }
     w.resetSteps
+  }
+}
+
+final class CutBuffer(initialSize: Int) {
+  private[this] var wrs = new Array[WireRef](initialSize)
+  private[this] var ris = new Array[RuleImpl](initialSize)
+  private[this] var len = 0
+  @inline def addOne(wr: WireRef, ri: RuleImpl): Unit = {
+    if(len == wrs.length) {
+      wrs = Arrays.copyOf(wrs, wrs.length*2)
+      ris = Arrays.copyOf(ris, ris.length*2)
+    }
+    wrs(len) = wr
+    ris(len) = ri
+    len += 1
+  }
+  @inline def nonEmpty: Boolean = len != 0
+  @inline def pop(): (WireRef, RuleImpl) = {
+    len -= 1
+    val wr = wrs(len)
+    val ri = ris(len)
+    wrs(len) = null
+    (wr, ri)
   }
 }
 
@@ -396,20 +412,20 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
   private[this] final def reduceDup0(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
     val (cDup, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRefs(0)
-    val wrB = cDup.auxRefs(1)
+    val wrA = cDup.auxRef(0)
+    val wrB = cDup.auxRef(1)
     if(wrA.connect(cCons, 0)) createCut(wrA)
-    val cCons2 = new Cell(cCons.sym, cCons.symId, cCons.arity)
+    val cCons2 = cCons.copy()
     if(wrB.connect(cCons2, 0)) createCut(wrB)
   }
 
   private[this] final def reduceDup1(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
     val (cDup, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRefs(0)
-    val wrB = cDup.auxRefs(1)
-    val wrAux1 = cCons.auxRefs(0)
+    val wrA = cDup.auxRef(0)
+    val wrB = cDup.auxRef(1)
+    val wrAux1 = cCons.auxRef(0)
     if(wrA.connect(cCons, 0)) createCut(wrA)
-    val cCons2 = new Cell(cCons.sym, cCons.symId, cCons.arity)
+    val cCons2 = cCons.copy()
     if(wrB.connect(cCons2, 0)) createCut(wrB)
     if(wrAux1.connect(cDup, 0)) createCut(wrAux1)
     new WireRef(cCons, 1, null, cDup, 1)
@@ -418,19 +434,19 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
   private[this] final def reduceDup2(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
     val (cDup, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRefs(0)
-    val wrB = cDup.auxRefs(1)
-    val wrAux1 = cCons.auxRefs(0)
-    val wrAux2 = cCons.auxRefs(1)
+    val wrA = cDup.auxRef(0)
+    val wrB = cDup.auxRef(1)
+    val wrAux1 = cCons.auxRef(0)
+    val wrAux2 = cCons.auxRef(1)
     if(wrA.connect(cCons, 0)) createCut(wrA)
-    val cCons2 = new Cell(cCons.sym, cCons.symId, cCons.arity)
+    val cCons2 = cCons.copy()
     if(wrB.connect(cCons2, 0)) createCut(wrB)
 
     if(wrAux1.connect(cDup, 0)) createCut(wrAux1)
     new WireRef(cCons, 1, null, cDup, 1)
     new WireRef(cCons2, 1, null, cDup, 2)
 
-    val cDup2 = new Cell(cDup.sym, cDup.symId, 2)
+    val cDup2 = cDup.copy()
     if(wrAux2.connect(cDup2, 0)) createCut(wrAux2)
     new WireRef(cCons, 2, null, cDup2, 1)
     new WireRef(cCons2, 2, null, cDup2, 2)
@@ -441,8 +457,8 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     val arity = cCons.arity
     var i = 0
     while(i < arity) {
-      val wr = cCons.auxRefs(i)
-      if(wr.connect(new Cell(cErase.sym, cErase.symId, 0), 0)) createCut(wr)
+      val wr = cCons.auxRef(i)
+      if(wr.connect(cErase.copy(), 0)) createCut(wr)
       i += 1
     }
   }
@@ -461,12 +477,11 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
       val t2 = cells(byte2(conn))
       val p2 = byte3(conn)
       val w = new WireRef(t1, p1, null, t2, p2)
-      val ri2 = ri.ruleImpls(i)
-      if(ri2 != null) addCut(w, ri2)
+      if((p1 | p2) == 0) createCut(w)
       i += 1
     }
 
-    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRefs(i) else c2.auxRefs(i-c1.arity)
+    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
 
     // Connect cut wire to new cell
     @inline
