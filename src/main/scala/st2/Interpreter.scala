@@ -24,7 +24,7 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, _oppo: WireRe
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
 }
 
-final class Cell(final val sym: Symbol, final val symId: Int, final val arity: Int) extends WireOrCell {
+class Cell(final val symId: Int, final val arity: Int) extends WireOrCell {
   final var pref: WireRef = _
   private[this] final val auxRefs = new Array[WireRef](arity)
   def auxRef(i: Int): WireRef = auxRefs(i)
@@ -42,17 +42,24 @@ final class Cell(final val sym: Symbol, final val symId: Int, final val arity: I
   }
   def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
   def allCells: Iterator[(WireRef, (Cell, Int))] = (0 to arity).iterator.map { i => (getWireRef(i), getCell(i)) }
-  override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
-  def copy() = new Cell(sym, symId, arity)
+  override def toString = s"Cell($symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+  def copy() = new Cell(symId, arity)
+}
+
+class WireCell(final val sym: Symbol, _symId: Int, _arity: Int) extends Cell(_symId, _arity) {
+  override def toString = s"WireCell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
 abstract class Scope {
-  val freeWires = mutable.HashSet.empty[Cell]
+  val freeWires = mutable.HashSet.empty[WireCell]
 
   def getSymbolId(sym: Symbol): Int
   def getSymbolForId(symId: Int): Symbol
   def symbolName(c: Cell): String = {
-    val sym = if(c.sym != null) c.sym else getSymbolForId(c.symId)
+    val sym = c match {
+      case c: WireCell => c.sym
+      case c => getSymbolForId(c.symId)
+    }
     sym.id.s
   }
 
@@ -86,10 +93,10 @@ abstract class Scope {
           val s = syms.getOrAdd(i)
           if(s.isCons) {
             val s = syms.getOrAdd(i)
-            val c = new Cell(s, getSymbolId(s), s.cons.arity)
+            val c = new Cell(getSymbolId(s), s.cons.arity)
             (c, 0)
           } else if(s.refs == 1) {
-            val c = new Cell(s, 0, 0)
+            val c = new WireCell(s, 0, 0)
             freeWires.addOne(c)
             (c, 0)
           } else if(s.refs == 2) {
@@ -104,7 +111,7 @@ abstract class Scope {
         case AST.Ap(i, args) =>
           val s = syms.getOrAdd(i)
           assert(s.isCons)
-          val c = new Cell(s, getSymbolId(s), s.cons.arity)
+          val c = new Cell(getSymbolId(s), s.cons.arity)
           args.zipWithIndex.foreach { case (a, idx) =>
             val p = idx + 1
             toCreate.enqueue((a, c, p))
@@ -310,7 +317,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
     val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
-    val protoCells = cells.map { c => intOfShorts(getSymbolId(c.sym), c.arity) }
+    val protoCells = cells.map { c => intOfShorts(c.symId, c.arity) }
     val conns = mutable.HashSet.empty[Int]
     cells.iterator.zipWithIndex.foreach { case (c, i) =>
       c.allCells.zipWithIndex.foreach { case ((_, (t, p)), j) =>
@@ -475,7 +482,7 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
       val pc = ri.protoCells(i)
       val sid = short0(pc)
       val ari = short1(pc)
-      cells(i) = new Cell(null, sid, ari)
+      cells(i) = new Cell(sid, ari)
       i += 1
     }
     i = 0
