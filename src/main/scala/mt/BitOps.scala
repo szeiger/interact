@@ -17,4 +17,17 @@ object BitOps {
   object IntOfBytes {
     @inline def unapply(i: Int): Some[(Int, Int, Int, Int)] = Some((byte0(i), byte1(i), byte2(i), byte3(i)))
   }
+
+  @inline def short0(i: Int): Int = (i & 0xFFFF).toShort
+  @inline def short1(i: Int): Int = ((i >>> 16) & 0xFFFF).toShort
+  @inline def intOfShorts(s0: Int, s1: Int): Int = s0.toShort&0xFFFF | ((s1.toShort&0xFFFF) << 16)
+  def checkedIntOfShorts(s0: Int, s1: Int): Int = {
+    assert(s0 >= Short.MinValue && s0 <= Short.MaxValue)
+    assert(s1 >= Short.MinValue && s1 <= Short.MaxValue)
+    intOfShorts(s0, s1)
+  }
+
+  object IntOfShorts {
+    @inline def unapply(i: Int): Some[(Int, Int)] = Some((short0(i), short1(i)))
+  }
 }
