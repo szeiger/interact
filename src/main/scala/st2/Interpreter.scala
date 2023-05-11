@@ -221,14 +221,14 @@ abstract class Scope {
 }
 
 final class RuleImpl(final val protoCells: Array[Int],
-  final val freeWires: Array[Int], final val freePorts: Array[Int],
+  final val freeWiresPorts: Array[Int],
   final val connections: Array[Int],
   final val ruleType: Int, final val derivedMainSymId: Int) {
   def log(): Unit = {
     println("  Proto cells:")
     protoCells.foreach(pc => println(s"  - $pc"))
     println("  Free wires:")
-    freeWires.zip(freePorts).foreach { case (w, p) => println(s"  - ($w, $p)") }
+    freeWiresPorts.foreach { case IntOfShorts(w, p) => println(s"  - ($w, $p)") }
     println("  Connections:")
     connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
   }
@@ -288,7 +288,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
             globals, ruleType, s1id)
           if(ri.protoCells.length > max) max = ri.protoCells.length
           ri
-        } else new RuleImpl(null, null, null, null, ruleType, s1id)
+        } else new RuleImpl(null, null, null, ruleType, s1id)
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
@@ -321,7 +321,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
     }
     val freeWires = wires.map { w => lookup(w.getCell(0)._1) }
     val freePorts = wires.map(_.getCell(0)._2)
-    new RuleImpl(protoCells, freeWires, freePorts, conns.toArray, ruleType, derivedMainSymId)
+    val freeWiresPorts = freeWires.zip(freePorts).map { case (w, p) => checkedIntOfShorts(w, p) }
+    new RuleImpl(protoCells, freeWiresPorts, conns.toArray, ruleType, derivedMainSymId)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =
@@ -509,9 +510,10 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     }
 
     i = 0
-    while(i < ri.freeWires.length) {
-      val fw = ri.freeWires(i)
-      if(fw >= 0) connectFreeToInternal(fw, ri.freePorts(i), i)
+    while(i < ri.freeWiresPorts.length) {
+      val fwp = ri.freeWiresPorts(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), i)
       else if(i < -1-fw) connectFreeToFree(i, -1-fw)
       i += 1
     }
