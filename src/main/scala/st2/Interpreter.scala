@@ -228,14 +228,15 @@ abstract class Scope {
 }
 
 final class RuleImpl(final val protoCells: Array[Int],
-  final val freeWiresPorts: Array[Int],
+  final val freeWiresPorts1: Array[Int], final val freeWiresPorts2: Array[Int],
   final val connections: Array[Int],
   final val ruleType: Int, final val derivedMainSymId: Int) {
   def log(): Unit = {
     println("  Proto cells:")
     protoCells.foreach(pc => println(s"  - $pc"))
     println("  Free wires:")
-    freeWiresPorts.foreach { case IntOfShorts(w, p) => println(s"  - ($w, $p)") }
+    freeWiresPorts1.foreach { case IntOfShorts(w, p) => println(s"  - ($w, $p)") }
+    freeWiresPorts2.foreach { case IntOfShorts(w, p) => println(s"  - ($w, $p)") }
     println("  Connections:")
     connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
   }
@@ -295,7 +296,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
             globals, ruleType, s1id)
           if(ri.protoCells.length > max) max = ri.protoCells.length
           ri
-        } else new RuleImpl(null, null, null, ruleType, s1id)
+        } else new RuleImpl(null, null, null, null, ruleType, s1id)
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
@@ -326,10 +327,9 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
           conns.add(checkedIntOfBytes(i, j, w, p))
       }
     }
-    val freeWires = wires.map { w => lookup(w.getCell(0)._1) }
-    val freePorts = wires.map(_.getCell(0)._2)
-    val freeWiresPorts = freeWires.zip(freePorts).map { case (w, p) => checkedIntOfShorts(w, p) }
-    new RuleImpl(protoCells, freeWiresPorts, conns.toArray, ruleType, derivedMainSymId)
+    val freeWiresPorts = wires.map { w => val (c, p) = w.getCell(0); checkedIntOfShorts(lookup(c), p) }
+    val (fwp1, fwp2) = freeWiresPorts.splitAt(args1.length)
+    new RuleImpl(protoCells, fwp1, fwp2, conns.toArray, ruleType, derivedMainSymId)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =
@@ -501,27 +501,33 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
     // Connect cut wire to new cell
     @inline
-    def connectFreeToInternal(cIdx: Int, cp: Int, cutIdx: Int): Unit = {
-      val wr = cutTarget(cutIdx)
+    def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit = {
       if(wr.connect(cells(cIdx), cp))
         createCut(wr)
     }
 
     // Connect 2 cut wires
     @inline
-    def connectFreeToFree(cutIdx1: Int, cutIdx2: Int): Unit = {
-      val wr1 = cutTarget(cutIdx1)
+    def connectFreeToFree(wr1: WireRef, cutIdx2: Int): Unit = {
       val wr2 = cutTarget(cutIdx2)
       val (wt, wp) = wr1.opposite
       if(wr2.connect(wt, wp)) createCut(wr2)
     }
 
     i = 0
-    while(i < ri.freeWiresPorts.length) {
-      val fwp = ri.freeWiresPorts(i)
+    while(i < ri.freeWiresPorts1.length) {
+      val fwp = ri.freeWiresPorts1(i)
       val fw = short0(fwp)
-      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), i)
-      else if(i < -1-fw) connectFreeToFree(i, -1-fw)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c1.auxRef(i))
+      else if(i < -1-fw) connectFreeToFree(c1.auxRef(i), -1-fw)
+      i += 1
+    }
+    i = 0
+    while(i < ri.freeWiresPorts2.length) {
+      val fwp = ri.freeWiresPorts2(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c2.auxRef(i))
+      else if(i+c1.arity < -1-fw) connectFreeToFree(c2.auxRef(i), -1-fw)
       i += 1
     }
   }
