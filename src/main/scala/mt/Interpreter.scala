@@ -62,7 +62,7 @@ object WireRef {
     MethodHandles.privateLookupIn(classOf[WireRef], MethodHandles.lookup).findVarHandle(classOf[WireRef], "_principals", classOf[AtomicInteger])
 }
 
-final class Cell(final val sym: Symbol, final val symId: Int, final val arity: Int) extends WireOrCell {
+class Cell(final val symId: Int, final val arity: Int) extends WireOrCell {
   final var pref: WireRef = _
   private[this] final val auxRefs = new Array[WireRef](arity)
     def auxRef(i: Int): WireRef = auxRefs(i)
@@ -80,14 +80,26 @@ final class Cell(final val sym: Symbol, final val symId: Int, final val arity: I
   }
   def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
   def allCells: Iterator[(WireRef, (Cell, Int))] = (0 to arity).iterator.map { i => (getWireRef(i), getCell(i)) }
-  override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
-  def copy() = new Cell(sym, symId, arity)
+  override def toString = s"Cell($symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+  def copy() = new Cell(symId, arity)
 }
 
-class Scope {
-  val freeWires = mutable.HashSet.empty[Cell]
+class WireCell(final val sym: Symbol, _symId: Int, _arity: Int) extends Cell(_symId, _arity) {
+  override def toString = s"WireCell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+}
 
-  def getSymbolId(sym: Symbol): Int = 0
+abstract class Scope {
+  val freeWires = mutable.HashSet.empty[WireCell]
+
+  def getSymbolId(sym: Symbol): Int
+  def getSymbolForId(symId: Int): Symbol
+  def symbolName(c: Cell): String = {
+    val sym = c match {
+      case c: WireCell => c.sym
+      case c => getSymbolForId(c.symId)
+    }
+    sym.id.s
+  }
 
   private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
     def f(e: AST.Expr): Unit = e match {
@@ -119,10 +131,10 @@ class Scope {
           val s = syms.getOrAdd(i)
           if(s.isCons) {
             val s = syms.getOrAdd(i)
-            val c = new Cell(s, getSymbolId(s), s.cons.arity)
+            val c = new Cell(getSymbolId(s), s.cons.arity)
             (c, 0)
           } else if(s.refs == 1) {
-            val c = new Cell(s, 0, 0)
+            val c = new WireCell(s, 0, 0)
             freeWires.addOne(c)
             (c, 0)
           } else if(s.refs == 2) {
@@ -137,7 +149,7 @@ class Scope {
         case AST.Ap(i, args) =>
           val s = syms.getOrAdd(i)
           assert(s.isCons)
-          val c = new Cell(s, getSymbolId(s), s.cons.arity)
+          val c = new Cell(getSymbolId(s), s.cons.arity)
           args.zipWithIndex.foreach { case (a, idx) =>
             val p = idx + 1
             toCreate.enqueue((a, c, p))
@@ -171,8 +183,8 @@ class Scope {
       var acc = 0
       var c = _c
       while(true) {
-        if(c.sym.id.s == "Z" && c.arity == 0) return Some(acc)
-        else if(c.sym.id.s == "S" && c.arity == 1) {
+        if(symbolName(c) == "Z" && c.arity == 0) return Some(acc)
+        else if(symbolName(c) == "S" && c.arity == 1) {
           c.getCell(1) match {
             case (c2, 0) => c = c2; acc += 1
             case _ => return None
@@ -185,7 +197,7 @@ class Scope {
 
   object ListCons {
     def unapply(c: Cell): Option[(Cell, Cell)] = {
-      if(c.sym.id.s == "Cons" && c.arity == 2) {
+      if(symbolName(c) == "Cons" && c.arity == 2) {
         val (c1, p1) = c.getCell(1)
         val (c2, p2) = c.getCell(2)
         if(p1 == 0 && p2 == 0) Some((c1, c2)) else None
@@ -204,7 +216,7 @@ class Scope {
   }
 
   def getCutLogs(): Iterator[(WireRef, String, String, Option[String])] = {
-    val freeWireNames = freeWires.map(_.sym.toString)
+    val freeWireNames = freeWires.map(symbolName)
     val leaders = mutable.HashMap.empty[WireRef, WireRef]
     def leader(w: WireRef): WireRef = leaders.getOrElse(w, leaders.getOrElseUpdate(w.oppo, w))
     val cuts = mutable.HashSet.from(reachableCells.filter(_.getCell(0)._2 == 0)).map { c =>
@@ -226,17 +238,17 @@ class Scope {
     }
     def show(c: Cell): String = c match {
       case Church(i) => s"$i'c"
-      case c if c.symId == 0 => c.sym.toString
+      case c if c.symId == 0 => symbolName(c)
       case ListCons(c1, c2) => s"${show(c1)} :: ${show(c2)}"
-      case c if c.arity == 0 => c.sym.toString
-      case c => c.allCells.drop(1).map { case (wr, (t, p)) => targetOrReplacement(leader(wr), t, p) }.mkString(s"${c.sym}(", ", ", ")")
+      case c if c.arity == 0 => symbolName(c)
+      case c => c.allCells.drop(1).map { case (wr, (t, p)) => targetOrReplacement(leader(wr), t, p) }.mkString(s"${symbolName(c)}(", ", ", ")")
     }
     val strs = cuts.iterator.map { w =>
       val l = leader(w)
       val c1 = l.cell
       val c2 = l.oppo.cell
-      if(c1.symId == 0) (l, c1.sym.toString, show(c2), None)
-      else if(c2.symId == 0) (l, c2.sym.toString, show(c1), None)
+      if(c1.symId == 0) (l, symbolName(c1), show(c2), None)
+      else if(c2.symId == 0) (l, symbolName(c2), show(c1), None)
       else (l, explicit(w), show(c1), Some(show(c2)))
     }
     strs.zipWithIndex.toIndexedSeq.sortBy { case ((w, l, r, o), idx) =>
@@ -253,12 +265,7 @@ class Scope {
   }
 }
 
-final class ProtoCell(final val sym: Symbol, final val symId: Int, final val arity: Int) {
-  def createCell = new Cell(sym, symId, arity)
-  override def toString = s"ProtoCell($sym, $symId, $arity)"
-}
-
-final class RuleImpl(final val protoCells: Array[ProtoCell],
+final class RuleImpl(final val protoCells: Array[Int],
   final val freeWires: Array[Int], final val freePorts: Array[Int],
   final val connections: Array[Int]) {
   def log(): Unit = {
@@ -274,6 +281,7 @@ final class RuleImpl(final val protoCells: Array[ProtoCell],
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends Scope with BaseInterpreter { self =>
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
+  private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = {
     val sz = symIds.size
     val high = Integer.highestOneBit(sz)
@@ -288,7 +296,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   def decUnfinished(i: Int): Unit = if(unfinished.addAndGet(-i) == 0) latch.countDown()
   def getUnfinished(): Int = unfinished.get()
 
-  override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
+  def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
+  def getSymbolForId(symId: Int): Symbol = reverseSymIds.getOrElse(symId, null)
 
   // This unused object makes mt branching workloads 20% faster. HotSpot optimization bug?
   private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null)
@@ -323,7 +332,10 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   def createRuleImpl(reduced: Seq[AST.Cut], symId1: Int, symId2: Int, args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols): RuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
-    val sc = new Scope { override def getSymbolId(sym: Symbol): Int = self.getSymbolId(sym) }
+    val sc = new Scope {
+      def getSymbolId(sym: Symbol): Int = self.getSymbolId(sym)
+      def getSymbolForId(symId: Int): Symbol = self.getSymbolForId(symId)
+    }
     sc.add(reduced, syms)
     sc.validate()
     //sc.log()
@@ -331,7 +343,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
-    val protoCells = cells.map { c => new ProtoCell(c.sym, getSymbolId(c.sym), c.arity) }
+    val protoCells = cells.map { c => intOfShorts(c.symId, c.arity) }
     val conns = mutable.HashSet.empty[Int]
     cells.iterator.zipWithIndex.foreach { case (c, i) =>
       c.allCells.zipWithIndex.foreach { case ((_, (t, p)), j) =>
@@ -506,7 +518,10 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
   private[this] final def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
     var i = 0
     while(i < ri.protoCells.length) {
-      cells(i) = ri.protoCells(i).createCell
+      val pc = ri.protoCells(i)
+      val sid = short0(pc)
+      val ari = short1(pc)
+      cells(i) = new Cell(sid, ari)
       i += 1
     }
     i = 0
