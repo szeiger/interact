@@ -4,6 +4,7 @@ import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.io.PrintStream
+import java.util.Arrays
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -63,7 +64,9 @@ object WireRef {
 
 final class Cell(final val sym: Symbol, final val symId: Int, final val arity: Int) extends WireOrCell {
   final var pref: WireRef = _
-  final val auxRefs = new Array[WireRef](arity)
+  private[this] final val auxRefs = new Array[WireRef](arity)
+    def auxRef(i: Int): WireRef = auxRefs(i)
+    def setAuxRef(i: Int, wr: WireRef): Unit = auxRefs(i) = wr
   @inline def setWire(slot: Int, w: WireRef) = {
     if(slot == 0) pref = w;
     else auxRefs(slot-1) = w
@@ -78,6 +81,7 @@ final class Cell(final val sym: Symbol, final val symId: Int, final val arity: I
   def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
   def allCells: Iterator[(WireRef, (Cell, Int))] = (0 to arity).iterator.map { i => (getWireRef(i), getCell(i)) }
   override def toString = s"Cell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+  def copy() = new Cell(sym, symId, arity)
 }
 
 class Scope {
@@ -254,19 +258,17 @@ final class ProtoCell(final val sym: Symbol, final val symId: Int, final val ari
   override def toString = s"ProtoCell($sym, $symId, $arity)"
 }
 
-final class RuleImpl(cr: CheckedRule, final val protoCells: Array[ProtoCell],
+final class RuleImpl(final val protoCells: Array[ProtoCell],
   final val freeWires: Array[Int], final val freePorts: Array[Int],
-  final val connections: Array[Int], final val ruleImpls: Array[RuleImpl]) {
-  def symIdForCell(idx: Int) = protoCells(idx).symId
+  final val connections: Array[Int]) {
   def log(): Unit = {
     println("  Proto cells:")
     protoCells.foreach(pc => println(s"  - $pc"))
     println("  Free wires:")
     freeWires.zip(freePorts).foreach { case (w, p) => println(s"  - ($w, $p)") }
     println("  Connections:")
-    connections.zip(ruleImpls).foreach { case (c, ri) => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}: $ri")}
+    connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
   }
-  override def toString = cr.show
 }
 
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends Scope with BaseInterpreter { self =>
@@ -289,7 +291,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   override def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
   // This unused object makes mt branching workloads 20% faster. HotSpot optimization bug?
-  private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, null, null)
+  private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null)
 
   final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val maxRuleCells = createRuleImpls()
@@ -306,7 +308,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       val s1id = getSymbolId(s1)
       val s2id = getSymbolId(s2)
       val rk = mkRuleKey(s1id, s2id)
-      val ri = createRuleImpl(cr, cr.r.reduced,
+      val ri = createRuleImpl(cr.r.reduced,
         if(s1id <= s2id) s1id else s2id, if(s1id <= s2id) s2id else s1id,
         if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1,
         globals)
@@ -315,16 +317,10 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
-    ris.foreach { ri =>
-      ri.connections.zipWithIndex.foreach { case (IntOfBytes(t1, p1, t2, p2), i) =>
-        if(p1 == 0 && p2 == 0)
-          ri.ruleImpls(i) = ruleImpls(mkRuleKey(ri.symIdForCell(t1), ri.symIdForCell(t2)))
-      }
-    }
     max
   }
 
-  def createRuleImpl(cr: CheckedRule, reduced: Seq[AST.Cut], symId1: Int, symId2: Int, args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols): RuleImpl = {
+  def createRuleImpl(reduced: Seq[AST.Cut], symId1: Int, symId2: Int, args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols): RuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val sc = new Scope { override def getSymbolId(sym: Symbol): Int = self.getSymbolId(sym) }
@@ -347,7 +343,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val freeWires = wires.map { w => lookup(w.getCell(0)._1) }
     val freePorts = wires.map(_.getCell(0)._2)
 
-    new RuleImpl(cr, protoCells, freeWires, freePorts, conns.toArray, new Array(conns.size))
+    new RuleImpl(protoCells, freeWires, freePorts, conns.toArray)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =
@@ -356,16 +352,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  def detectInitialCuts: ArrayBuffer[(WireRef, RuleImpl)] = {
+  def detectInitialCuts: CutBuffer = {
     val detected = mutable.HashSet.empty[WireRef]
-    val buf = ArrayBuffer.empty[(WireRef, RuleImpl)]
+    val buf = new CutBuffer(16)
     reachableCells.foreach { c =>
       val w = c.pref
       val ri = ruleImpls(mkRuleKey(w))
       if(ri != null) {
         if(w.cellPort == 0 && w.oppo.cellPort == 0 && !detected.contains(w.oppo)) {
           detected.addOne(w)
-          buf.addOne((w, ri))
+          buf.addOne(w, ri)
         }
       }
     }
@@ -387,11 +383,10 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val initial = detectInitialCuts
     if(numThreads == 0) {
       val w = new PerThreadWorker(this) {
-        protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne((wr, ri))
+        protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne(wr, ri)
       }
       while(initial.nonEmpty) {
-        val (wr, ri) = initial.last
-        initial.dropRightInPlace(1)
+        val (wr, ri) = initial.pop()
         w.setNext(wr, ri)
         w.processAll()
       }
@@ -400,7 +395,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       latch = new CountDownLatch(1)
       val pool = new ForkJoinPool(numThreads, new ActionWorkerThread(_, this), null, numThreads > 1)
       unfinished.addAndGet(initial.length)
-      initial.foreach { case (wr, ri) => pool.execute(new Action(wr, ri)) }
+      initial.foreach { (wr, ri) => pool.execute(new Action(wr, ri)) }
       while(unfinished.get() != 0) latch.await()
       pool.shutdown()
       totalSteps.get()
@@ -429,7 +424,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       val workers = new Workers[(WireRef, RuleImpl)](numThreads-1000, 8, _ => new Adapter)
       unfinished.addAndGet(initial.length)
       workers.start()
-      initial.foreach { case (wr, ri) => workers.add((wr, ri)) }
+      initial.foreach { (wr, ri) => workers.add((wr, ri)) }
       while(unfinished.get() != 0) latch.await()
       workers.shutdown()
       totalSteps.get()
@@ -452,6 +447,37 @@ final class ActionWorkerThread(pool: ForkJoinPool, _inter: Interpreter) extends 
     protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = {
       inter.incUnfinished()
       new Action(wr, ri).fork()
+    }
+  }
+}
+
+final class CutBuffer(initialSize: Int) {
+  private[this] var wrs = new Array[WireRef](initialSize)
+  private[this] var ris = new Array[RuleImpl](initialSize)
+  private[this] var len = 0
+  @inline def addOne(wr: WireRef, ri: RuleImpl): Unit = {
+    if(len == wrs.length) {
+      wrs = Arrays.copyOf(wrs, wrs.length*2)
+      ris = Arrays.copyOf(ris, ris.length*2)
+    }
+    wrs(len) = wr
+    ris(len) = ri
+    len += 1
+  }
+  @inline def nonEmpty: Boolean = len != 0
+  @inline def pop(): (WireRef, RuleImpl) = {
+    len -= 1
+    val wr = wrs(len)
+    val ri = ris(len)
+    wrs(len) = null
+    (wr, ri)
+  }
+  @inline def length: Int = len
+  @inline def foreach(f: (WireRef, RuleImpl) => Unit): Unit = {
+    var i = 0
+    while(i < len) {
+      f(wrs(i), ris(i))
+      i += 1
     }
   }
 }
@@ -491,12 +517,11 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
       val t2 = cells(byte2(conn))
       val p2 = byte3(conn)
       val w = Wire(t1, p1, t2, p2)
-      val ri2 = ri.ruleImpls(i)
-      if(ri2 != null) addCut(w, ri2)
+      if((p1 | p2) == 0) createCut(w)
       i += 1
     }
 
-    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRefs(i) else c2.auxRefs(i-c1.arity)
+    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
 
     // Connect cut wire to new cell
     @inline
