@@ -29,7 +29,8 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, private[this]
 
   final var oppo: WireRef = if(_oppo != null) _oppo else new WireRef(_oppoCell, _oppoPort, _principals, this, null, 0)
 
-  @inline private[this] def incLocked(pr0: AtomicInteger): Int = {
+  @inline def incLocked(): Int = {
+    val pr0 = principals
     var pr1 = pr0
     val v = pr1.incrementAndGet()
     if(v >= -10) return v
@@ -41,11 +42,11 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, private[this]
   }
   @inline def principals: AtomicInteger = WireRef.PRINCIPALS.getOpaque(this).asInstanceOf[AtomicInteger]
   @inline def principals_= (p: AtomicInteger): Unit = WireRef.PRINCIPALS.setOpaque(this,p)
-  @inline def connect(t: Cell, p: Int): Boolean = {
+  def connectOnly(t: Cell, p: Int): Boolean = {
     t.setWire(p, this)
     cell = t;
     cellPort = p
-    if(p == 0) incLocked(principals) == 2 else false
+    if(p == 0) incLocked() == 2 else false
   }
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
   @inline def getPrincipals = principals.get
@@ -65,8 +66,8 @@ object WireRef {
 class Cell(final val symId: Int, final val arity: Int) extends WireOrCell {
   final var pref: WireRef = _
   private[this] final val auxRefs = new Array[WireRef](arity)
-    def auxRef(i: Int): WireRef = auxRefs(i)
-    def setAuxRef(i: Int, wr: WireRef): Unit = auxRefs(i) = wr
+  def auxRef(i: Int): WireRef = auxRefs(i)
+  def setAuxRef(i: Int, wr: WireRef): Unit = auxRefs(i) = wr
   @inline def setWire(slot: Int, w: WireRef) = {
     if(slot == 0) pref = w;
     else auxRefs(slot-1) = w
@@ -115,9 +116,9 @@ abstract class Scope {
     def connectAny(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
       (t1, t2) match {
         case (t1: WireRef, t2: Cell) =>
-          t1.connect(t2, p2)
+          t1.connectOnly(t2, p2)
         case (t1: Cell, t2: WireRef) =>
-          t2.connect(t1, p1)
+          connectAny(t2, p2, t1, p1)
         case (t1: Cell, t2: Cell) =>
           Wire(t1, p1, t2, p2)
       }
@@ -526,15 +527,18 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
   protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit
 
-  @inline private[this] final def addCut(wr: WireRef, ri: RuleImpl): Unit = {
-    if(nextCut == null) { nextCut = wr; nextRule = ri }
-    else enqueueCut(wr, ri)
+  @inline def connect(wr: WireRef, t: Cell, p: Int): Unit = {
+    wr.cell = t; wr.cellPort = p
+    if(p == 0) { t.pref = wr; if(wr.incLocked() == 2) createCut(wr) }
+    else t.setAuxRef(p-1, wr)
   }
 
-  @inline private[this] final def createCut(t: WireRef): Unit = {
-    val ri = inter.ruleImpls(inter.mkRuleKey(t))
-    //println(s"createCut ${t.leftCell.sym} . ${t.rightCell.sym} = $ri")
-    if(ri != null) addCut(t, ri)
+  @inline private[this] final def createCut(wr: WireRef): Unit = {
+    val ri = inter.ruleImpls(inter.mkRuleKey(wr))
+    if(ri != null) {
+      if(nextCut == null) { nextCut = wr; nextRule = ri }
+      else enqueueCut(wr, ri)
+    }
   }
 
   private[this] final def reduceDup0(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
@@ -542,8 +546,8 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     val wrA = cDup.auxRef(0)
     val wrB = cDup.auxRef(1)
     val cCons2 = cCons.copy()
-    if(wrA.connect(cCons, 0)) createCut(wrA)
-    if(wrB.connect(cCons2, 0)) createCut(wrB)
+    connect(wrA, cCons, 0)
+    connect(wrB, cCons2, 0)
   }
 
   private[this] final def reduceDup1(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
@@ -554,9 +558,9 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     val cCons2 = cCons.copy()
     Wire(cCons, 1, cDup, 1)
     Wire(cCons2, 1, cDup, 2)
-    if(wrA.connect(cCons, 0)) createCut(wrA)
-    if(wrB.connect(cCons2, 0)) createCut(wrB)
-    if(wrAux1.connect(cDup, 0)) createCut(wrAux1)
+    connect(wrA, cCons, 0)
+    connect(wrB, cCons2, 0)
+    connect(wrAux1, cDup, 0)
   }
 
   private[this] final def reduceDup2(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
@@ -571,10 +575,10 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     val cDup2 = cDup.copy()
     Wire(cCons, 2, cDup2, 1)
     Wire(cCons2, 2, cDup2, 2)
-    if(wrA.connect(cCons, 0)) createCut(wrA)
-    if(wrB.connect(cCons2, 0)) createCut(wrB)
-    if(wrAux1.connect(cDup, 0)) createCut(wrAux1)
-    if(wrAux2.connect(cDup2, 0)) createCut(wrAux2)
+    connect(wrA, cCons, 0)
+    connect(wrB, cCons2, 0)
+    connect(wrAux1, cDup, 0)
+    connect(wrAux2, cDup2, 0)
   }
 
   private[this] final def reduceErase(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
@@ -583,12 +587,18 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     var i = 0
     while(i < arity) {
       val wr = cCons.auxRef(i)
-      if(wr.connect(cErase.copy(), 0)) createCut(wr)
+      connect(wr, cErase.copy(), 0)
       i += 1
     }
   }
 
+  private[this] def delay(nanos: Int): Unit = {
+    val end = System.nanoTime() + nanos
+    while(System.nanoTime() < end) Thread.onSpinWait()
+  }
+
   private[this] final def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
+    //delay(20)
     var i = 0
     while(i < ri.protoCells.length) {
       val pc = ri.protoCells(i)
@@ -613,10 +623,7 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
     // Connect cut wire to new cell
     @inline
-    def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit = {
-      if(wr.connect(cells(cIdx), cp))
-        createCut(wr)
-    }
+    def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit = connect(wr, cells(cIdx), cp)
 
     @tailrec @inline
     def lock2(wr1: WireRef, wr2: WireRef): Boolean = {

@@ -476,7 +476,13 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     }
   }
 
+  private[this] def delay(nanos: Int): Unit = {
+    val end = System.nanoTime() + nanos
+    while(System.nanoTime() < end) Thread.onSpinWait()
+  }
+
   private[this] final def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
+    //delay(20)
     var i = 0
     while(i < ri.protoCells.length) {
       val pc = ri.protoCells(i)
