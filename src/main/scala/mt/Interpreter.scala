@@ -160,13 +160,10 @@ abstract class Scope {
       if(cCell != null) connectAny(cCell, cPort, wr, pr)
       (wr, pr)
     }
-    def createCut(e: AST.Cut): Unit = {
-      val (lt, ls) = create(e.left, null, 0)
-      val (rt, rs) = create(e.right, null, 0)
-      connectAny(lt, ls, rt, rs)
-    }
     cuts.foreach { c =>
-      createCut(c)
+      val (lt, ls) = create(c.left, null, 0)
+      val (rt, rs) = create(c.right, null, 0)
+      connectAny(lt, ls, rt, rs)
       while(!toCreate.isEmpty) {
         val (e, c, p) = toCreate.dequeue()
         create(e, c, p)
@@ -279,6 +276,7 @@ final class RuleImpl(final val protoCells: Array[Int],
     println("  Connections:")
     connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
   }
+  def maxWires = connections.length + freeWiresPorts1.length + freeWiresPorts2.length
 }
 
 object RuleImpl {
@@ -314,13 +312,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, 0, 0)
 
   final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
-  private[this] final val maxRuleCells = createRuleImpls()
+  private[this] final val (maxRuleCells, maxRuleWires) = createRuleImpls()
 
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
+  def createTempWires(): Array[WireRef] = new Array[WireRef](maxRuleWires)
 
-  def createRuleImpls(): Int = {
+  def createRuleImpls(): (Int, Int) = {
     val ris = new ArrayBuffer[RuleImpl]()
-    var max = 0
+    var maxC, maxW = 0
     rules.foreach { cr =>
       //println(s"***** Create rule ${cr.show}")
       val s1 = globals(cr.name1)
@@ -343,13 +342,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
           val ri = createRuleImpl(cr.r.reduced,
             if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1,
             globals, ruleType, s1id)
-          if(ri.protoCells.length > max) max = ri.protoCells.length
+          if(ri.protoCells.length > maxC) maxC = ri.protoCells.length
+          if(ri.maxWires > maxW) maxW = ri.maxWires
           ri
         } else new RuleImpl(null, null, null, null, ruleType, s1id)
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
-    max
+    (maxC, maxW)
   }
 
   def createRuleImpl(reduced: Seq[AST.Cut], args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols,
@@ -376,9 +376,12 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
           conns.add(checkedIntOfBytes(i, j, w, p))
       }
     }
+    // Make principal connections last to ensure auxiliary wires are already connected and get published
+    val (connsPrinc, connsAux) = conns.toArray.partition(i => (byte1(i) | byte3(i)) == 0)
+    val orderedConns = connsAux ++ connsPrinc
     val freeWiresPorts = wires.map { w => val (c, p) = w.getCell(0); checkedIntOfShorts(lookup(c), p) }
     val (fwp1, fwp2) = freeWiresPorts.splitAt(args1.length)
-    new RuleImpl(protoCells, fwp1, fwp2, conns.toArray, ruleType, derivedMainSymId)
+    new RuleImpl(protoCells, fwp1, fwp2, orderedConns, ruleType, derivedMainSymId)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =
@@ -519,6 +522,8 @@ final class CutBuffer(initialSize: Int) {
 
 abstract class PerThreadWorker(final val inter: Interpreter) {
   private[this] final val tempCells = inter.createTempCells()
+  private[this] final val tempWires = inter.createTempWires()
+  private[this] final var usedTempWires = 0
   private[this] final var nextCut: WireRef = _
   private[this] final var nextRule: RuleImpl = _
   private[this] final var steps = 0
@@ -530,6 +535,12 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
   @inline def connect(wr: WireRef, t: Cell, p: Int): Unit = {
     wr.cell = t; wr.cellPort = p
     if(p == 0) { t.pref = wr; if(wr.incLocked() == 2) createCut(wr) }
+    else t.setAuxRef(p-1, wr)
+  }
+
+  @inline def connectDeferred(wr: WireRef, t: Cell, p: Int): Unit = {
+    wr.cell = t; wr.cellPort = p
+    if(p == 0) { t.pref = wr; tempWires(usedTempWires) = wr; usedTempWires += 1 }
     else t.setAuxRef(p-1, wr)
   }
 
@@ -607,23 +618,12 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
       cells(i) = new Cell(sid, ari)
       i += 1
     }
-    i = 0
-    while(i < ri.connections.length) {
-      val conn = ri.connections(i)
-      val t1 = cells(byte0(conn))
-      val p1 = byte1(conn)
-      val t2 = cells(byte2(conn))
-      val p2 = byte3(conn)
-      val w = Wire(t1, p1, t2, p2)
-      if((p1 | p2) == 0) createCut(w)
-      i += 1
-    }
 
     @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
 
     // Connect cut wire to new cell
     @inline
-    def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit = connect(wr, cells(cIdx), cp)
+    def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit = connectDeferred(wr, cells(cIdx), cp)
 
     @tailrec @inline
     def lock2(wr1: WireRef, wr2: WireRef): Boolean = {
@@ -676,6 +676,27 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
       else if(i+c1.arity < -1-fw) connectFreeToFree(c2.auxRef(i), -1-fw)
       i += 1
     }
+
+    i = 0
+    while(i < ri.connections.length) {
+      val conn = ri.connections(i)
+      val t1 = cells(byte0(conn))
+      val p1 = byte1(conn)
+      val t2 = cells(byte2(conn))
+      val p2 = byte3(conn)
+      val w = Wire(t1, p1, t2, p2)
+      if((p1 | p2) == 0) createCut(w)
+      i += 1
+    }
+
+    i = 0
+    while(i < usedTempWires) {
+      val wr = tempWires(i)
+      tempWires(i) = null
+      if(wr.incLocked() == 2) createCut(wr)
+      i += 1
+    }
+    usedTempWires = 0
   }
 
   final def setNext(wr: WireRef, ri: RuleImpl): Unit = {
