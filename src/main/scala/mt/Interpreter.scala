@@ -294,7 +294,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   private[this] final val symBits = {
     val sz = symIds.size
     val high = Integer.highestOneBit(sz)
-    if(sz == high) Integer.numberOfTrailingZeros(high) else Integer.numberOfTrailingZeros(high)+1
+    Integer.numberOfTrailingZeros(high)+1
   }
   private[this] final val unfinished = new AtomicInteger(0)
   private[this] final var latch: CountDownLatch = _

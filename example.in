@@ -64,3 +64,19 @@ let l0_mapped_lambda =
   l0 . 1'c ::  2'c :: 3'c :: Nil,
   f . Lambda(Add(2'c, fout), fout),
   Map2(f, l0_mapped_lambda) . l0
+
+# Fibonacci
+cons Fib(res) . x deriving Erase, Dup
+  cut Z = res . 1'c
+  cut S(n) = Fib2(res) . n
+cons Fib2(res) . x deriving Erase, Dup
+  cut Z = res . 1'c
+  cut S(n) = Dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
+cons Add2(y, r) . x deriving Erase, Dup
+  cut Z = y . r
+  cut S(x) = r . S(v), x . Add2(y, v)
+let fibs, fib_30 =
+   fin . Fib(fout),
+   l0 . 0'c :: 1'c :: 2'c :: 3'c :: 4'c :: 5'c :: Nil,
+   Map(fin, fout, fibs) . l0,
+   30'c . Fib(fib_30)

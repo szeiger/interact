@@ -14,9 +14,10 @@ import java.util.concurrent.TimeUnit
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
 
-  @Param(Array("-1", "0", "1", "4", "1001", "1004"))
-  //@Param(Array("1", "4"))
-  //@Param(Array("0"))
+  //@Param(Array("-1", "0", "1", "4", "1001", "1004"))
+  @Param(Array("-2", "0", "1", "2", "4", "1001", "1002", "1004"))
+  //@Param(Array("1001", "1004"))
+  //@Param(Array("-2"))
   private var mode: Int = _
 
   private val prelude =
@@ -33,6 +34,7 @@ class InterpreterBenchmark {
   private var multModel1: Model = _
   private var multModel2: Model = _
   private var multModel3: Model = _
+  private var fibModel: Model = _
 
   @Setup(Level.Trial)
   def init: Unit = {
@@ -62,6 +64,19 @@ class InterpreterBenchmark {
         |  x . 1000'c,
         |  Mult(y, res) . x
         |""".stripMargin))
+    this.fibModel = new Model(Parser.parse(prelude +
+      """cons Fib(res) . x deriving Erase, Dup
+        |  cut Z = res . 1'c
+        |  cut S(n) = Fib2(res) . n
+        |cons Fib2(res) . x deriving Erase, Dup
+        |  cut Z = res . 1'c
+        |  cut S(n) = Dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
+        |cons Add2(y, r) . x deriving Erase, Dup
+        |  cut Z = y . r
+        |  cut S(x) = r . S(v), x . Add2(y, v)
+        |let res =
+        |   29'c . Fib(res)
+        |""".stripMargin))
   }
 
   def getInterpreter(m: Model): BaseInterpreter =
@@ -80,6 +95,10 @@ class InterpreterBenchmark {
   @Benchmark
   def mult3(bh: Blackhole): Unit =
     bh.consume(getInterpreter(multModel3).reduce())
+
+  @Benchmark
+  def fib(bh: Blackhole): Unit =
+    bh.consume(getInterpreter(fibModel).reduce())
 
 //  @Benchmark
 //  def createInterpreter(bh: Blackhole): Unit = {

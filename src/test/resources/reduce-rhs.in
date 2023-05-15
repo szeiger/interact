@@ -1,0 +1,7 @@
+cons A(x)
+cons B
+cons C(x)
+cons D
+rule A(x) . B = C(x) . D, A(D) . C(D)
+rule C(x) . D = x . D
+let res = A(res) . B

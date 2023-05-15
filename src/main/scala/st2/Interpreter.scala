@@ -257,7 +257,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   private[this] final val symBits = {
     val sz = symIds.size
     val high = Integer.highestOneBit(sz)
-    if(sz == high) Integer.numberOfTrailingZeros(high) else Integer.numberOfTrailingZeros(high)+1
+    Integer.numberOfTrailingZeros(high)+1
   }
   var totalSteps = 0
 
