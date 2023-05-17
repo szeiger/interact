@@ -11,7 +11,7 @@ import BitOps._
 
 import java.lang.invoke.{MethodHandles, VarHandle}
 import java.util.concurrent.{CountDownLatch, ForkJoinPool, ForkJoinWorkerThread, RecursiveAction, TimeUnit}
-import scala.annotation.{switch, tailrec}
+import scala.annotation.tailrec
 
 sealed trait WireOrCell
 
@@ -85,10 +85,14 @@ class WireCell(final val sym: Symbol, _symId: Int, _arity: Int) extends Cell(_sy
   override def toString = s"WireCell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
-final class RuleImpl(final val protoCells: Array[Int],
-  final val freeWiresPorts1: Array[Int], final val freeWiresPorts2: Array[Int],
-  final val connections: Array[Int],
-  final val ruleType: Int, final val derivedMainSymId: Int) {
+abstract class RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit
+}
+
+final class GenericRuleImpl(protoCells: Array[Int], freeWiresPorts1: Array[Int], freeWiresPorts2: Array[Int], connections: Array[Int]) extends RuleImpl {
+  def maxCells: Int = protoCells.length
+  def maxWires = connections.length + freeWiresPorts1.length + freeWiresPorts2.length
+
   def log(): Unit = {
     println("  Proto cells:")
     protoCells.foreach(pc => println(s"  - $pc"))
@@ -98,16 +102,166 @@ final class RuleImpl(final val protoCells: Array[Int],
     println("  Connections:")
     connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
   }
-  def maxWires = connections.length + freeWiresPorts1.length + freeWiresPorts2.length
+
+  private[this] def delay(nanos: Int): Unit = {
+    val end = System.nanoTime() + nanos
+    while(System.nanoTime() < end) Thread.onSpinWait()
+  }
+
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val (c1, c2) = if(wr.cell.symId <= wr.oppo.cell.symId) (wr.cell, wr.oppo.cell) else (wr.oppo.cell, wr.cell)
+    val cells = ptw.tempCells
+    //delay(20)
+    var i = 0
+    while(i < protoCells.length) {
+      val pc = protoCells(i)
+      val sid = short0(pc)
+      val ari = short1(pc)
+      cells(i) = new Cell(sid, ari)
+      i += 1
+    }
+
+    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
+
+    // Connect cut wire to new cell
+    @inline def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit =
+      ptw.connectDeferred(wr, cells(cIdx), cp)
+
+    @tailrec @inline
+    def lock2(wr1: WireRef, wr2: WireRef): Boolean = {
+      wr1.lock
+      if(wr1.oppo eq wr2) false
+      else if(wr2.tryLock) true
+      else {
+        wr1.unlock
+        Thread.onSpinWait()
+        lock2(wr2, wr1)
+      }
+    }
+
+    // Connect 2 cut wires
+    @inline
+    def connectFreeToFree(wr1: WireRef, cutIdx2: Int): Unit = {
+      val wr2 = cutTarget(cutIdx2)
+      /*if(wr1.getPrincipals == 1) { // take ownership of opposing cell on t
+        val (wt, wp) = wr1.opposite
+        if(connectInc(wt, wp, wr2) == 2) createCut(wr2)
+      } else if(wr2.getPrincipals == 1) { // take ownership of opposing cell on t2
+        val (wt, wp) = wr2.opposite
+        if(connectInc(wt, wp, wr1) == 2) createCut(wr1)
+      } else*/ if(lock2(wr1, wr2)) { // ownership unclear -> lock and join wires
+        val wr1o = wr1.oppo
+        val wr2o = wr2.oppo
+        val wr1p = wr1.principals
+        val wr2p = wr2.principals
+        wr1o.oppo = wr2o
+        wr2o.oppo = wr1o
+        val wr1pc = wr1p.getAndAdd(-100)
+        wr1o.principals = wr2p
+        if(wr2p.addAndGet(wr1pc + 20) == 2) ptw.createCut(wr1o)
+      }
+    }
+
+    i = 0
+    while(i < freeWiresPorts1.length) {
+      val fwp = freeWiresPorts1(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c1.auxRef(i))
+      else if(i < -1-fw) connectFreeToFree(c1.auxRef(i), -1-fw)
+      i += 1
+    }
+    i = 0
+    while(i < freeWiresPorts2.length) {
+      val fwp = freeWiresPorts2(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c2.auxRef(i))
+      else if(i+c1.arity < -1-fw) connectFreeToFree(c2.auxRef(i), -1-fw)
+      i += 1
+    }
+
+    i = 0
+    while(i < connections.length) {
+      val conn = connections(i)
+      val t1 = cells(byte0(conn))
+      val p1 = byte1(conn)
+      val t2 = cells(byte2(conn))
+      val p2 = byte3(conn)
+      val w = Wire(t1, p1, t2, p2)
+      if((p1 | p2) == 0) ptw.createCut(w)
+      i += 1
+    }
+
+    ptw.flushDeferred()
+  }
 }
 
-object RuleImpl {
-  final val TYPE_DEFAULT = 0
-  final val TYPE_DUP0    = 1
-  final val TYPE_DUP1    = 2
-  final val TYPE_DUP2    = 3
-  final val TYPE_ERASE   = 4
+final class Dup0RuleImpl(derivedMainSymId: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val (cDup, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
+    val wrA = cDup.auxRef(0)
+    val wrB = cDup.auxRef(1)
+    val cCons2 = cCons.copy()
+    ptw.connect(wrA, cCons, 0)
+    ptw.connect(wrB, cCons2, 0)
+  }
 }
+
+final class Dup1RuleImpl(derivedMainSymId: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val (cDup, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
+    val wrA = cDup.auxRef(0)
+    val wrB = cDup.auxRef(1)
+    val wrAux1 = cCons.auxRef(0)
+    val cCons2 = cCons.copy()
+    Wire(cCons, 1, cDup, 1)
+    Wire(cCons2, 1, cDup, 2)
+    ptw.connect(wrA, cCons, 0)
+    ptw.connect(wrB, cCons2, 0)
+    ptw.connect(wrAux1, cDup, 0)
+  }
+}
+
+final class Dup2RuleImpl(derivedMainSymId: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val (cDup, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
+    val wrA = cDup.auxRef(0)
+    val wrB = cDup.auxRef(1)
+    val wrAux1 = cCons.auxRef(0)
+    val wrAux2 = cCons.auxRef(1)
+    val cCons2 = cCons.copy()
+    Wire(cCons, 1, cDup, 1)
+    Wire(cCons2, 1, cDup, 2)
+    val cDup2 = cDup.copy()
+    Wire(cCons, 2, cDup2, 1)
+    Wire(cCons2, 2, cDup2, 2)
+    ptw.connect(wrA, cCons, 0)
+    ptw.connect(wrB, cCons2, 0)
+    ptw.connect(wrAux1, cDup, 0)
+    ptw.connect(wrAux2, cDup2, 0)
+  }
+}
+
+final class EraseRuleImpl(derivedMainSymId: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val (cErase, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
+    val arity = cCons.arity
+    var i = 0
+    while(i < arity) {
+      val wr = cCons.auxRef(i)
+      ptw.connect(wr, cErase.copy(), 0)
+      i += 1
+    }
+  }
+}
+
 
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends BaseInterpreter { self =>
   final val scope: Scope[Cell] = new Scope[Cell] {
@@ -137,7 +291,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
   // This unused object makes mt branching workloads 20% faster. HotSpot optimization bug?
-  private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, 0, 0)
+  private[this] final val boundaryRuleImpl = new GenericRuleImpl(null, null, null, null)
 
   final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val (maxRuleCells, maxRuleWires) = createRuleImpls()
@@ -155,33 +309,30 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       val s1id = getSymbolId(s1)
       val s2id = getSymbolId(s2)
       val rk = mkRuleKey(s1id, s2id)
-      val ruleType =
+      def generic = {
+        val ri = createRuleImpl(cr.r.reduced, globals,
+          if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1)
+        if(ri.maxCells > maxC) maxC = ri.maxCells
+        if(ri.maxWires > maxW) maxW = ri.maxWires
+        ri
+      }
+      val ri =
         if(cr.r.derived) {
           (cr.name1.s, cr.args2.length) match {
-            case ("Dup", 0) => RuleImpl.TYPE_DUP0
-            case ("Dup", 1) => RuleImpl.TYPE_DUP1
-            case ("Dup", 2) => RuleImpl.TYPE_DUP2
-            case ("Erase", _) => RuleImpl.TYPE_ERASE
-            case _ => RuleImpl.TYPE_DEFAULT
+            case ("Dup", 0) => new Dup0RuleImpl(s1id)
+            case ("Dup", 1) => new Dup1RuleImpl(s1id)
+            case ("Dup", 2) => new Dup2RuleImpl(s1id)
+            case ("Erase", _) => new EraseRuleImpl(s1id)
+            case _ => generic
           }
-        } else RuleImpl.TYPE_DEFAULT
-      val ri =
-        if(ruleType == RuleImpl.TYPE_DEFAULT) {
-          val ri = createRuleImpl(cr.r.reduced,
-            if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1,
-            globals, ruleType, s1id)
-          if(ri.protoCells.length > maxC) maxC = ri.protoCells.length
-          if(ri.maxWires > maxW) maxW = ri.maxWires
-          ri
-        } else new RuleImpl(null, null, null, null, ruleType, s1id)
+        } else generic
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
     (maxC, maxW)
   }
 
-  def createRuleImpl(reduced: Seq[AST.Cut], args1: Seq[AST.Ident], args2: Seq[AST.Ident], globals: Symbols,
-    ruleType: Int, derivedMainSymId: Int): RuleImpl = {
+  def createRuleImpl(reduced: Seq[AST.Cut], globals: Symbols, args1: Seq[AST.Ident], args2: Seq[AST.Ident]): GenericRuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val sc = new scope.Delegate
@@ -206,7 +357,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val orderedConns = connsAux ++ connsPrinc
     val freeWiresPorts = wires.map { w => val (c, p) = w.getCell(0); checkedIntOfShorts(lookup(c), p) }
     val (fwp1, fwp2) = freeWiresPorts.splitAt(args1.length)
-    new RuleImpl(protoCells, fwp1, fwp2, orderedConns, ruleType, derivedMainSymId)
+    new GenericRuleImpl(protoCells, fwp1, fwp2, orderedConns)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =
@@ -346,7 +497,7 @@ final class CutBuffer(initialSize: Int) {
 }
 
 abstract class PerThreadWorker(final val inter: Interpreter) {
-  private[this] final val tempCells = inter.createTempCells()
+  final val tempCells = inter.createTempCells()
   private[this] final val tempWires = inter.createTempWires()
   private[this] final var usedTempWires = 0
   private[this] final var nextCut: WireRef = _
@@ -357,164 +508,20 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
   protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit
 
-  @inline def connect(wr: WireRef, t: Cell, p: Int): Unit = {
+  def connect(wr: WireRef, t: Cell, p: Int): Unit = {
     wr.cell = t; wr.cellPort = p
     if(p == 0) { t.pref = wr; if(wr.incLocked() == 2) createCut(wr) }
     else t.setAuxRef(p-1, wr)
   }
 
-  @inline def connectDeferred(wr: WireRef, t: Cell, p: Int): Unit = {
+  def connectDeferred(wr: WireRef, t: Cell, p: Int): Unit = {
     wr.cell = t; wr.cellPort = p
     if(p == 0) { t.pref = wr; tempWires(usedTempWires) = wr; usedTempWires += 1 }
     else t.setAuxRef(p-1, wr)
   }
 
-  @inline private[this] final def createCut(wr: WireRef): Unit = {
-    val ri = inter.ruleImpls(inter.mkRuleKey(wr))
-    if(ri != null) {
-      if(nextCut == null) { nextCut = wr; nextRule = ri }
-      else enqueueCut(wr, ri)
-    }
-  }
-
-  private[this] final def reduceDup0(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
-    val (cDup, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRef(0)
-    val wrB = cDup.auxRef(1)
-    val cCons2 = cCons.copy()
-    connect(wrA, cCons, 0)
-    connect(wrB, cCons2, 0)
-  }
-
-  private[this] final def reduceDup1(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
-    val (cDup, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRef(0)
-    val wrB = cDup.auxRef(1)
-    val wrAux1 = cCons.auxRef(0)
-    val cCons2 = cCons.copy()
-    Wire(cCons, 1, cDup, 1)
-    Wire(cCons2, 1, cDup, 2)
-    connect(wrA, cCons, 0)
-    connect(wrB, cCons2, 0)
-    connect(wrAux1, cDup, 0)
-  }
-
-  private[this] final def reduceDup2(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
-    val (cDup, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRef(0)
-    val wrB = cDup.auxRef(1)
-    val wrAux1 = cCons.auxRef(0)
-    val wrAux2 = cCons.auxRef(1)
-    val cCons2 = cCons.copy()
-    Wire(cCons, 1, cDup, 1)
-    Wire(cCons2, 1, cDup, 2)
-    val cDup2 = cDup.copy()
-    Wire(cCons, 2, cDup2, 1)
-    Wire(cCons2, 2, cDup2, 2)
-    connect(wrA, cCons, 0)
-    connect(wrB, cCons2, 0)
-    connect(wrAux1, cDup, 0)
-    connect(wrAux2, cDup2, 0)
-  }
-
-  private[this] final def reduceErase(ri: RuleImpl, c1: Cell, c2: Cell): Unit = {
-    val (cErase, cCons) = if(c1.symId == ri.derivedMainSymId) (c1, c2) else (c2, c1)
-    val arity = cCons.arity
+  def flushDeferred(): Unit = {
     var i = 0
-    while(i < arity) {
-      val wr = cCons.auxRef(i)
-      connect(wr, cErase.copy(), 0)
-      i += 1
-    }
-  }
-
-  private[this] def delay(nanos: Int): Unit = {
-    val end = System.nanoTime() + nanos
-    while(System.nanoTime() < end) Thread.onSpinWait()
-  }
-
-  private[this] final def reduce(ri: RuleImpl, c1: Cell, c2: Cell, cells: Array[Cell]): Unit = {
-    //delay(20)
-    var i = 0
-    while(i < ri.protoCells.length) {
-      val pc = ri.protoCells(i)
-      val sid = short0(pc)
-      val ari = short1(pc)
-      cells(i) = new Cell(sid, ari)
-      i += 1
-    }
-
-    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
-
-    // Connect cut wire to new cell
-    @inline
-    def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit = connectDeferred(wr, cells(cIdx), cp)
-
-    @tailrec @inline
-    def lock2(wr1: WireRef, wr2: WireRef): Boolean = {
-      wr1.lock
-      if(wr1.oppo eq wr2) false
-      else if(wr2.tryLock) true
-      else {
-        wr1.unlock
-        Thread.onSpinWait()
-        lock2(wr2, wr1)
-      }
-    }
-
-    // Connect 2 cut wires
-    @inline
-    def connectFreeToFree(wr1: WireRef, cutIdx2: Int): Unit = {
-      val wr2 = cutTarget(cutIdx2)
-      /*if(wr1.getPrincipals == 1) { // take ownership of opposing cell on t
-        val (wt, wp) = wr1.opposite
-        if(connectInc(wt, wp, wr2) == 2) createCut(wr2)
-      } else if(wr2.getPrincipals == 1) { // take ownership of opposing cell on t2
-        val (wt, wp) = wr2.opposite
-        if(connectInc(wt, wp, wr1) == 2) createCut(wr1)
-      } else*/ if(lock2(wr1, wr2)) { // ownership unclear -> lock and join wires
-        val wr1o = wr1.oppo
-        val wr2o = wr2.oppo
-        val wr1p = wr1.principals
-        val wr2p = wr2.principals
-        wr1o.oppo = wr2o
-        wr2o.oppo = wr1o
-        val wr1pc = wr1p.getAndAdd(-100)
-        wr1o.principals = wr2p
-        if(wr2p.addAndGet(wr1pc + 20) == 2) createCut(wr1o)
-      }
-    }
-
-    i = 0
-    while(i < ri.freeWiresPorts1.length) {
-      val fwp = ri.freeWiresPorts1(i)
-      val fw = short0(fwp)
-      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c1.auxRef(i))
-      else if(i < -1-fw) connectFreeToFree(c1.auxRef(i), -1-fw)
-      i += 1
-    }
-    i = 0
-    while(i < ri.freeWiresPorts2.length) {
-      val fwp = ri.freeWiresPorts2(i)
-      val fw = short0(fwp)
-      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c2.auxRef(i))
-      else if(i+c1.arity < -1-fw) connectFreeToFree(c2.auxRef(i), -1-fw)
-      i += 1
-    }
-
-    i = 0
-    while(i < ri.connections.length) {
-      val conn = ri.connections(i)
-      val t1 = cells(byte0(conn))
-      val p1 = byte1(conn)
-      val t2 = cells(byte2(conn))
-      val p2 = byte3(conn)
-      val w = Wire(t1, p1, t2, p2)
-      if((p1 | p2) == 0) createCut(w)
-      i += 1
-    }
-
-    i = 0
     while(i < usedTempWires) {
       val wr = tempWires(i)
       tempWires(i) = null
@@ -522,6 +529,14 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
       i += 1
     }
     usedTempWires = 0
+  }
+
+  final def createCut(wr: WireRef): Unit = {
+    val ri = inter.ruleImpls(inter.mkRuleKey(wr))
+    if(ri != null) {
+      if(nextCut == null) { nextCut = wr; nextRule = ri }
+      else enqueueCut(wr, ri)
+    }
   }
 
   final def setNext(wr: WireRef, ri: RuleImpl): Unit = {
@@ -534,15 +549,7 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     val ri = nextRule
     VarHandle.acquireFence()
     nextCut = null
-    (ri.ruleType: @switch) match {
-      case RuleImpl.TYPE_DUP0 => reduceDup0(ri, c.cell, c.oppo.cell)
-      case RuleImpl.TYPE_DUP1 => reduceDup1(ri, c.cell, c.oppo.cell)
-      case RuleImpl.TYPE_DUP2 => reduceDup2(ri, c.cell, c.oppo.cell)
-      case RuleImpl.TYPE_ERASE => reduceErase(ri, c.cell, c.oppo.cell)
-      case RuleImpl.TYPE_DEFAULT =>
-        val (c1, c2) = if(c.cell.symId <= c.oppo.cell.symId) (c.cell, c.oppo.cell) else (c.oppo.cell, c.cell)
-        reduce(ri, c1, c2, tempCells)
-    }
+    ri.reduce(c, this)
     VarHandle.releaseFence()
   }
 
