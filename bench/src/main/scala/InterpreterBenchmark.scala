@@ -14,10 +14,11 @@ import java.util.concurrent.TimeUnit
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
 
-  //@Param(Array("-1", "0", "1", "4", "1001", "1004"))
-  @Param(Array("-2", "0", "1", "2", "4", "1001", "1002", "1004"))
+  //@Param(Array("0", "1", "4", "1001", "1004"))
+  //@Param(Array("-2", "0", "1", "2", "4", "1001", "1002", "1004"))
+  //@Param(Array("1", "2", "4", "1001", "1002", "1004"))
   //@Param(Array("1001", "1004"))
-  //@Param(Array("-2"))
+  @Param(Array("-2"))
   private var mode: Int = _
 
   private val prelude =
@@ -34,7 +35,7 @@ class InterpreterBenchmark {
   private var multModel1: Model = _
   private var multModel2: Model = _
   private var multModel3: Model = _
-  private var fibModel: Model = _
+  private var fib22Model: Model = _
 
   @Setup(Level.Trial)
   def init: Unit = {
@@ -64,7 +65,7 @@ class InterpreterBenchmark {
         |  x . 1000'c,
         |  Mult(y, res) . x
         |""".stripMargin))
-    this.fibModel = new Model(Parser.parse(prelude +
+    this.fib22Model = new Model(Parser.parse(prelude +
       """cons Fib(res) . x deriving Erase, Dup
         |  cut Z = res . 1'c
         |  cut S(n) = Fib2(res) . n
@@ -75,13 +76,12 @@ class InterpreterBenchmark {
         |  cut Z = y . r
         |  cut S(x) = r . S(v), x . Add2(y, v)
         |let res =
-        |   29'c . Fib(res)
+        |   22'c . Fib(res)
         |""".stripMargin))
   }
 
   def getInterpreter(m: Model): BaseInterpreter =
-    if(mode == -1) m.createSTInterpreter
-    else if(mode == -2) m.createST2Interpreter
+    if(mode == -2) m.createST2Interpreter
     else m.createMTInterpreter(mode)
 
   @Benchmark
@@ -97,8 +97,8 @@ class InterpreterBenchmark {
     bh.consume(getInterpreter(multModel3).reduce())
 
   @Benchmark
-  def fib(bh: Blackhole): Unit =
-    bh.consume(getInterpreter(fibModel).reduce())
+  def fib22(bh: Blackhole): Unit =
+    bh.consume(getInterpreter(fib22Model).reduce())
 
 //  @Benchmark
 //  def createInterpreter(bh: Blackhole): Unit = {

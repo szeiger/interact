@@ -24,7 +24,7 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
       val inter = newInterpreter(model)
       val steps = inter.reduce()
       val out = new ByteArrayOutputStream()
-      inter.log(new PrintStream(out, true, StandardCharsets.UTF_8))
+      inter.scope.log(new PrintStream(out, true, StandardCharsets.UTF_8))
       val s = out.toString(StandardCharsets.UTF_8)
       val checkFile = Path.of(basePath+".check")
       if(Files.exists(checkFile)) {
@@ -45,7 +45,6 @@ object MainTest {
   @Parameters(name = "{1}")
   def interpreters =
     Seq[(Model => BaseInterpreter, String)](
-      (_.createSTInterpreter, "st"),
       (_.createST2Interpreter, "st2"),
       (_.createMTInterpreter(0), "mt0"),
       (_.createMTInterpreter(1), "mt1"),

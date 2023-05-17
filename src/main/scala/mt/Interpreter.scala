@@ -1,9 +1,8 @@
 package de.szeiger.interact.mt
 
-import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Symbol, Symbols}
+import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Scope, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
-import java.io.PrintStream
 import java.util.Arrays
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
@@ -17,9 +16,6 @@ import scala.annotation.{switch, tailrec}
 sealed trait WireOrCell
 
 object Wire {
-  @inline def apply(): WireRef =
-    new WireRef(null, 0, new AtomicInteger, null, null, 0)
-
   @inline def apply(c1: Cell, p1: Int, c2: Cell, p2: Int): WireRef =
     new WireRef(c1, p1, new AtomicInteger((if(p1 == 0) 1 else 0) + (if(p2 == 0) 1 else 0)), null, c2, p2)
 }
@@ -89,180 +85,6 @@ class WireCell(final val sym: Symbol, _symId: Int, _arity: Int) extends Cell(_sy
   override def toString = s"WireCell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
-abstract class Scope {
-  val freeWires = mutable.HashSet.empty[WireCell]
-
-  def getSymbolId(sym: Symbol): Int
-  def getSymbolForId(symId: Int): Symbol
-  def symbolName(c: Cell): String = {
-    val sym = c match {
-      case c: WireCell => c.sym
-      case c => getSymbolForId(c.symId)
-    }
-    sym.id.s
-  }
-
-  private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
-    def f(e: AST.Expr): Unit = e match {
-      case i: AST.Ident =>
-        val s = symbols.getOrAdd(i)
-        if(!s.isCons) s.refs += 1
-      case AST.Ap(i, es) => f(i); es.foreach(f)
-    }
-    cs.foreach { c => f(c.left); f(c.right) }
-  }
-
-  def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
-    def connectAny(t1: WireOrCell, p1: Int, t2: WireOrCell, p2: Int): Unit = {
-      (t1, t2) match {
-        case (t1: WireRef, t2: Cell) =>
-          t1.connectOnly(t2, p2)
-        case (t1: Cell, t2: WireRef) =>
-          connectAny(t2, p2, t1, p1)
-        case (t1: Cell, t2: Cell) =>
-          Wire(t1, p1, t2, p2)
-      }
-    }
-    addSymbols(cuts, syms)
-    val bind = mutable.HashMap.empty[Symbol, WireRef]
-    val toCreate = mutable.Queue.empty[(AST.Expr, Cell, Int)]
-    def create(e: AST.Expr, cCell: Cell, cPort: Int): (WireOrCell, Int) = {
-      val (wr, pr) = e match {
-        case i: AST.Ident =>
-          val s = syms.getOrAdd(i)
-          if(s.isCons) {
-            val s = syms.getOrAdd(i)
-            val c = new Cell(getSymbolId(s), s.cons.arity)
-            (c, 0)
-          } else if(s.refs == 1) {
-            val c = new WireCell(s, 0, 0)
-            freeWires.addOne(c)
-            (c, 0)
-          } else if(s.refs == 2) {
-            bind.get(s) match {
-              case Some(w) => (w, 1)
-              case None =>
-                val w = Wire()
-                bind.put(s, w.oppo)
-                (w, 0)
-            }
-          } else sys.error(s"Non-linear use of ${i.show} in data")
-        case AST.Ap(i, args) =>
-          val s = syms.getOrAdd(i)
-          assert(s.isCons)
-          val c = new Cell(getSymbolId(s), s.cons.arity)
-          args.zipWithIndex.foreach { case (a, idx) =>
-            val p = idx + 1
-            toCreate.enqueue((a, c, p))
-          }
-          (c, 0)
-      }
-      if(cCell != null) connectAny(cCell, cPort, wr, pr)
-      (wr, pr)
-    }
-    cuts.foreach { c =>
-      val (lt, ls) = create(c.left, null, 0)
-      val (rt, rs) = create(c.right, null, 0)
-      connectAny(lt, ls, rt, rs)
-      while(!toCreate.isEmpty) {
-        val (e, c, p) = toCreate.dequeue()
-        create(e, c, p)
-      }
-    }
-  }
-
-  def validate(): Unit = {
-    val wires =  reachableCells.flatMap(_.allPorts).toSet
-    wires.foreach(w => w.cell == null || w.cell.getWireRef(w.cellPort) == w)
-  }
-
-  object Church {
-    def unapply(_c: Cell): Option[Int] = {
-      var acc = 0
-      var c = _c
-      while(true) {
-        if(symbolName(c) == "Z" && c.arity == 0) return Some(acc)
-        else if(symbolName(c) == "S" && c.arity == 1) {
-          c.getCell(1) match {
-            case (c2, 0) => c = c2; acc += 1
-            case _ => return None
-          }
-        } else return None
-      }
-      return None
-    }
-  }
-
-  object ListCons {
-    def unapply(c: Cell): Option[(Cell, Cell)] = {
-      if(symbolName(c) == "Cons" && c.arity == 2) {
-        val (c1, p1) = c.getCell(1)
-        val (c2, p2) = c.getCell(2)
-        if(p1 == 0 && p2 == 0) Some((c1, c2)) else None
-      } else None
-    }
-  }
-
-  def reachableCells: Iterator[Cell] = {
-    val s = mutable.HashSet.empty[Cell]
-    val q = mutable.Queue.from(freeWires.flatMap(_.allCells.map(_._2._1)))
-    while(!q.isEmpty) {
-      val w = q.dequeue()
-      if(s.add(w)) q.enqueueAll(w.allCells.map(_._2._1))
-    }
-    s.iterator
-  }
-
-  def getCutLogs(): Iterator[(WireRef, String, String, Option[String])] = {
-    val freeWireNames = freeWires.map(symbolName)
-    val leaders = mutable.HashMap.empty[WireRef, WireRef]
-    def leader(w: WireRef): WireRef = leaders.getOrElse(w, leaders.getOrElseUpdate(w.oppo, w))
-    val cuts = mutable.HashSet.from(reachableCells.filter(_.getCell(0)._2 == 0)).map { c =>
-      val w1 = leader(c.pref)
-      val w2 = leader(c.getCell(0)._1.pref)
-      assert(w1 == w2)
-      w1
-    }
-    var nextTemp = -1
-    val helpers = mutable.Map.empty[WireRef, String]
-    def explicit(w: WireRef): String = helpers.getOrElseUpdate(w, {
-      nextTemp += 1
-      "$" + nextTemp
-    })
-    def targetOrReplacement(w: WireRef, t: Cell, p: Int): String = helpers.get(w) match {
-      case Some(s) => s
-      case None if p == 0 => show(t)
-      case None => explicit(w)
-    }
-    def show(c: Cell): String = c match {
-      case Church(i) => s"$i'c"
-      case c if c.symId == 0 => symbolName(c)
-      case ListCons(c1, c2) => s"${show(c1)} :: ${show(c2)}"
-      case c if c.arity == 0 => symbolName(c)
-      case c => c.allCells.drop(1).map { case (wr, (t, p)) => targetOrReplacement(leader(wr), t, p) }.mkString(s"${symbolName(c)}(", ", ", ")")
-    }
-    val strs = cuts.iterator.map { w =>
-      val l = leader(w)
-      val c1 = l.cell
-      val c2 = l.oppo.cell
-      if(c1.symId == 0) (l, symbolName(c1), show(c2), None)
-      else if(c2.symId == 0) (l, symbolName(c2), show(c1), None)
-      else (l, explicit(w), show(c1), Some(show(c2)))
-    }
-    strs.zipWithIndex.toIndexedSeq.sortBy { case ((w, l, r, o), idx) =>
-      val f = freeWireNames.contains(l)
-      (!f, if(f) l else "", idx)
-    }.iterator.map(_._1)
-  }
-
-  def log(out: PrintStream): Unit = {
-    getCutLogs().foreach { case (w, l, r, o) =>
-      out.println(s"  ${l} . ${r}")
-      o.foreach(r2 => out.println(s"  ${l} . ${r2}"))
-    }
-  }
-}
-
 final class RuleImpl(final val protoCells: Array[Int],
   final val freeWiresPorts1: Array[Int], final val freeWiresPorts2: Array[Int],
   final val connections: Array[Int],
@@ -287,15 +109,22 @@ object RuleImpl {
   final val TYPE_ERASE   = 4
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends Scope with BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends BaseInterpreter { self =>
+  final val scope: Scope[Cell] = new Scope[Cell] {
+    def createCell(sym: Symbol): Cell = if(sym.isCons) new Cell(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0, 0)
+    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = Wire(c1, p1, c2, p2)
+    def symbolName(c: Cell): String = c match {
+      case c: WireCell => c.sym.id.s
+      case c => reverseSymIds(c.symId).id.s
+    }
+    def getArity(c: Cell): Int = c.arity
+    def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
+    def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
+  }
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
-  private[this] final val symBits = {
-    val sz = symIds.size
-    val high = Integer.highestOneBit(sz)
-    Integer.numberOfTrailingZeros(high)+1
-  }
+  private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
   private[this] final val unfinished = new AtomicInteger(0)
   private[this] final var latch: CountDownLatch = _
   private[this] final val totalSteps = new AtomicInteger(0)
@@ -306,7 +135,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   def getUnfinished(): Int = unfinished.get()
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
-  def getSymbolForId(symId: Int): Symbol = reverseSymIds.getOrElse(symId, null)
 
   // This unused object makes mt branching workloads 20% faster. HotSpot optimization bug?
   private[this] final val boundaryRuleImpl = new RuleImpl(null, null, null, null, 0, 0)
@@ -356,15 +184,12 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     ruleType: Int, derivedMainSymId: Int): RuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
-    val sc = new Scope {
-      def getSymbolId(sym: Symbol): Int = self.getSymbolId(sym)
-      def getSymbolForId(symId: Int): Symbol = self.getSymbolForId(symId)
-    }
+    val sc = new scope.Delegate
     sc.add(reduced, syms)
     sc.validate()
     //sc.log()
     val cells = sc.reachableCells.filter(_.symId != 0).toArray
-    val freeLookup = sc.freeWires.iterator.map { w => (w.sym, w) }.toMap
+    val freeLookup = sc.freeWires.iterator.map { w => (w.asInstanceOf[WireCell].sym, w) }.toMap
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
     val protoCells = cells.map { c => intOfShorts(c.symId, c.arity) }
@@ -393,7 +218,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   def detectInitialCuts: CutBuffer = {
     val detected = mutable.HashSet.empty[WireRef]
     val buf = new CutBuffer(16)
-    reachableCells.foreach { c =>
+    scope.reachableCells.foreach { c =>
       val w = c.pref
       val ri = ruleImpls(mkRuleKey(w))
       if(ri != null) {

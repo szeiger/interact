@@ -14,10 +14,10 @@ object Main extends App {
   //println("Data:")
   //model.data.foreach(r => println(s"  ${r.show}"))
 
-  val inter = model.createMTInterpreter(0)
+  val inter = model.createST2Interpreter
   println("Initial state:")
-  inter.log()
+  inter.scope.log(System.out)
   val steps = inter.reduce()
   println(s"Irreducible after $steps reductions.")
-  inter.log()
+  inter.scope.log(System.out)
 }

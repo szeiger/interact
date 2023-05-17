@@ -75,8 +75,8 @@ cons Fib2(res) . x deriving Erase, Dup
 cons Add2(y, r) . x deriving Erase, Dup
   cut Z = y . r
   cut S(x) = r . S(v), x . Add2(y, v)
-let fibs, fib_30 =
+let fibs, fib_10 =
    fin . Fib(fout),
    l0 . 0'c :: 1'c :: 2'c :: 3'c :: 4'c :: 5'c :: Nil,
    Map(fin, fout, fibs) . l0,
-   30'c . Fib(fib_30)
+   10'c . Fib(fib_10)

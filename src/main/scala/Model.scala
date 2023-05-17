@@ -1,6 +1,5 @@
 package de.szeiger.interact
 
-import java.io.PrintStream
 import scala.collection.mutable
 
 class CheckedRule(val r: AST.Rule, val name1: AST.Ident, val args1: Seq[AST.Ident], val name2: AST.Ident, val args2: Seq[AST.Ident]) {
@@ -47,8 +46,7 @@ class Symbols(parent: Option[Symbols] = None) {
 }
 
 trait BaseInterpreter {
-  final def log(): Unit = log(System.out)
-  def log(out: PrintStream): Unit
+  def scope: Scope[_]
   def reduce(): Int
 }
 
@@ -168,21 +166,15 @@ class Model(val statements: Seq[AST.Statement]) {
     checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
   }
 
-  def createSTInterpreter: BaseInterpreter = {
-    val i = new st.Interpreter(globals, ruleCuts.values)
-    data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
-    i
-  }
-
   def createMTInterpreter(numThreads: Int) : mt.Interpreter = {
     val i = new mt.Interpreter(globals, ruleCuts.values, numThreads)
-    data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
+    data.foreach(d => i.scope.add(d.cuts, new Symbols(Some(globals))))
     i
   }
 
   def createST2Interpreter : st2.Interpreter = {
     val i = new st2.Interpreter(globals, ruleCuts.values)
-    data.foreach(d => i.add(d.cuts, new Symbols(Some(globals))))
+    data.foreach(d => i.scope.add(d.cuts, new Symbols(Some(globals))))
     i
   }
 }
