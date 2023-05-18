@@ -1,5 +1,6 @@
 package de.szeiger.interact.st2
 
+import de.szeiger.interact.codegen.CodeGen
 import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Scope, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
@@ -186,6 +187,52 @@ final class EraseRuleImpl(derivedMainSymId: Int) extends RuleImpl {
   }
 }
 
+// cut Add(y, r) . Z = y . r
+final class AddZSample(sid0: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val cAdd = if(c1.symId == sid0) c1 else c2
+    val y = cAdd.auxRef(0)
+    val r = cAdd.auxRef(1)
+    ptw.connectFreeToFree(y, r)
+  }
+}
+// cut Add(y, r) . S(x) = Add(S(y), r) . x
+final class AddSSample(sid0: Int, sid1: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val (cAdd, cS) = if(c1.symId == sid0) (c1, c2) else (c2, c1)
+    val y = cAdd.auxRef(0)
+    val r = cAdd.auxRef(1)
+    val x = cS.auxRef(0)
+    val cAdd2 = new Cell(sid0, 2)
+    val cS2 = new Cell(sid1, 1)
+    ptw.connectAux(y, cS2, 0)
+    ptw.connectAux(r, cAdd2, 1)
+    new WireRef(cS2, -1, cAdd2, 0)
+    ptw.connectPrincipal(x, cAdd2)
+  }
+}
+
+// cut Add(y, r) . S(x) = Add(S(y), r) . x
+final class AddSSample2(addSid: Int, sSid: Int) extends RuleImpl {
+  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
+    val c1 = wr.cell
+    val c2 = wr.oppo.cell
+    val (cAdd, cS) = if(c1.symId == addSid) (c1, c2) else (c2, c1)
+    val y = cAdd.auxRef(0)
+    val r = cAdd.auxRef(1)
+    val x = cS.auxRef(0)
+    val ax = cAdd.pref
+    ptw.connectAux(y, cS, 0)
+    ptw.connectAux(r, cAdd, 1)
+    ptw.connectAux(ax, cAdd, 0)
+    ptw.connectPrincipal(x, cAdd)
+  }
+}
+
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends BaseInterpreter { self =>
   final val scope: Scope[Cell] = new Scope[Cell] {
     def createCell(sym: Symbol): Cell = if(sym.isCons) new Cell(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0, 0)
@@ -236,7 +283,11 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
             case ("Erase", _) => new EraseRuleImpl(s1id)
             case _ => generic
           }
-        } else generic
+        } else (cr.name1.s, cr.name2.s) match {
+          case ("Add", "Z") => CodeGen.createAddZSampleGen(s1id) // new AddZSample(s1id)
+          case ("Add", "S") => new AddSSample2(s1id, s2id)
+          case _ => generic
+        }
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
