@@ -15,12 +15,10 @@ import scala.annotation.tailrec
 
 sealed trait WireOrCell
 
-object Wire {
-  @inline def apply(c1: Cell, p1: Int, c2: Cell, p2: Int): WireRef =
-    new WireRef(c1, p1, new AtomicInteger((if(p1 < 0) 1 else 0) + (if(p2 < 0) 1 else 0)), null, c2, p2)
-}
-
 final class WireRef(final var cell: Cell, final var cellPort: Int, private[this] final var _principals: AtomicInteger, _oppo: WireRef, _oppoCell: Cell, _oppoPort: Int) extends WireOrCell {
+  def this(_c1: Cell, _p1: Int, _c2: Cell, _p2: Int) =
+    this(_c1, _p1, new AtomicInteger((if(_p1 < 0) 1 else 0) + (if(_p2 < 0) 1 else 0)), null, _c2, _p2)
+
   if(cell != null) cell.setWire(cellPort, this)
 
   final var oppo: WireRef = if(_oppo != null) _oppo else new WireRef(_oppoCell, _oppoPort, _principals, this, null, 0)
@@ -183,7 +181,7 @@ final class GenericRuleImpl(protoCells: Array[Int], freeWiresPorts1: Array[Int],
       val p1 = byte1(conn)
       val t2 = cells(byte2(conn))
       val p2 = byte3(conn)
-      val w = Wire(t1, p1, t2, p2)
+      val w = new WireRef(t1, p1, t2, p2)
       if(p1 < 0 && p2 < 0) ptw.createCut(w)
       i += 1
     }
@@ -214,8 +212,8 @@ final class Dup1RuleImpl(derivedMainSymId: Int) extends RuleImpl {
     val wrB = cDup.auxRef(1)
     val wrAux1 = cCons.auxRef(0)
     val cCons2 = cCons.copy()
-    Wire(cCons, 0, cDup, 0)
-    Wire(cCons2, 0, cDup, 1)
+    new WireRef(cCons, 0, cDup, 0)
+    new WireRef(cCons2, 0, cDup, 1)
     ptw.connectPrincipal(wrA, cCons)
     ptw.connectPrincipal(wrB, cCons2)
     ptw.connectPrincipal(wrAux1, cDup)
@@ -233,10 +231,10 @@ final class Dup2RuleImpl(derivedMainSymId: Int) extends RuleImpl {
     val wrAux2 = cCons.auxRef(1)
     val cCons2 = cCons.copy()
     val cDup2 = cDup.copy()
-    Wire(cCons, 0, cDup, 0)
-    Wire(cCons2, 0, cDup, 1)
-    Wire(cCons, 1, cDup2, 0)
-    Wire(cCons2, 1, cDup2, 1)
+    new WireRef(cCons, 0, cDup, 0)
+    new WireRef(cCons2, 0, cDup, 1)
+    new WireRef(cCons, 1, cDup2, 0)
+    new WireRef(cCons2, 1, cDup2, 1)
     ptw.connectPrincipal(wrA, cCons)
     ptw.connectPrincipal(wrB, cCons2)
     ptw.connectPrincipal(wrAux1, cDup)
@@ -263,7 +261,7 @@ final class EraseRuleImpl(derivedMainSymId: Int) extends RuleImpl {
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int) extends BaseInterpreter { self =>
   final val scope: Scope[Cell] = new Scope[Cell] {
     def createCell(sym: Symbol): Cell = if(sym.isCons) new Cell(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0, 0)
-    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = Wire(c1, p1, c2, p2)
+    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def symbolName(c: Cell): String = c match {
       case c: WireCell => c.sym.id.s
       case c => reverseSymIds(c.symId).id.s
