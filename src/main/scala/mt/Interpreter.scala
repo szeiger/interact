@@ -17,7 +17,7 @@ sealed trait WireOrCell
 
 object Wire {
   @inline def apply(c1: Cell, p1: Int, c2: Cell, p2: Int): WireRef =
-    new WireRef(c1, p1, new AtomicInteger((if(p1 == 0) 1 else 0) + (if(p2 == 0) 1 else 0)), null, c2, p2)
+    new WireRef(c1, p1, new AtomicInteger((if(p1 < 0) 1 else 0) + (if(p2 < 0) 1 else 0)), null, c2, p2)
 }
 
 final class WireRef(final var cell: Cell, final var cellPort: Int, private[this] final var _principals: AtomicInteger, _oppo: WireRef, _oppoCell: Cell, _oppoPort: Int) extends WireOrCell {
@@ -62,21 +62,18 @@ object WireRef {
 class Cell(final val symId: Int, final val arity: Int) extends WireOrCell {
   final var pref: WireRef = _
   private[this] final val auxRefs = new Array[WireRef](arity)
-  def auxRef(i: Int): WireRef = auxRefs(i)
-  def setAuxRef(i: Int, wr: WireRef): Unit = auxRefs(i) = wr
-  @inline def setWire(slot: Int, w: WireRef) = {
-    if(slot == 0) pref = w;
-    else auxRefs(slot-1) = w
-  }
-  def getWireRef(slot: Int): WireRef =
-    if(slot == 0) pref
-    else auxRefs(slot-1)
+  def auxRef(p: Int): WireRef = auxRefs(p)
+  def setAuxRef(p: Int, wr: WireRef): Unit = auxRefs(p) = wr
+  @inline def setWire(p: Int, w: WireRef) =
+    if(p < 0) pref = w else auxRefs(p) = w
+  def getWireRef(p: Int): WireRef =
+    if(p < 0) pref else auxRefs(p)
   def getCell(p: Int): (Cell, Int) = {
     val w = getWireRef(p)
     if(w == null) null else w.opposite
   }
   def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
-  def allCells: Iterator[(WireRef, (Cell, Int))] = (0 to arity).iterator.map { i => (getWireRef(i), getCell(i)) }
+  def allCells: Iterator[(WireRef, (Cell, Int))] = (-1 until arity).iterator.map { i => (getWireRef(i), getCell(i)) }
   override def toString = s"Cell($symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
   def copy() = new Cell(symId, arity)
 }
@@ -187,7 +184,7 @@ final class GenericRuleImpl(protoCells: Array[Int], freeWiresPorts1: Array[Int],
       val t2 = cells(byte2(conn))
       val p2 = byte3(conn)
       val w = Wire(t1, p1, t2, p2)
-      if((p1 | p2) == 0) ptw.createCut(w)
+      if(p1 < 0 && p2 < 0) ptw.createCut(w)
       i += 1
     }
 
@@ -203,8 +200,8 @@ final class Dup0RuleImpl(derivedMainSymId: Int) extends RuleImpl {
     val wrA = cDup.auxRef(0)
     val wrB = cDup.auxRef(1)
     val cCons2 = cCons.copy()
-    ptw.connect(wrA, cCons, 0)
-    ptw.connect(wrB, cCons2, 0)
+    ptw.connectPrincipal(wrA, cCons)
+    ptw.connectPrincipal(wrB, cCons2)
   }
 }
 
@@ -217,11 +214,11 @@ final class Dup1RuleImpl(derivedMainSymId: Int) extends RuleImpl {
     val wrB = cDup.auxRef(1)
     val wrAux1 = cCons.auxRef(0)
     val cCons2 = cCons.copy()
-    Wire(cCons, 1, cDup, 1)
-    Wire(cCons2, 1, cDup, 2)
-    ptw.connect(wrA, cCons, 0)
-    ptw.connect(wrB, cCons2, 0)
-    ptw.connect(wrAux1, cDup, 0)
+    Wire(cCons, 0, cDup, 0)
+    Wire(cCons2, 0, cDup, 1)
+    ptw.connectPrincipal(wrA, cCons)
+    ptw.connectPrincipal(wrB, cCons2)
+    ptw.connectPrincipal(wrAux1, cDup)
   }
 }
 
@@ -235,15 +232,15 @@ final class Dup2RuleImpl(derivedMainSymId: Int) extends RuleImpl {
     val wrAux1 = cCons.auxRef(0)
     val wrAux2 = cCons.auxRef(1)
     val cCons2 = cCons.copy()
-    Wire(cCons, 1, cDup, 1)
-    Wire(cCons2, 1, cDup, 2)
     val cDup2 = cDup.copy()
-    Wire(cCons, 2, cDup2, 1)
-    Wire(cCons2, 2, cDup2, 2)
-    ptw.connect(wrA, cCons, 0)
-    ptw.connect(wrB, cCons2, 0)
-    ptw.connect(wrAux1, cDup, 0)
-    ptw.connect(wrAux2, cDup2, 0)
+    Wire(cCons, 0, cDup, 0)
+    Wire(cCons2, 0, cDup, 1)
+    Wire(cCons, 1, cDup2, 0)
+    Wire(cCons2, 1, cDup2, 1)
+    ptw.connectPrincipal(wrA, cCons)
+    ptw.connectPrincipal(wrB, cCons2)
+    ptw.connectPrincipal(wrAux1, cDup)
+    ptw.connectPrincipal(wrAux2, cDup2)
   }
 }
 
@@ -256,7 +253,7 @@ final class EraseRuleImpl(derivedMainSymId: Int) extends RuleImpl {
     var i = 0
     while(i < arity) {
       val wr = cCons.auxRef(i)
-      ptw.connect(wr, cErase.copy(), 0)
+      ptw.connectPrincipal(wr, cErase.copy())
       i += 1
     }
   }
@@ -348,14 +345,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     cells.iterator.zipWithIndex.foreach { case (c, i) =>
       c.allCells.zipWithIndex.foreach { case ((_, (t, p)), j) =>
         val w = lookup(t)
-        if(w >= 0 && !conns.contains(checkedIntOfBytes(w, p, i, j)))
-          conns.add(checkedIntOfBytes(i, j, w, p))
+        if(w >= 0 && !conns.contains(checkedIntOfBytes(w, p, i, j-1)))
+          conns.add(checkedIntOfBytes(i, j-1, w, p))
       }
     }
     // Make principal connections last to ensure auxiliary wires are already connected and get published
     val (connsPrinc, connsAux) = conns.toArray.partition(i => (byte1(i) | byte3(i)) == 0)
     val orderedConns = connsAux ++ connsPrinc
-    val freeWiresPorts = wires.map { w => val (c, p) = w.getCell(0); checkedIntOfShorts(lookup(c), p) }
+    val freeWiresPorts = wires.map { w => val (c, p) = w.getCell(-1); checkedIntOfShorts(lookup(c), p) }
     val (fwp1, fwp2) = freeWiresPorts.splitAt(args1.length)
     new GenericRuleImpl(protoCells, fwp1, fwp2, orderedConns)
   }
@@ -373,7 +370,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       val w = c.pref
       val ri = ruleImpls(mkRuleKey(w))
       if(ri != null) {
-        if(w.cellPort == 0 && w.oppo.cellPort == 0 && !detected.contains(w.oppo)) {
+        if(w.cellPort < 0 && w.oppo.cellPort < 0 && !detected.contains(w.oppo)) {
           detected.addOne(w)
           buf.addOne(w, ri)
         }
@@ -510,14 +507,24 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
 
   def connect(wr: WireRef, t: Cell, p: Int): Unit = {
     wr.cell = t; wr.cellPort = p
-    if(p == 0) { t.pref = wr; if(wr.incLocked() == 2) createCut(wr) }
-    else t.setAuxRef(p-1, wr)
+    if(p < 0) { t.pref = wr; if(wr.incLocked() == 2) createCut(wr) }
+    else t.setAuxRef(p, wr)
+  }
+
+  def connectPrincipal(wr: WireRef, t: Cell): Unit = {
+    wr.cell = t; wr.cellPort = -1; t.pref = wr
+    if(wr.incLocked() == 2) createCut(wr)
+  }
+
+  def connectAux(wr: WireRef, t: Cell, p: Int): Unit = {
+    wr.cell = t; wr.cellPort = p
+    t.setAuxRef(p, wr)
   }
 
   def connectDeferred(wr: WireRef, t: Cell, p: Int): Unit = {
     wr.cell = t; wr.cellPort = p
-    if(p == 0) { t.pref = wr; tempWires(usedTempWires) = wr; usedTempWires += 1 }
-    else t.setAuxRef(p-1, wr)
+    if(p < 0) { t.pref = wr; tempWires(usedTempWires) = wr; usedTempWires += 1 }
+    else t.setAuxRef(p, wr)
   }
 
   def flushDeferred(): Unit = {

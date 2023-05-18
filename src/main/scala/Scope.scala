@@ -23,7 +23,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
     def isFreeWire(c: Cell): Boolean = self.isFreeWire(c)
   }
 
-  private def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (0 to getArity(c)).iterator.map(getConnected(c, _))
+  private def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
 
   private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
     def f(e: AST.Expr): Unit = e match {
@@ -59,29 +59,26 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
           if(s.isCons) {
             val s = syms.getOrAdd(i)
             val c = createCell(s)
-            (c, 0)
+            (c, -1)
           } else if(s.refs == 1) {
             val c = createCell(s)
             freeWires.addOne(c)
-            (c, 0)
+            (c, -1)
           } else if(s.refs == 2) {
             bind.get(s) match {
-              case Some(w) => (w, 1)
+              case Some(w) => (w, 0)
               case None =>
                 val w = new TempWire
                 bind.put(s, w)
-                (w, 0)
+                (w, -1)
             }
           } else sys.error(s"Non-linear use of ${i.show} in data")
         case AST.Ap(i, args) =>
           val s = syms.getOrAdd(i)
           assert(s.isCons)
           val c = createCell(s)
-          args.zipWithIndex.foreach { case (a, idx) =>
-            val p = idx + 1
-            toCreate.enqueue((a, c, p))
-          }
-          (c, 0)
+          args.zipWithIndex.foreach { case (a, p) => toCreate.enqueue((a, c, p)) }
+          (c, -1)
       }
       if(cCell != null) connectAny(cCell, cPort, wr, pr)
       (wr, pr)
@@ -102,7 +99,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
 
   def validate(): Unit = {
     reachableCells.flatMap { c1 => getAllConnected(c1).zipWithIndex.map(t => (c1, t)) }.foreach { case (c1, ((c2, p2), p1)) =>
-      assert(getConnected(c2, p2) == (c1, p1))
+      assert(getConnected(c2, p2) == (c1, p1-1))
     }
   }
 
@@ -113,8 +110,8 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
       while(true) {
         if(symbolName(c) == "Z" && getArity(c) == 0) return Some(acc)
         else if(symbolName(c) == "S" && getArity(c) == 1) {
-          getConnected(c, 1) match {
-            case (c2, 0) => c = c2; acc += 1
+          getConnected(c, 0) match {
+            case (c2, -1) => c = c2; acc += 1
             case _ => return None
           }
         } else return None
@@ -126,9 +123,9 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
   object ListCons {
     def unapply(c: Cell): Option[(Cell, Cell)] = {
       if(symbolName(c) == "Cons" && getArity(c) == 2) {
-        val (c1, p1) = getConnected(c, 1)
-        val (c2, p2) = getConnected(c, 2)
-        if(p1 == 0 && p2 == 0) Some((c1, c2)) else None
+        val (c1, p1) = getConnected(c, 0)
+        val (c2, p2) = getConnected(c, 1)
+        if(p1 < 0 && p2 < 0) Some((c1, c2)) else None
       } else None
     }
   }
@@ -146,8 +143,8 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
   def getCutLogs: Iterator[(Cell, String, String, Option[String])] = {
     val freeWireNames = freeWires.map(symbolName)
     val leaders = mutable.HashMap.empty[Cell, Cell]
-    def leader(w: Cell): Cell = leaders.getOrElse(w, leaders.getOrElseUpdate(getConnected(w, 0)._1, w))
-    val cuts = mutable.HashSet.from(reachableCells.filter(c => getConnected(c, 0)._2 == 0)).map(leader)
+    def leader(w: Cell): Cell = leaders.getOrElse(w, leaders.getOrElseUpdate(getConnected(w, -1)._1, w))
+    val cuts = mutable.HashSet.from(reachableCells.filter(c => getConnected(c, -1)._2 == -1)).map(leader)
     var nextTemp = -1
     val helpers = mutable.Map.empty[Cell, String]
     def explicit(ldr: Cell): String = helpers.getOrElseUpdate(ldr, {
@@ -158,7 +155,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
       val ldr = leader(t)
       helpers.get(ldr) match {
         case Some(s) => s
-        case None if p == 0 => show(t)
+        case None if p == -1 => show(t)
         case None => explicit(ldr)
       }
     }
@@ -170,7 +167,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
     }
     val strs = cuts.iterator.map { w =>
       val c1 = leader(w)
-      val c2 = getConnected(c1, 0)._1
+      val c2 = getConnected(c1, -1)._1
       if(isFreeWire(c1)) (c1, symbolName(c1), show(c2), None)
       else if(isFreeWire(c2)) (c1, symbolName(c2), show(c1), None)
       else (c1, explicit(w), show(c1), Some(show(c2)))
