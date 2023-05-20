@@ -1,6 +1,6 @@
 package de.szeiger.interact.mt
 
-import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Scope, Symbol, Symbols}
+import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.util.Arrays
@@ -84,20 +84,7 @@ abstract class RuleImpl {
   def reduce(wr: WireRef, ptw: PerThreadWorker): Unit
 }
 
-final class GenericRuleImpl(protoCells: Array[Int], freeWiresPorts1: Array[Int], freeWiresPorts2: Array[Int], connections: Array[Int]) extends RuleImpl {
-  def maxCells: Int = protoCells.length
-  def maxWires = connections.length + freeWiresPorts1.length + freeWiresPorts2.length
-
-  def log(): Unit = {
-    println("  Proto cells:")
-    protoCells.foreach(pc => println(s"  - $pc"))
-    println("  Free wires:")
-    freeWiresPorts1.foreach { case IntOfShorts(w, p) => println(s"  - ($w, $p)") }
-    freeWiresPorts2.foreach { case IntOfShorts(w, p) => println(s"  - ($w, $p)") }
-    println("  Connections:")
-    connections.foreach { c => println(s"  - ${Seq(byte0(c), byte1(c), byte2(c), byte3(c)).mkString(",")}")}
-  }
-
+final class InterpretedRuleImpl(protoCells: Array[Int], freeWiresPorts1: Array[Int], freeWiresPorts2: Array[Int], connections: Array[Int]) extends RuleImpl {
   private[this] def delay(nanos: Int): Unit = {
     val end = System.nanoTime() + nanos
     while(System.nanoTime() < end) Thread.onSpinWait()
@@ -262,9 +249,9 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   final val scope: Scope[Cell] = new Scope[Cell] {
     def createCell(sym: Symbol): Cell = if(sym.isCons) new Cell(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0, 0)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
-    def symbolName(c: Cell): String = c match {
-      case c: WireCell => c.sym.id.s
-      case c => reverseSymIds(c.symId).id.s
+    def getSymbol(c: Cell): Symbol = c match {
+      case c: WireCell => c.sym
+      case c => reverseSymIds(c.symId)
     }
     def getArity(c: Cell): Int = c.arity
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
@@ -286,7 +273,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
   // This unused object makes mt branching workloads 20% faster. HotSpot optimization bug?
-  private[this] final val boundaryRuleImpl = new GenericRuleImpl(null, null, null, null)
+  private[this] final val boundaryRuleImpl = new InterpretedRuleImpl(null, null, null, null)
 
   final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
   private[this] final val (maxRuleCells, maxRuleWires) = createRuleImpls()
@@ -298,18 +285,17 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val ris = new ArrayBuffer[RuleImpl]()
     var maxC, maxW = 0
     rules.foreach { cr =>
-      //println(s"***** Create rule ${cr.show}")
       val s1 = globals(cr.name1)
       val s2 = globals(cr.name2)
       val s1id = getSymbolId(s1)
       val s2id = getSymbolId(s2)
       val rk = mkRuleKey(s1id, s2id)
       def generic = {
-        val ri = createRuleImpl(cr.r.reduced, globals,
+        val g = GenericRuleImpl(scope, cr.r.reduced, globals,
           if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1)
-        if(ri.maxCells > maxC) maxC = ri.maxCells
-        if(ri.maxWires > maxW) maxW = ri.maxWires
-        ri
+        if(g.maxCells > maxC) maxC = g.maxCells
+        if(g.maxWires > maxW) maxW = g.maxWires
+        new InterpretedRuleImpl(g.cells.map { case (s, a) => intOfShorts(getSymbolId(s), a) }, g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
       }
       val ri =
         if(cr.r.derived) {
@@ -325,34 +311,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       ris.addOne(ri)
     }
     (maxC, maxW)
-  }
-
-  def createRuleImpl(reduced: Seq[AST.Cut], globals: Symbols, args1: Seq[AST.Ident], args2: Seq[AST.Ident]): GenericRuleImpl = {
-    //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
-    val syms = new Symbols(Some(globals))
-    val sc = new scope.Delegate
-    sc.add(reduced, syms)
-    sc.validate()
-    //sc.log()
-    val cells = sc.reachableCells.filter(_.symId != 0).toArray
-    val freeLookup = sc.freeWires.iterator.map { w => (w.asInstanceOf[WireCell].sym, w) }.toMap
-    val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toArray
-    val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
-    val protoCells = cells.map { c => intOfShorts(c.symId, c.arity) }
-    val conns = mutable.HashSet.empty[Int]
-    cells.iterator.zipWithIndex.foreach { case (c, i) =>
-      c.allCells.zipWithIndex.foreach { case ((_, (t, p)), j) =>
-        val w = lookup(t)
-        if(w >= 0 && !conns.contains(checkedIntOfBytes(w, p, i, j-1)))
-          conns.add(checkedIntOfBytes(i, j-1, w, p))
-      }
-    }
-    // Make principal connections last to ensure auxiliary wires are already connected and get published
-    val (connsPrinc, connsAux) = conns.toArray.partition(i => (byte1(i) | byte3(i)) == 0)
-    val orderedConns = connsAux ++ connsPrinc
-    val freeWiresPorts = wires.map { w => val (c, p) = w.getCell(-1); checkedIntOfShorts(lookup(c), p) }
-    val (fwp1, fwp2) = freeWiresPorts.splitAt(args1.length)
-    new GenericRuleImpl(protoCells, fwp1, fwp2, orderedConns)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =

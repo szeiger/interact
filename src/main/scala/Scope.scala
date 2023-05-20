@@ -9,7 +9,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
 
   def createCell(sym: Symbol): Cell
   def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit
-  def symbolName(c: Cell): String
+  def getSymbol(c: Cell): Symbol
   def getArity(c: Cell): Int
   def getConnected(c: Cell, port: Int): (Cell, Int)
   def isFreeWire(c: Cell): Boolean
@@ -17,13 +17,14 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
   class Delegate extends Scope[Cell] {
     def createCell(sym: Symbol): Cell = self.createCell(sym)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = self.connectCells(c1, p1, c2, p2)
-    def symbolName(c: Cell): String = self.symbolName(c)
+    def getSymbol(c: Cell): Symbol = self.getSymbol(c)
     def getArity(c: Cell): Int = self.getArity(c)
     def getConnected(c: Cell, port: Int): (Cell, Int) = self.getConnected(c, port)
     def isFreeWire(c: Cell): Boolean = self.isFreeWire(c)
   }
 
-  private def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
+  def symbolName(c: Cell): String = getSymbol(c).id.s
+  def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
 
   private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
     def f(e: AST.Expr): Unit = e match {
