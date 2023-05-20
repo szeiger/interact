@@ -1,6 +1,6 @@
 package de.szeiger.interact.st2
 
-import de.szeiger.interact.codegen.CodeGen
+import de.szeiger.interact.codegen.{CodeGen, RuleImplFactory, SymbolIdLookup}
 import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Scope, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
@@ -198,6 +198,7 @@ final class AddZSample(sid0: Int) extends RuleImpl {
     ptw.connectFreeToFree(y, r)
   }
 }
+
 // cut Add(y, r) . S(x) = Add(S(y), r) . x
 final class AddSSample(sid0: Int, sid1: Int) extends RuleImpl {
   def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
@@ -214,6 +215,10 @@ final class AddSSample(sid0: Int, sid1: Int) extends RuleImpl {
     new WireRef(cS2, -1, cAdd2, 0)
     ptw.connectPrincipal(x, cAdd2)
   }
+}
+final class AddSSampleFactory extends RuleImplFactory[RuleImpl] {
+  override def apply(lookup: SymbolIdLookup): RuleImpl =
+    new AddSSample(lookup.getSymbolId("Add"), lookup.getSymbolId("S"))
 }
 
 // cut Add(y, r) . S(x) = Add(S(y), r) . x
@@ -259,6 +264,10 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
   def createRuleImpls(): Int = {
+    val lookup = new SymbolIdLookup {
+      override def getSymbolId(name: String): Int = self.getSymbolId(globals(new AST.Ident(name)))
+    }
+    val codeGen = new CodeGen[RuleImpl]("de/szeiger/interact/st2", "de/szeiger/interact/st2/gen")
     val ris = new ArrayBuffer[RuleImpl]()
     var max = 0
     rules.foreach { cr =>
@@ -284,8 +293,10 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
             case _ => generic
           }
         } else (cr.name1.s, cr.name2.s) match {
-          case ("Add", "Z") => CodeGen.createAddZSampleGen(s1id) // new AddZSample(s1id)
-          case ("Add", "S") => new AddSSample2(s1id, s2id)
+          //case ("Add", "Z") => new AddZSample(s1id)
+          //case ("Add", "S") => new AddSSample(s1id, s2id)
+          case ("Add", "Z") => codeGen.createSample("Add", "Z", Seq("Add"), 1)(lookup)
+          case ("Add", "S") => codeGen.createSample("Add", "S", Seq("Add", "S"), 2)(lookup)
           case _ => generic
         }
       ruleImpls(rk) = ri

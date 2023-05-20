@@ -15,6 +15,7 @@ object Main extends App {
   //model.data.foreach(r => println(s"  ${r.show}"))
 
   val inter = model.createST2Interpreter
+  model.setData(inter)
   println("Initial state:")
   inter.scope.log(System.out)
   val steps = inter.reduce()

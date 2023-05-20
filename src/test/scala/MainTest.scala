@@ -22,6 +22,7 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
       val statements = Parser.parse(Path.of(basePath+".in"))
       val model = new Model(statements)
       val inter = newInterpreter(model)
+      model.setData(inter)
       val steps = inter.reduce()
       val out = new ByteArrayOutputStream()
       inter.scope.log(new PrintStream(out, true, StandardCharsets.UTF_8))

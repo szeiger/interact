@@ -16,7 +16,7 @@ class InterpreterBenchmark {
 
   //@Param(Array("0", "1", "4", "1001", "1004"))
   //@Param(Array("-2", "0", "1", "2", "4", "1001", "1002", "1004"))
-  //@Param(Array("1", "2", "4", "1001", "1002", "1004"))
+  //@Param(Array("1", "2", "4"))
   //@Param(Array("1001", "1004"))
   @Param(Array("-2"))
   private var mode: Int = _
@@ -32,21 +32,29 @@ class InterpreterBenchmark {
       |  cut S(x) = Add(S(y), r) . x
       |""".stripMargin
 
-  private var multModel1: Model = _
-  private var multModel2: Model = _
-  private var multModel3: Model = _
-  private var fib22Model: Model = _
+  class PreparedInterpreter(source: String) {
+    val model: Model = new Model(Parser.parse(source))
+    val inter = getInterpreter(model)
+    def setup(): BaseInterpreter = {
+      model.setData(inter)
+      inter
+    }
+  }
+  private var mult1Inter: PreparedInterpreter = _
+  private var mult2Inter: PreparedInterpreter = _
+  private var mult3Inter: PreparedInterpreter = _
+  private var fib22Inter: PreparedInterpreter = _
 
   @Setup(Level.Trial)
   def init: Unit = {
-    this.multModel1 = new Model(Parser.parse(prelude +
+    this.mult1Inter = new PreparedInterpreter(prelude +
       """cons Mult(y, r) . x          deriving Erase, Dup
         |  cut Z = r . Z, y . Erase
         |  cut S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
         |let res =
         |  y . 100'c, x . 100'c, Mult(y, res) . x
-        |""".stripMargin))
-    this.multModel2 = new Model(Parser.parse(prelude +
+        |""".stripMargin)
+    this.mult2Inter = new PreparedInterpreter(prelude +
       """cons Mult(y, r) . x          deriving Erase, Dup
         |  cut Z = r . Z, y . Erase
         |  cut S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
@@ -55,8 +63,8 @@ class InterpreterBenchmark {
         |  y2 . 100'c, x2 . 100'c, Mult(y2, res2) . x2,
         |  y3 . 100'c, x3 . 100'c, Mult(y3, res3) . x3,
         |  y4 . 100'c, x4 . 100'c, Mult(y4, res4) . x4
-        |""".stripMargin))
-    this.multModel3 = new Model(Parser.parse(prelude +
+        |""".stripMargin)
+    this.mult3Inter = new PreparedInterpreter(prelude +
       """cons Mult(y, r) . x          deriving Erase, Dup
         |  cut Z = r . Z, y . Erase
         |  cut S(x) = x . Mult(a, s1), y . Dup (a, b), b . Add(s1, r)
@@ -64,8 +72,8 @@ class InterpreterBenchmark {
         |  y . 1000'c,
         |  x . 1000'c,
         |  Mult(y, res) . x
-        |""".stripMargin))
-    this.fib22Model = new Model(Parser.parse(prelude +
+        |""".stripMargin)
+    this.fib22Inter = new PreparedInterpreter(prelude +
       """cons Fib(res) . x deriving Erase, Dup
         |  cut Z = res . 1'c
         |  cut S(n) = Fib2(res) . n
@@ -77,28 +85,27 @@ class InterpreterBenchmark {
         |  cut S(x) = r . S(v), x . Add2(y, v)
         |let res =
         |   22'c . Fib(res)
-        |""".stripMargin))
+        |""".stripMargin)
   }
 
   def getInterpreter(m: Model): BaseInterpreter =
-    if(mode == -2) m.createST2Interpreter
-    else m.createMTInterpreter(mode)
+    if(mode == -2) m.createST2Interpreter else m.createMTInterpreter(mode)
 
   @Benchmark
   def mult1(bh: Blackhole): Unit =
-    bh.consume(getInterpreter(multModel1).reduce())
+    bh.consume(mult1Inter.setup().reduce())
 
-  @Benchmark
-  def mult2(bh: Blackhole): Unit =
-    bh.consume(getInterpreter(multModel2).reduce())
-
-  @Benchmark
-  def mult3(bh: Blackhole): Unit =
-    bh.consume(getInterpreter(multModel3).reduce())
-
-  @Benchmark
-  def fib22(bh: Blackhole): Unit =
-    bh.consume(getInterpreter(fib22Model).reduce())
+//  @Benchmark
+//  def mult2(bh: Blackhole): Unit =
+//    bh.consume(mult2Inter.setup().reduce())
+//
+//  @Benchmark
+//  def mult3(bh: Blackhole): Unit =
+//    bh.consume(mult3Inter.setup().reduce())
+//
+//  @Benchmark
+//  def fib22(bh: Blackhole): Unit =
+//    bh.consume(fib22Inter.setup().reduce())
 
 //  @Benchmark
 //  def createInterpreter(bh: Blackhole): Unit = {

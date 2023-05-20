@@ -166,15 +166,14 @@ class Model(val statements: Seq[AST.Statement]) {
     checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
   }
 
-  def createMTInterpreter(numThreads: Int) : mt.Interpreter = {
-    val i = new mt.Interpreter(globals, ruleCuts.values, numThreads)
-    data.foreach(d => i.scope.add(d.cuts, new Symbols(Some(globals))))
-    i
-  }
+  def createMTInterpreter(numThreads: Int) : mt.Interpreter =
+    new mt.Interpreter(globals, ruleCuts.values, numThreads)
 
-  def createST2Interpreter : st2.Interpreter = {
-    val i = new st2.Interpreter(globals, ruleCuts.values)
-    data.foreach(d => i.scope.add(d.cuts, new Symbols(Some(globals))))
-    i
+  def createST2Interpreter : st2.Interpreter =
+    new st2.Interpreter(globals, ruleCuts.values)
+
+  def setData(inter: BaseInterpreter): Unit = {
+    inter.scope.clear()
+    data.foreach(d => inter.scope.add(d.cuts, new Symbols(Some(globals))))
   }
 }

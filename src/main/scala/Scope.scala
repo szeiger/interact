@@ -35,6 +35,8 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
     cs.foreach { c => f(c.left); f(c.right) }
   }
 
+  def clear(): Unit = freeWires.clear()
+
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
     @tailrec
