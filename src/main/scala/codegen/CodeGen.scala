@@ -15,6 +15,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cell_symId = MethodRef(cellT, "symId", tp.m().I)
   private val cell_auxRef = MethodRef(cellT, "auxRef", tp.m(tp.I)(wrT))
+  private val cell_pref = MethodRef(cellT, "pref", tp.m()(wrT))
   private val wr_cell = MethodRef(wrT, "cell", tp.m()(cellT))
   private val wr_oppo = MethodRef(wrT, "oppo", tp.m()(wrT))
   private val ptw_connectFreeToFree = MethodRef(ptwT, "connectFreeToFree", tp.m(wrT, wrT).V)
@@ -74,6 +75,18 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
       val reuse2 = g.cells.indexOf(g.sym2)
       val needs1 = g.arity1 > 0 || reuse1 >= 0
       val needs2 = g.arity2 > 0 || reuse2 >= 0
+      val internalConns = g.internalConns.toArray
+      val reuseCandidates = internalConns.filter {
+        case Connection(i1: CellIdx, i2: CellIdx) => (i1.idx == reuse1 && i2.idx == reuse2) || (i1.idx == reuse2 && i2.idx == reuse1)
+        case _ => false
+      }
+      val primaryReuse = reuseCandidates.find { case Connection(i1: CellIdx, i2: CellIdx) =>
+        i1.port == -1 || i2.port == -1
+      }.getOrElse(null)
+      //println(s"reuse1: $reuse1, reuse2: $reuse2, primaryReuse: $primaryReuse")
+      //if(reuseCandidates.nonEmpty && primaryReuse == null)
+      //  println("**** no primary reuse")
+
       val m = c.method(Acc.PUBLIC, "reduce", tp.m(wrT, ptwT).V)
       val wr   = m.param("wr", wrT, Acc.FINAL)
       val ptw  = m.param("ptw", ptwT, Acc.FINAL)
@@ -111,7 +124,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
             m.iconst(sym.arity)
           }.storeLocal(s"c$idx", cellT, Acc.FINAL)
       }
-      (g.wireConnsDistinct ++ g.internalConns).foreach { case Connection(idx1, idx2) =>
+      (g.wireConnsDistinct ++ internalConns.iterator).foreach { case conn @ Connection(idx1, idx2) =>
         def connectWW(i1: FreeIdx, i2: FreeIdx): Unit = {
           val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
           val r = if(i2.rhs) rhs(i2.idx) else lhs(i2.idx)
@@ -133,10 +146,24 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
             m.newInitConsume(new_WireRef_LILI)(args)
           }
         }
+        def reconnectPrimary(i1: CellIdx, i2: CellIdx): Unit = {
+          m.aload(ptw)
+          //TODO: Fix pincipal handling for mt
+          m.aload(cells(i1.idx))
+          if(i1.port < 0) m.invokevirtual(cell_pref)
+          else m.iconst(i1.port).invokevirtual(cell_auxRef)
+          m.invokevirtual(wr_oppo)
+          m.aload(cells(i2.idx))
+          if(i2.port < 0) m.invokevirtual(ptw_connectPrincipal)
+          else m.iconst(i2.port).invokevirtual(ptw_connectAux)
+        }
         (idx1, idx2) match {
           case (i1: FreeIdx, i2: FreeIdx) => connectWW(i1, i2)
           case (i1: FreeIdx, i2: CellIdx) => connectWC(i1, i2)
           case (i1: CellIdx, i2: FreeIdx) => connectWC(i2, i1)
+          case (i1: CellIdx, i2: CellIdx) if conn eq primaryReuse =>
+            if(i1.port == -1) reconnectPrimary(i1, i2)
+            else reconnectPrimary(i2, i1)
           case (i1: CellIdx, i2: CellIdx) => connectCC(i2, i1)
         }
       }
