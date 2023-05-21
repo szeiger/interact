@@ -75,3 +75,11 @@ object GenericRuleImpl {
     new GenericRuleImpl(sym1, sym2, protoCells, conns.toArray, fwp)
   }
 }
+
+abstract class RuleImplFactory[T] {
+  def apply(lookup: SymbolIdLookup): T
+}
+
+trait SymbolIdLookup {
+  def getSymbolId(name: String): Int
+}

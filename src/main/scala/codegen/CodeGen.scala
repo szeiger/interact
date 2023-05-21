@@ -1,12 +1,8 @@
 package de.szeiger.interact.codegen
 
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, Symbol}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, RuleImplFactory, Symbol, SymbolIdLookup}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
-import org.objectweb.asm.{ClassReader, ClassWriter, Label}
-import org.objectweb.asm.util.{Textifier, TraceClassVisitor}
-
-import java.io.{OutputStreamWriter, PrintWriter}
-import scala.collection.mutable
+import org.objectweb.asm.Label
 
 class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   private val MAX_SPEC_CELL = 2
@@ -24,6 +20,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   }
   private val wr_cell = MethodRef(wrT, "cell", tp.m()(cellT))
   private val wr_oppo = MethodRef(wrT, "oppo", tp.m()(wrT))
+  private val wr_reconnect = MethodRef(wrT, "reconnect", tp.m(cellT, tp.I, cellT, tp.I).V)
   private val ptw_connectFreeToFree = MethodRef(ptwT, "connectFreeToFree", tp.m(wrT, wrT).V)
   private val ptw_connectAux = MethodRef(ptwT, "connectAux", tp.m(wrT, cellT, tp.I).V)
   private val ptw_connectAuxSpec = (0 to MAX_SPEC_CELL).map { a =>
@@ -35,7 +32,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   private val new_CellSpec_I = cellSpecTs.map(t => ConstructorRef(t, tp.m(tp.I).V))
   private val new_WireRef_LILI = ConstructorRef(wrT, tp.m(cellT, tp.I, cellT, tp.I).V)
 
-  def compile(g: GenericRuleImpl): RuleImplFactory[RI] = {
+  def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
     val name1 = g.sym1.cons.name.s
     val name2 = g.sym2.cons.name.s
     val implClassName = s"$genPackage/Rule$$$name1$$$name2"
@@ -43,9 +40,9 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
     val syms = (Iterator.single(g.sym1) ++ g.cells.iterator).distinct.toArray
     val ric = createRuleClass(implClassName, syms.iterator.zipWithIndex.toMap, g)
     val fac = createFactoryClass(ric, factClassName, syms.map(_.cons.name.s))
-    val cl = new LocalClassLoader
-    cl.add(ric)
-    cl.add(fac)
+    def extName(n: String) = n.replace('/', '.')
+    cl.add(extName(implClassName), () => ric)
+    cl.add(extName(factClassName), () => fac)
     val c = cl.loadClass(fac.javaName)
     c.getDeclaredConstructor().newInstance().asInstanceOf[RuleImplFactory[RI]]
   }
@@ -71,8 +68,6 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
     {
       val reuse1 = g.cells.indexOf(g.sym1)
       val reuse2 = g.cells.indexOf(g.sym2)
-      val needs1 = g.arity1 > 0 || reuse1 >= 0
-      val needs2 = g.arity2 > 0 || reuse2 >= 0
       val internalConns = g.internalConns.toArray
       val reuseCandidates = internalConns.filter {
         case Connection(i1: CellIdx, i2: CellIdx) => (i1.idx == reuse1 && i2.idx == reuse2) || (i1.idx == reuse2 && i2.idx == reuse1)
@@ -81,9 +76,11 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
       val primaryReuse = reuseCandidates.find { case Connection(i1: CellIdx, i2: CellIdx) =>
         i1.port == -1 || i2.port == -1
       }.getOrElse(null)
+      val needs1 = g.arity1 > 0 || reuse1 >= 0 || primaryReuse == null
+      val needs2 = g.arity2 > 0 || reuse2 >= 0
       //println(s"reuse1: $reuse1, reuse2: $reuse2, primaryReuse: $primaryReuse")
       //if(reuseCandidates.nonEmpty && primaryReuse == null)
-      //  println("**** no primary reuse")
+      //  println("no primary reuse")
       val m = c.method(Acc.PUBLIC, "reduce", tp.m(wrT, ptwT).V)
       val wr   = m.param("wr", wrT, Acc.FINAL)
       val ptw  = m.param("ptw", ptwT, Acc.FINAL)
@@ -99,8 +96,6 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           m.invokevirtual(ptw_connectAuxSpec(a)(p))
         else m.iconst(p).invokevirtual(ptw_connectAux)
       }
-      def castCell(arity: Int): m.type =
-        if(arity < cellSpecTs.length) m.checkcast(cellSpecTs(arity)) else m
       def storeCastCell(name: String, arity: Int, start: Label = null): VarIdx = {
         if(arity < cellSpecTs.length) m.checkcast(cellSpecTs(arity))
         val v = m.storeLocal(name, cellT, Acc.FINAL, start = start)
@@ -134,6 +129,8 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
         getAuxRef(g.arity2, idx)
         m.storeLocal(s"rhs$idx", wrT, Acc.FINAL)
       }
+      var reuseWire = if(primaryReuse != null) VarIdx.none else m.aload(cLeft).invokevirtual(cell_pref).storeAnonLocal(wrT)
+
       val cells = g.cells.zipWithIndex.map {
         case (_, idx) if idx == reuse1 => cLeft
         case (_, idx) if idx == reuse2 => cRight
@@ -168,7 +165,12 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
             m.newInitDup(new_WireRef_LILI)(args)
             m.invokevirtual(ptw_createCut)
           } else {
-            m.newInitConsume(new_WireRef_LILI)(args)
+            if(reuseWire != VarIdx.none) {
+              m.aload(reuseWire)
+              args
+              m.invokevirtual(wr_reconnect)
+              reuseWire = VarIdx.none
+            } else m.newInitConsume(new_WireRef_LILI)(args)
           }
         }
         def reconnectPrimary(i1: CellIdx, i2: CellIdx): Unit = {
@@ -212,30 +214,4 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
     m.areturn
     c
   }
-}
-
-class LocalClassLoader extends ClassLoader {
-  val classes = new mutable.HashMap[String, Array[Byte]]()
-
-  override def findClass(className: String): Class[_] =
-    classes.get(className).map(a => defineClass(className, a, 0, a.length))
-      .getOrElse(super.findClass(className))
-
-  def add(cn: ClassDSL): Unit = {
-    val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
-    cn.accept(cw)
-    val raw = cw.toByteArray
-    classes.put(cn.name.replace('/', '.'), raw)
-    //val pr = new Textifier()
-    //val cr = new ClassReader(raw)
-    //cr.accept(new TraceClassVisitor(cw, pr, new PrintWriter(new OutputStreamWriter(System.out))), 0)
-  }
-}
-
-abstract class RuleImplFactory[T] {
-  def apply(lookup: SymbolIdLookup): T
-}
-
-trait SymbolIdLookup {
-  def getSymbolId(name: String): Int
 }

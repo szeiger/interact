@@ -3,6 +3,7 @@ package de.szeiger.interact.codegen.dsl
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
 import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.util.Printer
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -104,6 +105,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     mv.visitCode()
     mv.visitLabel(start)
     code.zipWithIndex.foreach { case (in, idx) =>
+      //println(s"emitting ${in.getOpcode} ${if(in.getOpcode >= 0 && in.getOpcode < Printer.OPCODES.length) Printer.OPCODES(in.getOpcode) else "???"}")
       in.accept(mv)
       in match {
         case in: VarInsnNode if in.getOpcode >= ISTORE && in.getOpcode <= SASTORE =>
@@ -140,7 +142,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     }
 
   private[this] def insn(i: AbstractInsnNode): this.type = { code.addOne(i); this }
-  private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = insn(new VarInsnNode(opcode, varIdx.idx))
+  private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = { assert(varIdx != VarIdx.none); insn(new VarInsnNode(opcode, varIdx.idx)) }
   private[this] def insn(opcode: Int): this.type = insn(new InsnNode(opcode))
   private[this] def intInsn(opcode: Int, operand: Int): this.type = insn(new IntInsnNode(opcode, operand))
   private[this] def jumpInsn(opcode: Int, label: Label): this.type = insn(new JumpInsnNode(opcode, new LabelNode(label)))
@@ -165,6 +167,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def return_ : this.type = insn(RETURN)
   def areturn : this.type = insn(ARETURN)
   def dup: this.type = insn(DUP)
+  def pop: this.type = insn(POP)
   def dup_x1: this.type = insn(DUP_X1)
   def dup_x2: this.type = insn(DUP_X2)
   def swap: this.type = insn(SWAP)

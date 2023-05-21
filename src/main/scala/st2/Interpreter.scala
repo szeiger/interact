@@ -1,7 +1,7 @@
 package de.szeiger.interact.st2
 
-import de.szeiger.interact.codegen.{CodeGen, RuleImplFactory, SymbolIdLookup}
-import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, Connection, GenericRuleImpl, Idx, Scope, Symbol, Symbols}
+import de.szeiger.interact.codegen.{CodeGen, LocalClassLoader}
+import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays
@@ -17,6 +17,16 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, _oppo: WireRe
   final val oppo: WireRef = if(_oppo != null) _oppo else new WireRef(_oppoCell, _oppoPort, this, null, 0)
 
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
+
+  def reconnect(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
+    c1.setWireRef(p1, this)
+    this.cell = c1
+    this.cellPort = p1
+    val o = oppo
+    c2.setWireRef(p2, o)
+    o.cell = c2
+    o.cellPort = p2
+  }
 }
 
 abstract class Cell(final val symId: Int) {
@@ -268,6 +278,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
   def createRuleImpls(): Int = {
+    val debugLog = false
+    val cl = new LocalClassLoader(debugLog)
     val lookup = new SymbolIdLookup {
       override def getSymbolId(name: String): Int = self.getSymbolId(globals(new AST.Ident(name)))
     }
@@ -280,8 +292,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
       val rk = mkRuleKey(getSymbolId(s1), getSymbolId(s2))
       def generic = {
         val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
-        //g.log()
-        codeGen.compile(g)(lookup)
+        if(debugLog) g.log()
+        codeGen.compile(g, cl)(lookup)
         //if(g.maxCells > max) max = g.maxCells
         //new InterpretedRuleImpl(s1id, g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
       }
