@@ -7,39 +7,107 @@ import de.szeiger.interact.mt.BitOps._
 import java.util.Arrays
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.annotation.tailrec
+import scala.annotation.{switch, tailrec}
 
 final class WireRef(final var cell: Cell, final var cellPort: Int, _oppo: WireRef, _oppoCell: Cell, _oppoPort: Int) {
   def this(_c1: Cell, _p1: Int, _c2: Cell, _p2: Int) = this(_c1, _p1, null, _c2, _p2)
 
-  if(cell != null) cell.setWire(cellPort, this)
+  if(cell != null) cell.setWireRef(cellPort, this)
 
   final val oppo: WireRef = if(_oppo != null) _oppo else new WireRef(_oppoCell, _oppoPort, this, null, 0)
 
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
 }
 
-class Cell(final val symId: Int, final val arity: Int) {
+abstract class Cell(final val symId: Int) {
   final var pref: WireRef = _
-  private[this] final val auxRefs = new Array[WireRef](arity)
-  def auxRef(p: Int): WireRef = auxRefs(p)
-  def setAuxRef(p: Int, wr: WireRef): Unit = auxRefs(p) = wr
-  @inline def setWire(p: Int, w: WireRef) =
-    if(p < 0) pref = w else auxRefs(p) = w
-  def getWireRef(p: Int): WireRef =
-    if(p < 0) pref else auxRefs(p)
-  def getCell(p: Int): (Cell, Int) = {
+
+  def arity: Int
+  def auxRef(p: Int): WireRef
+  def setAuxRef(p: Int, wr: WireRef): Unit
+  def setWireRef(p: Int, wr: WireRef): Unit
+  def getWireRef(p: Int): WireRef
+  def copy(): Cell
+
+  final def getCell(p: Int): (Cell, Int) = {
     val w = getWireRef(p)
     if(w == null) null else w.opposite
   }
-  def allPorts: Iterator[WireRef] = Iterator.single(pref) ++ auxRefs.iterator
-  def allCells: Iterator[(WireRef, (Cell, Int))] = (-1 until arity).iterator.map { i => (getWireRef(i), getCell(i)) }
+  final def allPorts: Iterator[WireRef] = (-1 until arity).iterator.map(getWireRef)
+  final def allCells: Iterator[(WireRef, (Cell, Int))] = (-1 until arity).iterator.map { i => (getWireRef(i), getCell(i)) }
   override def toString = s"Cell($symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
-  def copy() = new Cell(symId, arity)
 }
 
-class WireCell(final val sym: Symbol, _symId: Int, _arity: Int) extends Cell(_symId, _arity) {
-  override def toString = s"WireCell($sym, $symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+class Cell0(_symId: Int) extends Cell(_symId) {
+  def arity: Int = 0
+  def auxRef(p: Int): WireRef = null
+  def setAuxRef(p: Int, wr: WireRef): Unit = ()
+  def setWireRef(p: Int, wr: WireRef) = pref = wr
+  def getWireRef(p: Int): WireRef = pref
+  def copy() = new Cell0(symId)
+}
+
+class Cell1(_symId: Int) extends Cell(_symId) {
+  final var aref0: WireRef = _
+  def arity: Int = 1
+  def auxRef(p: Int): WireRef = aref0
+  def setAuxRef(p: Int, wr: WireRef): Unit = aref0 = wr
+  def setWireRef(p: Int, wr: WireRef) = if(p == 0) aref0 = wr else pref = wr
+  def getWireRef(p: Int): WireRef = if(p == 0) aref0 else pref
+  def copy() = new Cell1(symId)
+}
+
+class Cell2(_symId: Int) extends Cell(_symId) {
+  final var aref0: WireRef = _
+  final var aref1: WireRef = _
+  def arity: Int = 2
+  def auxRef(p: Int): WireRef = if(p == 0) aref0 else aref1
+  def setAuxRef(p: Int, wr: WireRef): Unit = if(p == 0) aref0 = wr else aref1 = wr
+  def setWireRef(p: Int, wr: WireRef) = (p: @switch) match {
+    case 0 => aref0 = wr
+    case 1 => aref1 = wr
+    case _ => pref = wr
+  }
+  def getWireRef(p: Int): WireRef = (p: @switch) match {
+    case 0 => aref0
+    case 1 => aref1
+    case _ => pref
+  }
+  def copy() = new Cell2(symId)
+}
+
+class CellN(_symId: Int, val arity: Int) extends Cell(_symId) {
+  private[this] final val auxRefs = new Array[WireRef](arity)
+  def auxRef(p: Int): WireRef = auxRefs(p)
+  def setAuxRef(p: Int, wr: WireRef): Unit = auxRefs(p) = wr
+  def setWireRef(p: Int, wr: WireRef) =
+    if(p < 0) pref = wr else auxRefs(p) = wr
+  def getWireRef(p: Int): WireRef =
+    if(p < 0) pref else auxRefs(p)
+  def copy() = new CellN(symId, arity)
+}
+
+object Cells {
+  @inline def mk(symId: Int, arity: Int): Cell = arity match {
+    case 0 => new Cell0(symId)
+    case 1 => new Cell1(symId)
+    case 2 => new Cell2(symId)
+    case _ => new CellN(symId, arity)
+  }
+  def getCell(c: Cell, p: Int): (Cell, Int) = {
+      val w = c.getWireRef(p)
+      if(w == null) null else w.opposite
+    }
+  def allPorts(c: Cell): Iterator[WireRef] = (-1 until c.arity).iterator.map(c.getWireRef)
+  def allCells(c: Cell): Iterator[(WireRef, (Cell, Int))] = (-1 until c.arity).iterator.map { i => (c.getWireRef(i), getCell(c, i)) }
+  def str(c: Cell) = c match {
+    case c: WireCell => s"WireCell(${c.sym}, ${c.symId}, ${c.arity}, ${allPorts(c).map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+    case c => s"Cell(${c.symId}, ${c.arity}, ${allPorts(c).map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+  }
+}
+
+class WireCell(final val sym: Symbol, _symId: Int) extends Cell0(_symId) {
+  override def toString = s"WireCell($sym, $symId, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
 abstract class RuleImpl {
@@ -61,7 +129,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val pc = protoCells(i)
       val sid = short0(pc)
       val ari = short1(pc)
-      cells(i) = new Cell(sid, ari)
+      cells(i) = Cells.mk(sid, ari)
       i += 1
     }
     i = 0
@@ -175,66 +243,15 @@ final class EraseRuleImpl(derivedMainSymId: Int) extends RuleImpl {
   }
 }
 
-// cut Add(y, r) . Z = y . r
-final class AddZSample(sid0: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val cAdd = if(c1.symId == sid0) c1 else c2
-    val y = cAdd.auxRef(0)
-    val r = cAdd.auxRef(1)
-    ptw.connectFreeToFree(y, r)
-  }
-}
-
-// cut Add(y, r) . S(x) = Add(S(y), r) . x
-final class AddSSample(sid0: Int, sid1: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val (cAdd, cS) = if(c1.symId == sid0) (c1, c2) else (c2, c1)
-    val y = cAdd.auxRef(0)
-    val r = cAdd.auxRef(1)
-    val x = cS.auxRef(0)
-    val cAdd2 = new Cell(sid0, 2)
-    val cS2 = new Cell(sid1, 1)
-    ptw.connectAux(y, cS2, 0)
-    ptw.connectAux(r, cAdd2, 1)
-    new WireRef(cS2, -1, cAdd2, 0)
-    ptw.connectPrincipal(x, cAdd2)
-  }
-}
-final class AddSSampleFactory extends RuleImplFactory[RuleImpl] {
-  override def apply(lookup: SymbolIdLookup): RuleImpl =
-    new AddSSample(lookup.getSymbolId("Add"), lookup.getSymbolId("S"))
-}
-
-// cut Add(y, r) . S(x) = Add(S(y), r) . x
-final class AddSSample2(addSid: Int, sSid: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val (cAdd, cS) = if(c1.symId == addSid) (c1, c2) else (c2, c1)
-    val y = cAdd.auxRef(0)
-    val r = cAdd.auxRef(1)
-    val x = cS.auxRef(0)
-    val ax = cAdd.pref
-    ptw.connectAux(y, cS, 0)
-    ptw.connectAux(r, cAdd, 1)
-    ptw.connectAux(ax, cAdd, 0)
-    ptw.connectPrincipal(x, cAdd)
-  }
-}
-
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends BaseInterpreter { self =>
   final val scope: Scope[Cell] = new Scope[Cell] {
-    def createCell(sym: Symbol): Cell = if(sym.isCons) new Cell(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0, 0)
+    def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
-    def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
+    def getConnected(c: Cell, port: Int): (Cell, Int) = Cells.getCell(c, port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
   private[this] final val allSymbols = globals.symbols
@@ -260,9 +277,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
     rules.foreach { cr =>
       val s1 = globals(cr.name1)
       val s2 = globals(cr.name2)
-      val s1id = getSymbolId(s1)
-      val s2id = getSymbolId(s2)
-      val rk = mkRuleKey(s1id, s2id)
+      val rk = mkRuleKey(getSymbolId(s1), getSymbolId(s2))
       def generic = {
         val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
         //g.log()
@@ -270,22 +285,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
         //if(g.maxCells > max) max = g.maxCells
         //new InterpretedRuleImpl(s1id, g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
       }
-      val ri =
-        if(cr.r.derived) {
-          (cr.name1.s, cr.args2.length) match {
-            case ("Dup", 0) => new Dup0RuleImpl(s1id)
-            case ("Dup", 1) => new Dup1RuleImpl(s1id)
-            case ("Dup", 2) => new Dup2RuleImpl(s1id)
-            case ("Erase", _) => new EraseRuleImpl(s1id)
-            case _ => generic
-          }
-        } else (cr.name1.s, cr.name2.s) match {
-          //case ("Add", "Z") => new AddZSample(s1id)
-          //case ("Add", "S") => new AddSSample(s1id, s2id)
-          //case ("Add", "Z") => codeGen.createSample("Add", "Z", Seq("Add"), 1)(lookup)
-          //case ("Add", "S") => codeGen.createSample("Add", "S", Seq("Add", "S"), 2)(lookup)
-          case _ => generic
-        }
+      val ri = generic
+//        if(cr.r.derived) {
+//          (cr.name1.s, cr.args2.length) match {
+//            case ("Dup", 0) => new Dup0RuleImpl(s1id)
+//            case ("Dup", 1) => new Dup1RuleImpl(s1id)
+//            case ("Dup", 2) => new Dup2RuleImpl(s1id)
+//            case ("Erase", _) => new EraseRuleImpl(s1id)
+//            case _ => generic
+//          }
+//        } else generic
       ruleImpls(rk) = ri
       ris.addOne(ri)
     }
@@ -387,6 +396,11 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     wr.cell = t; wr.cellPort = a
     t.setAuxRef(a, wr)
   }
+
+  // specialized for Cell arity + port
+  final def connectAux_1_0(wr: WireRef, t: Cell1): Unit = { wr.cell = t; wr.cellPort = 0; t.aref0 = wr }
+  final def connectAux_2_0(wr: WireRef, t: Cell2): Unit = { wr.cell = t; wr.cellPort = 0; t.aref0 = wr }
+  final def connectAux_2_1(wr: WireRef, t: Cell2): Unit = { wr.cell = t; wr.cellPort = 1; t.aref1 = wr }
 
   final def connectFreeToFree(wr1: WireRef, wr2: WireRef): Unit = {
     val (wt, wp) = wr1.opposite

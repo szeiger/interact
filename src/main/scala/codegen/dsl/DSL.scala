@@ -214,6 +214,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def invokeinterface(method: MethodRef): this.type = methodInsn(INVOKEINTERFACE, method)
 
   def new_(tpe: Owner): this.type = typeInsn(NEW, tpe)
+  def checkcast(tpe: Owner): this.type = typeInsn(CHECKCAST, tpe)
 
   def newInitDup(tpe: Owner, desc: MethodDesc)(f: => Unit): this.type = {
     new_(tpe)
