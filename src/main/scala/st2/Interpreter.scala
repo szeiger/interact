@@ -265,7 +265,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
       val rk = mkRuleKey(s1id, s2id)
       def generic = {
         val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
-        //println(s"---- Rule ${if(s1id <= s2id) cr.name1.show else cr.name2.show} . ${if(s1id <= s2id) cr.name2.show else cr.name1.show}")
         //g.log()
         codeGen.compile(g)(lookup)
         //if(g.maxCells > max) max = g.maxCells

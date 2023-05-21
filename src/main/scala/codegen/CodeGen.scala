@@ -70,6 +70,10 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
 
     // reduce
     {
+      val reuse1 = g.cells.indexOf(g.sym1)
+      val reuse2 = g.cells.indexOf(g.sym2)
+      val needs1 = g.arity1 > 0 || reuse1 >= 0
+      val needs2 = g.arity2 > 0 || reuse2 >= 0
       val m = c.method(Acc.PUBLIC, "reduce", tp.m(wrT, ptwT).V)
       val wr   = m.param("wr", wrT, Acc.FINAL)
       val ptw  = m.param("ptw", ptwT, Acc.FINAL)
@@ -80,15 +84,15 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
       m.aload(cut1).invokevirtual(cell_symId)
       m.aload(m.receiver).getfield(sidFields(0))
       m.ifElseI_== {
-        if(g.arity1 > 0) m.aload(cut1)
-        if(g.arity2 > 0) m.aload(cut2)
+        if(needs1) m.aload(cut1)
+        if(needs2) m.aload(cut2)
       } {
-        if(g.arity1 > 0) m.aload(cut2)
-        if(g.arity2 > 0) m.aload(cut1)
+        if(needs1) m.aload(cut2)
+        if(needs2) m.aload(cut1)
       }
       val l1 = m.newLabel
-      val cRight = if(g.arity2 > 0) m.storeLocal("cRight", cellT, Acc.FINAL, start = l1) else VarIdx.none
-      val cLeft = if(g.arity1 > 0) m.storeLocal("cLeft", cellT, Acc.FINAL, start = l1) else VarIdx.none
+      val cRight = if(needs2) m.storeLocal("cRight", cellT, Acc.FINAL, start = l1) else VarIdx.none
+      val cLeft = if(needs1) m.storeLocal("cLeft", cellT, Acc.FINAL, start = l1) else VarIdx.none
       m.label(l1)
       val lhs = (0 until g.arity1).map { idx =>
         m.aload(cLeft).iconst(idx).invokevirtual(cell_auxRef)
@@ -98,11 +102,14 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
         m.aload(cRight).iconst(idx).invokevirtual(cell_auxRef)
         m.storeLocal(s"rhs$idx", wrT, Acc.FINAL)
       }
-      val cells = g.cells.zipWithIndex.map { case (sym, idx) =>
-        m.newInitDup(new_Cell_II) {
-          m.aload(m.receiver).getfield(sidFields(sids(sym)))
-          m.iconst(sym.arity)
-        }.storeLocal(s"c$idx", cellT, Acc.FINAL)
+      val cells = g.cells.zipWithIndex.map {
+        case (_, idx) if idx == reuse1 => cLeft
+        case (_, idx) if idx == reuse2 => cRight
+        case (sym, idx) =>
+          m.newInitDup(new_Cell_II) {
+            m.aload(m.receiver).getfield(sidFields(sids(sym)))
+            m.iconst(sym.arity)
+          }.storeLocal(s"c$idx", cellT, Acc.FINAL)
       }
       (g.wireConnsDistinct ++ g.internalConns).foreach { case Connection(idx1, idx2) =>
         def connectWW(i1: FreeIdx, i2: FreeIdx): Unit = {
@@ -117,18 +124,13 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           else m.iconst(i2.port).invokevirtual(ptw_connectAux)
         }
         def connectCC(i1: CellIdx, i2: CellIdx): Unit = {
-          def f = {
-            m.aload(cells(i1.idx))
-            m.iconst(i1.port)
-            m.aload(cells(i2.idx))
-            m.iconst(i2.port)
-          }
+          def args = m.aload(cells(i1.idx)).iconst(i1.port).aload(cells(i2.idx)).iconst(i2.port)
           if(i1.port < 0 && i2.port < 0) {
             m.aload(ptw)
-            m.newInitDup(new_WireRef_LILI)(f)
+            m.newInitDup(new_WireRef_LILI)(args)
             m.invokevirtual(ptw_createCut)
           } else {
-            m.newInitConsume(new_WireRef_LILI)(f)
+            m.newInitConsume(new_WireRef_LILI)(args)
           }
         }
         (idx1, idx2) match {
