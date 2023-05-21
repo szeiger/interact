@@ -46,14 +46,14 @@ abstract class RuleImpl {
   def reduce(wr: WireRef, ptw: PerThreadWorker): Unit
 }
 
-final class InterpretedRuleImpl(protoCells: Array[Int], freeWiresPorts1: Array[Int], freeWiresPorts2: Array[Int], connections: Array[Int]) extends RuleImpl {
+final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts1: Array[Int], freeWiresPorts2: Array[Int], connections: Array[Int]) extends RuleImpl {
   private[this] def delay(nanos: Int): Unit = {
     val end = System.nanoTime() + nanos
     while(System.nanoTime() < end) Thread.onSpinWait()
   }
 
   def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val (c1, c2) = if(wr.cell.symId <= wr.oppo.cell.symId) (wr.cell, wr.oppo.cell) else (wr.oppo.cell, wr.cell)
+    val (c1, c2) = if(wr.cell.symId == s1id) (wr.cell, wr.oppo.cell) else (wr.oppo.cell, wr.cell)
     val cells = ptw.tempCells
     //delay(20)
     var i = 0
@@ -234,7 +234,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
-    def getArity(c: Cell): Int = c.arity
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
@@ -265,12 +264,12 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
       val s2id = getSymbolId(s2)
       val rk = mkRuleKey(s1id, s2id)
       def generic = {
-        val g = GenericRuleImpl(scope, cr.r.reduced, globals,
-          if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1)
-        if(g.maxCells > max) max = g.maxCells
+        val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
         //println(s"---- Rule ${if(s1id <= s2id) cr.name1.show else cr.name2.show} . ${if(s1id <= s2id) cr.name2.show else cr.name1.show}")
         //g.log()
-        new InterpretedRuleImpl(g.cells.map { case (s, a) => intOfShorts(getSymbolId(s), a) }, g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
+        codeGen.compile(g)(lookup)
+        //if(g.maxCells > max) max = g.maxCells
+        //new InterpretedRuleImpl(s1id, g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
       }
       val ri =
         if(cr.r.derived) {
@@ -284,14 +283,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
         } else (cr.name1.s, cr.name2.s) match {
           //case ("Add", "Z") => new AddZSample(s1id)
           //case ("Add", "S") => new AddSSample(s1id, s2id)
-          case ("Add", "Z") => codeGen.createSample("Add", "Z", Seq("Add"), 1)(lookup)
-          case ("Add", "S") =>
-            val g = GenericRuleImpl(scope, cr.r.reduced, globals,
-              if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1)
-            if(g.maxCells > max) max = g.maxCells
-            println(s"---- Rule ${if(s1id <= s2id) cr.name1.show else cr.name2.show} . ${if(s1id <= s2id) cr.name2.show else cr.name1.show}")
-            g.log()
-            codeGen.createSample("Add", "S", Seq("Add", "S"), 2)(lookup)
+          //case ("Add", "Z") => codeGen.createSample("Add", "Z", Seq("Add"), 1)(lookup)
+          //case ("Add", "S") => codeGen.createSample("Add", "S", Seq("Add", "S"), 2)(lookup)
           case _ => generic
         }
       ruleImpls(rk) = ri

@@ -21,6 +21,7 @@ class Symbol(val id: AST.Ident) {
   var refs = 0
   var cons: AST.Cons = null
   def isCons = cons != null
+  def arity = if(cons != null) cons.arity else 0
   override def toString = id.show
 }
 

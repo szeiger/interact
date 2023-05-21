@@ -253,7 +253,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
-    def getArity(c: Cell): Int = c.arity
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
@@ -292,10 +291,11 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       val rk = mkRuleKey(s1id, s2id)
       def generic = {
         val g = GenericRuleImpl(scope, cr.r.reduced, globals,
+          if(s1id <= s2id) s1 else s2, if(s1id <= s2id) s2 else s1,
           if(s1id <= s2id) cr.args1 else cr.args2, if(s1id <= s2id) cr.args2 else cr.args1)
         if(g.maxCells > maxC) maxC = g.maxCells
         if(g.maxWires > maxW) maxW = g.maxWires
-        new InterpretedRuleImpl(g.cells.map { case (s, a) => intOfShorts(getSymbolId(s), a) }, g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
+        new InterpretedRuleImpl(g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
       }
       val ri =
         if(cr.r.derived) {

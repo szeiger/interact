@@ -7,6 +7,9 @@ import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, InsnNode, IntIns
 import scala.collection.mutable.ArrayBuffer
 
 final class VarIdx(val idx: Int) extends AnyVal
+object VarIdx {
+  def none: VarIdx = new VarIdx(-1)
+}
 
 case class MethodRef(owner: Owner, name: String, desc: MethodDesc)
 
@@ -14,8 +17,8 @@ case class ConstructorRef(tpe: Owner, desc: MethodDesc)
 
 case class FieldRef(owner: Owner, name: String, desc: ValDesc)
 
-class ClassDSL(access: Int, val name: String, val superTp: ClassOwner = ClassOwner[Object],
-  interfaces: Array[String] = null, sourceFile: String = null) {
+class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwner[Object],
+  interfaces: Array[String] = null, sourceFile: String = null, version: Int = V1_8) {
   private[this] val fields = ArrayBuffer.empty[Field]
   private[this] val methods = ArrayBuffer.empty[MethodDSL]
 
@@ -23,63 +26,59 @@ class ClassDSL(access: Int, val name: String, val superTp: ClassOwner = ClassOwn
 
   def javaName = name.replace('/', '.')
 
-  private[this] class Field(val access: Int, val name: String, val desc: ValDesc, val value: Any)
+  private[this] class Field(val access: Acc, val name: String, val desc: ValDesc, val value: Any)
 
   def accept(v: ClassVisitor): Unit = {
-    v.visit(V1_8, ACC_SUPER | access, name, null, superTp.className, interfaces)
+    v.visit(version, ACC_SUPER | access.acc, name, null, superTp.className, interfaces)
     if(sourceFile != null) v.visitSource(sourceFile, null)
-    fields.foreach(f => v.visitField(f.access, f.name, f.desc.desc, null, f.value))
+    fields.foreach(f => v.visitField(f.access.acc, f.name, f.desc.desc, null, f.value))
     methods.foreach(_.accept(v, this))
     v.visitEnd()
   }
 
-  def field(access: Int, name: String, desc: ValDesc, value: Any = null): FieldRef = {
+  def field(access: Acc, name: String, desc: ValDesc, value: Any = null): FieldRef = {
     val f = new Field(access, name, desc, value)
     fields.addOne(f)
     FieldRef(thisTp, name, desc)
   }
 
-  def method(access: Int, name: String, desc: MethodDesc): MethodDSL = {
+  def method(access: Acc, name: String, desc: MethodDesc): MethodDSL = {
     val m = new MethodDSL(access, name, desc)
     methods.addOne(m)
     m
   }
 
-  def emptyNoArgsConstructor(access: Int): MethodDSL = {
-    val m = method(ACC_PUBLIC, "<init>", Desc.m().V)
+  def emptyNoArgsConstructor(access: Acc): MethodDSL = {
+    val m = method(Acc.PUBLIC, "<init>", Desc.m().V)
     m.aload(m.receiver).invokespecial(superTp, "<init>", Desc.m().V)
     m.return_
   }
 }
 
-class MethodDSL(access: Int, name: String, desc: MethodDesc) {
+class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   private[this] val params = ArrayBuffer.empty[Local]
   private[this] val locals = ArrayBuffer.empty[Local]
   private[this] val code = ArrayBuffer.empty[AbstractInsnNode]
-  private[this] class Local(val name: String, val desc: ValDesc, val access: Int, val idx: Int, var start: Label, val end: Label) {
+  private[this] class Local(val name: String, val desc: ValDesc, val access: Acc, val idx: Int, var start: Label, val end: Label) {
     var startPos: Int = -1
+    override def toString: String = s"Label($name, $desc, $idx, $startPos)"
   }
-  private[this] def isStatic = (access & ACC_STATIC) != 0
+  private[this] def isStatic = access has Acc.STATIC
   private[this] val argsCount = Type.getArgumentsAndReturnSizes(desc.desc) >> 2
 
   val start, end = new Label
   def receiver: VarIdx =
     if(isStatic) throw new IllegalArgumentException("no receiver in static methods") else new VarIdx(0)
 
-  def param(name: String, desc: ValDesc, access: Int = 0): VarIdx = {
+  def param(name: String, desc: ValDesc, access: Acc = Acc.none): VarIdx = {
     val l = new Local(name, desc, access, params.length + (if(isStatic) 0 else 1), start, end)
     params.addOne(l)
     new VarIdx(l.idx)
   }
 
-  def local(name: String, desc: ValDesc, access: Int = 0, start: Label = null, end: Label = this.end): VarIdx = {
-    val idx = locals.length + argsCount - (if(isStatic) 1 else 0)
-    val l = new Local(name, desc, access, idx, start, end)
-    locals.addOne(l)
-    new VarIdx(idx)
-  }
-  def storeLocal(name: String, desc: ValDesc, access: Int = 0, start: Label = null, end: Label = this.end): VarIdx = {
-    val v = local(name, desc, access, start, end)
+  def newLabel: Label = new Label
+
+  private[this] def store(v: VarIdx, desc: ValDesc): VarIdx = {
     desc.desc.charAt(0) match {
       case 'L' => astore(v)
       case 'I' => istore(v)
@@ -87,23 +86,32 @@ class MethodDSL(access: Int, name: String, desc: MethodDesc) {
     }
     v
   }
-
+  def local(name: String, desc: ValDesc, access: Acc = Acc.none, start: Label = null, end: Label = this.end): VarIdx = {
+    val idx = locals.length + argsCount - (if(isStatic) 1 else 0)
+    val l = new Local(name, desc, access, idx, start, end)
+    locals.addOne(l)
+    new VarIdx(idx)
+  }
+  def storeLocal(name: String, desc: ValDesc, access: Acc = Acc.none, start: Label = null, end: Label = this.end): VarIdx =
+    store(local(name, desc, access, start, end), desc)
   def anonLocal: VarIdx = local(null, null)
+  def storeAnonLocal(desc: ValDesc): VarIdx = storeLocal(null, desc)
 
   def accept(v: ClassVisitor, cls: ClassDSL): Unit = {
-    val mv = v.visitMethod(access, name, desc.desc, null, null)
+    val mv = v.visitMethod(access.acc, name, desc.desc, null, null)
     assert(params.length == argsCount - 1)
-    params.foreach(p => mv.visitParameter(p.name, p.access))
+    params.foreach(p => mv.visitParameter(p.name, p.access.acc))
     mv.visitCode()
     mv.visitLabel(start)
     code.zipWithIndex.foreach { case (in, idx) =>
       in.accept(mv)
       in match {
-        case in: VarInsnNode =>
+        case in: VarInsnNode if in.getOpcode >= ISTORE && in.getOpcode <= SASTORE =>
           val v = in.`var`
           if(v >= argsCount && v - argsCount < locals.length) {
             val l = locals(v-argsCount)
-            if(l.startPos == idx+1) {
+            //println(s"l: $l; idx: $idx")
+            if(l.start == null && l.name != null && l.startPos == idx+1) {
               val ln = code(idx+1) match {
                 case ln: LabelNode => ln
                 case _ => val ln = new LabelNode; ln.accept(mv); ln
@@ -218,6 +226,7 @@ class MethodDSL(access: Int, name: String, desc: MethodDesc) {
     f
     invokespecial(tpe, "<init>", desc)
   }
+  def invokeInit(cons: ConstructorRef): this.type = invokespecial(cons.tpe, "<init>", cons.desc)
   def newInitDup(cons: ConstructorRef)(f: => Unit): this.type = newInitDup(cons.tpe, cons.desc)(f)
   def newInitConsume(cons: ConstructorRef)(f: => Unit): this.type = newInitConsume(cons.tpe, cons.desc)(f)
 }

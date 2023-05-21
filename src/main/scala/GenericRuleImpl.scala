@@ -10,9 +10,14 @@ sealed abstract class Idx { def str: String }
 case class CellIdx(idx: Int, port: Int) extends Idx { def str = s"c$idx:$port" }
 case class FreeIdx(rhs: Boolean, idx: Int) extends Idx { def str = if(rhs) s"rhs:$idx" else s"lhs:$idx" }
 
-final class GenericRuleImpl(val cells: Array[(Symbol, Int)], val connectionsPacked: Array[Int],
-  val arity1: Int, val arity2: Int, val freeWiresPacked: Array[Int]) {
+final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
+  val cells: Array[Symbol], val connectionsPacked: Array[Int],
+  val freeWiresPacked: Array[Int]) {
 
+  def arity1: Int = sym1.arity
+  def arity2: Int = sym2.arity
+  def maxCells: Int = cells.length
+  def maxWires: Int = connectionsPacked.length + freeWiresPacked.length
   lazy val (freeWiresPacked1, freWiresPacked2) = freeWiresPacked.splitAt(arity1)
 
   private[this] def mkFreeIdx(idx: Int): FreeIdx = {
@@ -30,26 +35,31 @@ final class GenericRuleImpl(val cells: Array[(Symbol, Int)], val connectionsPack
     Connection(mkFreeIdx(idx), mkIdx(short0(fw), short1(fw)))
   }
 
-  def maxCells: Int = cells.length
-  def maxWires: Int = connectionsPacked.length + freeWiresPacked.length
+  def wireConnsDistinct: Iterator[Connection] = wireConns.filter {
+    case Connection(FreeIdx(r1, i1), FreeIdx(r2, i2)) =>
+      if(r1 == r2) i1 < i2 else r1 < r2
+    case _ => true
+  }
 
   def log(): Unit = {
+    println(s"Rule ${sym1.id.s} ${sym2.id.s}")
     println("  Cells:")
-    cells.zipWithIndex.foreach { case ((sym, arity), idx) => println(s"    [$idx] $sym $arity") }
+    cells.zipWithIndex.foreach { case (sym, idx) => println(s"    [$idx] $sym ${sym.arity}") }
     println("  Connections:")
-    (internalConns ++ wireConns).foreach { c => println(s"    ${c.str}") }
+    (internalConns ++ wireConnsDistinct).foreach { c => println(s"    ${c.str}") }
   }
 }
 
 object GenericRuleImpl {
-  def apply[C >: Null <: AnyRef](scope: Scope[C], reduced: Seq[AST.Cut], globals: Symbols, args1: Seq[AST.Ident], args2: Seq[AST.Ident]): GenericRuleImpl = {
+  def apply[C >: Null <: AnyRef](scope: Scope[C], reduced: Seq[AST.Cut], globals: Symbols, sym1: Symbol, sym2: Symbol,
+    args1: Seq[AST.Ident], args2: Seq[AST.Ident]): GenericRuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val sc = new scope.Delegate
     sc.add(reduced, syms)
     //sc.validate()
     val cells = sc.reachableCells.filter(c => !sc.freeWires.contains(c)).toIndexedSeq
-    val protoCells = cells.iterator.map { c => (scope.getSymbol(c), scope.getArity(c)) }.toArray
+    val protoCells = cells.iterator.map(scope.getSymbol).toArray
     val freeLookup = sc.freeWires.iterator.map { w => (scope.getSymbol(w), w) }.toMap
     val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toIndexedSeq
     val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
@@ -62,6 +72,6 @@ object GenericRuleImpl {
       }
     }
     val fwp = wires.iterator.map { w => val (c, p) = scope.getConnected(w, -1); checkedIntOfShorts(lookup(c), p) }.toArray
-    new GenericRuleImpl(protoCells, conns.toArray, args1.length, args2.length, fwp)
+    new GenericRuleImpl(sym1, sym2, protoCells, conns.toArray, fwp)
   }
 }
