@@ -13,6 +13,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell$i"))
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cell_symId = MethodRef(cellT, "symId", tp.m().I)
+  private val cell_symIdSetter = MethodRef(cellT, "symId_$eq", tp.m(tp.I).V)
   private val cell_auxRef = MethodRef(cellT, "auxRef", tp.m(tp.I)(wrT))
   private val cell_pref = MethodRef(cellT, "pref", tp.m()(wrT))
   private val cell_aref = (0 to MAX_SPEC_CELL).map { a =>
@@ -52,6 +53,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
     val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, implClassName, riT)
     val sidFields = for(i <- 0 until sidCount) yield c.field(Acc.PRIVATE | Acc.FINAL, s"sid$i", tp.I)
     val constrDesc = tp.m(Seq.fill(sidCount)(tp.I): _*).V
+    var cellAllocations, wireAllocations = 0
 
     // init
     {
@@ -66,21 +68,50 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
 
     // reduce
     {
-      val reuse1 = g.cells.indexOf(g.sym1)
-      val reuse2 = g.cells.indexOf(g.sym2)
       val internalConns = g.internalConns.toArray
-      val reuseCandidates = internalConns.filter {
-        case Connection(i1: CellIdx, i2: CellIdx) => (i1.idx == reuse1 && i2.idx == reuse2) || (i1.idx == reuse2 && i2.idx == reuse1)
-        case _ => false
+      val (reuse1, reuse2, fullReuseConn) = {
+        val matchingArity1 = g.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }.map(_._2).toSet
+        val matchingArity2 = g.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }.map(_._2).toSet
+        val matchingSym1 = matchingArity1.filter(i => g.cells(i) == g.sym1)
+        val matchingSym2 = matchingArity2.filter(i => g.cells(i) == g.sym2)
+        val matchingSyms = matchingSym1 ++ matchingSym2
+        // Find principal connection with both cut cells to reuse
+        val fullReuseConn = internalConns.find {
+          case Connection(i1: CellIdx, i2: CellIdx) =>
+            matchingSyms.contains(i1.idx) && matchingSyms.contains(i2.idx) && i1 != i2 && (i1.port == -1 || i2.port == -1)
+          case _ => false
+        }.orNull
+        val(reuse1, reuse2) = if(fullReuseConn != null) {
+          val Connection(CellIdx(i1, _), CellIdx(i2, _)) = fullReuseConn
+          if(g.cells(i1) == g.sym1) (i1, i2) else (i2, i1)
+        } else {
+          // Find individual cells for reuse (with potential relabeling)
+          val sameA = g.sym1.arity == g.sym2.arity
+          var matchingArity1 = g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }
+          var matchingArity2 = g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }
+          // Find full Symbol matches first
+          var match1 = matchingArity1.find { case (sym, _) => sym == g.sym1 }.orNull
+          if(match1 != null && sameA) matchingArity2 = matchingArity2.filter(_._2 != match1._2)
+          var match2 = matchingArity2.find { case (sym, _) => sym == g.sym2 }.orNull
+          if(match2 != null && sameA) matchingArity1 = matchingArity1.filter(_._2 != match2._2)
+          // Find arity matches
+          val full1 = match1
+          val full2 = match2
+          if(match1 == null) {
+            match1 = matchingArity1.headOption.orNull
+            if(match1 != null && sameA) matchingArity2 = matchingArity2.filter(_._2 != match1._2)
+          }
+          if(match2 == null) match2 = matchingArity2.headOption.orNull
+          (if(match1 != null) match1._2 else -1, if(match2 != null) match2._2 else -1)
+        }
+        //g.log()
+        //println(s"reuse1: $reuse1, reuse2: $reuse2, fullReuse: $fullReuseConn")
+        (reuse1, reuse2, fullReuseConn)
       }
-      val primaryReuse = reuseCandidates.find { case Connection(i1: CellIdx, i2: CellIdx) =>
-        i1.port == -1 || i2.port == -1
-      }.getOrElse(null)
-      val needs1 = g.arity1 > 0 || reuse1 >= 0 || primaryReuse == null
+
+      val needs1 = g.arity1 > 0 || reuse1 >= 0 || fullReuseConn == null // reuse lhs wr when not reusing full conn
       val needs2 = g.arity2 > 0 || reuse2 >= 0
-      //println(s"reuse1: $reuse1, reuse2: $reuse2, primaryReuse: $primaryReuse")
-      //if(reuseCandidates.nonEmpty && primaryReuse == null)
-      //  println("no primary reuse")
+
       val m = c.method(Acc.PUBLIC, "reduce", tp.m(wrT, ptwT).V)
       val wr   = m.param("wr", wrT, Acc.FINAL)
       val ptw  = m.param("ptw", ptwT, Acc.FINAL)
@@ -129,12 +160,22 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
         getAuxRef(g.arity2, idx)
         m.storeLocal(s"rhs$idx", wrT, Acc.FINAL)
       }
-      var reuseWire = if(primaryReuse != null) VarIdx.none else m.aload(cLeft).invokevirtual(cell_pref).storeAnonLocal(wrT)
+      var reuseWire = if(fullReuseConn != null) VarIdx.none else m.aload(cLeft).invokevirtual(cell_pref).storeAnonLocal(wrT)
 
+      def updateSym(cell: VarIdx, sym: Symbol): Unit = {
+        m.aload(cell)
+        m.aload(m.receiver).getfield(sidFields(sids(sym)))
+        m.invokevirtual(cell_symIdSetter)
+      }
       val cells = g.cells.zipWithIndex.map {
-        case (_, idx) if idx == reuse1 => cLeft
-        case (_, idx) if idx == reuse2 => cRight
+        case (sym, idx) if idx == reuse1 =>
+          if(sym != g.sym1) updateSym(cLeft, sym)
+          cLeft
+        case (sym, idx) if idx == reuse2 =>
+          if(sym != g.sym2) updateSym(cRight, sym)
+          cRight
         case (sym, idx) =>
+          cellAllocations += 1
           if(sym.arity < new_CellSpec_I.length) {
             m.newInitDup(new_CellSpec_I(sym.arity)) {
               m.aload(m.receiver).getfield(sidFields(sids(sym)))
@@ -162,6 +203,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           def args = m.aload(cells(i1.idx)).iconst(i1.port).aload(cells(i2.idx)).iconst(i2.port)
           if(i1.port < 0 && i2.port < 0) {
             m.aload(ptw)
+            wireAllocations += 1
             m.newInitDup(new_WireRef_LILI)(args)
             m.invokevirtual(ptw_createCut)
           } else {
@@ -170,7 +212,10 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
               args
               m.invokevirtual(wr_reconnect)
               reuseWire = VarIdx.none
-            } else m.newInitConsume(new_WireRef_LILI)(args)
+            } else {
+              wireAllocations += 1
+              m.newInitConsume(new_WireRef_LILI)(args)
+            }
           }
         }
         def reconnectPrimary(i1: CellIdx, i2: CellIdx): Unit = {
@@ -187,13 +232,15 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           case (i1: FreeIdx, i2: FreeIdx) => connectWW(i1, i2)
           case (i1: FreeIdx, i2: CellIdx) => connectWC(i1, i2)
           case (i1: CellIdx, i2: FreeIdx) => connectWC(i2, i1)
-          case (i1: CellIdx, i2: CellIdx) if conn eq primaryReuse =>
+          case (i1: CellIdx, i2: CellIdx) if conn eq fullReuseConn =>
             if(i1.port == -1) reconnectPrimary(i1, i2)
             else reconnectPrimary(i2, i1)
           case (i1: CellIdx, i2: CellIdx) => connectCC(i2, i1)
         }
       }
       m.return_
+      //g.log()
+      //println(s"Cell allocations: $cellAllocations, wire allocations: $wireAllocations")
     }
     c
   }

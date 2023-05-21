@@ -29,7 +29,7 @@ final class WireRef(final var cell: Cell, final var cellPort: Int, _oppo: WireRe
   }
 }
 
-abstract class Cell(final val symId: Int) {
+abstract class Cell(final var symId: Int) {
   final var pref: WireRef = _
 
   def arity: Int
