@@ -11,22 +11,10 @@ import scala.annotation.{switch, tailrec}
 
 final class WireRef(final var cell: Cell, final var cellPort: Int, _oppo: WireRef, _oppoCell: Cell, _oppoPort: Int) {
   def this(_c1: Cell, _p1: Int, _c2: Cell, _p2: Int) = this(_c1, _p1, null, _c2, _p2)
-
   if(cell != null) cell.setWireRef(cellPort, this)
-
   final val oppo: WireRef = if(_oppo != null) _oppo else new WireRef(_oppoCell, _oppoPort, this, null, 0)
-
   @inline def opposite: (Cell, Int) = (oppo.cell, oppo.cellPort)
-
-  def reconnect(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
-    c1.setWireRef(p1, this)
-    this.cell = c1
-    this.cellPort = p1
-    val o = oppo
-    c2.setWireRef(p2, o)
-    o.cell = c2
-    o.cellPort = p2
-  }
+  override def toString: String = s"$cell:$cellPort <-> ${oppo.cell}:${oppo.cellPort}"
 }
 
 abstract class Cell(final var symId: Int) {

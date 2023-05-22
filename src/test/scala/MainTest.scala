@@ -47,7 +47,7 @@ object MainTest {
   def interpreters =
     Seq[(Model => BaseInterpreter, String)](
       (_.createST2Interpreter(compile = false, collectStats = true), "st2.i"),
-      (_.createST2Interpreter(compile = true, collectStats = true), "st2.c"),
+      (_.createST2Interpreter(compile = true, collectStats = true, debugLog = false, debugBytecode = false), "st2.c"),
       (_.createMTInterpreter(0), "mt0"),
       (_.createMTInterpreter(1), "mt1"),
       (_.createMTInterpreter(8), "mt8"),

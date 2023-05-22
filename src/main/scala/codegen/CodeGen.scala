@@ -21,7 +21,6 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   }
   private val wr_cell = wrT.method("cell", tp.m()(cellT))
   private val wr_oppo = wrT.method("oppo", tp.m()(wrT))
-  private val wr_reconnect = wrT.method("reconnect", tp.m(cellT, tp.I, cellT, tp.I).V)
   private val ptw_connectFreeToFree = ptwT.method("connectFreeToFree", tp.m(wrT, wrT).V)
   private val ptw_connectAux = ptwT.method("connectAux", tp.m(wrT, cellT, tp.I).V)
   private val ptw_connectAuxSpec = (0 to MAX_SPEC_CELL).map { a =>
@@ -212,9 +211,13 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
             m.invokevirtual(ptw_createCut)
           } else {
             if(reuseWire != VarIdx.none) {
-              m.aload(reuseWire)
-              args
-              m.invokevirtual(wr_reconnect)
+              //TODO: Fix for mt
+              // If one is principal, connect it last to avoid detecting a wrong cut:
+              val (c1, c2) = if(i1.port > i2.port) (i1, i2) else (i2, i1)
+              m.aload(ptw).aload(reuseWire).aload(cells(c1.idx))
+              ptwConnectLL(g.cells(c1.idx).arity, c1.port)
+              m.aload(ptw).aload(reuseWire).invokevirtual(wr_oppo).aload(cells(c2.idx))
+              ptwConnectLL(g.cells(c2.idx).arity, c2.port)
               reuseWire = VarIdx.none
             } else {
               wireAllocations += 1
@@ -239,7 +242,7 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           case (i1: CellIdx, i2: CellIdx) if conn eq fullReuseConn =>
             if(i1.port == -1) reconnectPrimary(i1, i2)
             else reconnectPrimary(i2, i1)
-          case (i1: CellIdx, i2: CellIdx) => connectCC(i2, i1)
+          case (i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
         }
       }
       m.return_

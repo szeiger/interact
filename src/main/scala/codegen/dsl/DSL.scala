@@ -2,7 +2,7 @@ package de.szeiger.interact.codegen.dsl
 
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
-import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -148,7 +148,8 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     methodInsn(opcode, method.owner, method.name, method.desc)
   private[this] def typeInsn(opcode: Int, tpe: Owner): this.type = insn(new TypeInsnNode(opcode, tpe.className))
 
-  def label(l: Label) = code.addOne(new LabelNode(l))
+  def label(l: Label): this.type = insn(new LabelNode(l))
+  def line(lineNumber: Int, l: Label = null): this.type = insn(new LineNumberNode(lineNumber, new LabelNode(l)))
 
   def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
 
@@ -161,9 +162,9 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def areturn : this.type = insn(ARETURN)
   def ireturn : this.type = insn(IRETURN)
   def dup: this.type = insn(DUP)
-  def pop: this.type = insn(POP)
   def dup_x1: this.type = insn(DUP_X1)
   def dup_x2: this.type = insn(DUP_X2)
+  def pop: this.type = insn(POP)
   def swap: this.type = insn(SWAP)
   def iconst(i: Int): this.type = i match {
     case -1 => insn(ICONST_M1)
