@@ -3,7 +3,6 @@ package de.szeiger.interact.codegen.dsl
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
 import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
-import org.objectweb.asm.util.Printer
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -11,12 +10,6 @@ final class VarIdx(val idx: Int) extends AnyVal
 object VarIdx {
   def none: VarIdx = new VarIdx(-1)
 }
-
-case class MethodRef(owner: Owner, name: String, desc: MethodDesc)
-
-case class ConstructorRef(tpe: Owner, desc: MethodDesc)
-
-case class FieldRef(owner: Owner, name: String, desc: ValDesc)
 
 class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwner[Object],
   interfaces: Array[String] = null, sourceFile: String = null, version: Int = V1_8) {
@@ -166,6 +159,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
 
   def return_ : this.type = insn(RETURN)
   def areturn : this.type = insn(ARETURN)
+  def ireturn : this.type = insn(IRETURN)
   def dup: this.type = insn(DUP)
   def pop: this.type = insn(POP)
   def dup_x1: this.type = insn(DUP_X1)

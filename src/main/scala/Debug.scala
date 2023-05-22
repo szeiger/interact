@@ -6,7 +6,7 @@ import scala.annotation.tailrec
 object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Model(statements)
-  val inter = model.createST2Interpreter
+  val inter = model.createST2Interpreter()
 
   var step = 0
   var cuts = inter.scope.getCutLogs.toIndexedSeq

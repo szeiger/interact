@@ -21,14 +21,14 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
     def isFreeWire(c: Cell): Boolean = self.isFreeWire(c)
   }
 
-  def symbolName(c: Cell): String = getSymbol(c).id.s
+  def symbolName(c: Cell): String = getSymbol(c).id
   def getArity(c: Cell): Int = getSymbol(c).arity
   def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
 
   private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
     def f(e: AST.Expr): Unit = e match {
       case i: AST.Ident =>
-        val s = symbols.getOrAdd(i)
+        val s = symbols.getOrAdd(i.s)
         if(!s.isCons) s.refs += 1
       case AST.Ap(i, es) => f(i); es.foreach(f)
     }
@@ -57,9 +57,9 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
     def create(e: AST.Expr, cCell: Cell, cPort: Int): (AnyRef, Int) = {
       val (wr: AnyRef, pr: Int) = e match {
         case i: AST.Ident =>
-          val s = syms.getOrAdd(i)
+          val s = syms.getOrAdd(i.s)
           if(s.isCons) {
-            val s = syms.getOrAdd(i)
+            val s = syms.getOrAdd(i.s)
             val c = createCell(s)
             (c, -1)
           } else if(s.refs == 1) {
@@ -76,7 +76,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
             }
           } else sys.error(s"Non-linear use of ${i.show} in data")
         case AST.Ap(i, args) =>
-          val s = syms.getOrAdd(i)
+          val s = syms.getOrAdd(i.s)
           assert(s.isCons)
           val c = createCell(s)
           args.zipWithIndex.foreach { case (a, p) => toCreate.enqueue((a, c, p)) }

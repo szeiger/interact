@@ -122,6 +122,8 @@ class WireCell(final val sym: Symbol, _symId: Int) extends Cell0(_symId) {
 
 abstract class RuleImpl {
   def reduce(wr: WireRef, ptw: PerThreadWorker): Unit
+  def cellAllocationCount: Int
+  def wireAllocationCount: Int
 }
 
 final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts1: Array[Int], freeWiresPorts2: Array[Int], connections: Array[Int]) extends RuleImpl {
@@ -184,76 +186,13 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       i += 1
     }
   }
+
+  def cellAllocationCount: Int = protoCells.length
+  def wireAllocationCount: Int = connections.length
 }
 
-final class Dup0RuleImpl(derivedMainSymId: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val (cDup, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRef(0)
-    val wrB = cDup.auxRef(1)
-    val cCons2 = cCons.copy()
-    ptw.connectPrincipal(wrA, cCons)
-    ptw.connectPrincipal(wrB, cCons2)
-  }
-}
-
-final class Dup1RuleImpl(derivedMainSymId: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val (cDup, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRef(0)
-    val wrB = cDup.auxRef(1)
-    val wrAux1 = cCons.auxRef(0)
-    val cCons2 = cCons.copy()
-    new WireRef(cCons, 0, cDup, 0)
-    new WireRef(cCons2, 0, cDup, 1)
-    ptw.connectPrincipal(wrA, cCons)
-    ptw.connectPrincipal(wrB, cCons2)
-    ptw.connectPrincipal(wrAux1, cDup)
-  }
-}
-
-final class Dup2RuleImpl(derivedMainSymId: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val (cDup, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
-    val wrA = cDup.auxRef(0)
-    val wrB = cDup.auxRef(1)
-    val wrAux1 = cCons.auxRef(0)
-    val wrAux2 = cCons.auxRef(1)
-    val cCons2 = cCons.copy()
-    new WireRef(cCons, 0, cDup, 0)
-    new WireRef(cCons2, 0, cDup, 1)
-    val cDup2 = cDup.copy()
-    new WireRef(cCons, 1, cDup2, 0)
-    new WireRef(cCons2, 1, cDup2, 1)
-    ptw.connectPrincipal(wrA, cCons)
-    ptw.connectPrincipal(wrB, cCons2)
-    ptw.connectPrincipal(wrAux1, cDup)
-    ptw.connectPrincipal(wrAux2, cDup2)
-  }
-}
-
-final class EraseRuleImpl(derivedMainSymId: Int) extends RuleImpl {
-  def reduce(wr: WireRef, ptw: PerThreadWorker): Unit = {
-    val c1 = wr.cell
-    val c2 = wr.oppo.cell
-    val (cErase, cCons) = if(c1.symId == derivedMainSymId) (c1, c2) else (c2, c1)
-    val arity = cCons.arity
-    var i = 0
-    while(i < arity) {
-      val wr = cCons.auxRef(i)
-      ptw.connectPrincipal(wr, cErase.copy())
-      i += 1
-    }
-  }
-}
-
-final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
+  debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter { self =>
   final val scope: Scope[Cell] = new Scope[Cell] {
     def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
@@ -268,7 +207,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
-  var totalSteps = 0
+
+  var totalSteps, cellAllocations, wireAllocations = 0
+
+  def resetStats(): Unit = {
+    totalSteps = 0
+    cellAllocations = 0
+    wireAllocations = 0
+  }
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
@@ -278,36 +224,30 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
   def createRuleImpls(): Int = {
-    val debugLog = false
-    val cl = new LocalClassLoader(debugLog)
-    val lookup = new SymbolIdLookup {
-      override def getSymbolId(name: String): Int = self.getSymbolId(globals(new AST.Ident(name)))
+    val (cl, lookup, codeGen) = {
+      if(compile) {
+        val cl = new LocalClassLoader(debugBytecode)
+        val lookup = new SymbolIdLookup {
+          override def getSymbolId(name: String): Int = self.getSymbolId(globals(name))
+        }
+        val codeGen = new CodeGen[RuleImpl]("de/szeiger/interact/st2", "de/szeiger/interact/st2/gen")
+        (cl, lookup, codeGen)
+      } else (null, null, null)
     }
-    val codeGen = new CodeGen[RuleImpl]("de/szeiger/interact/st2", "de/szeiger/interact/st2/gen")
     val ris = new ArrayBuffer[RuleImpl]()
     var max = 0
     rules.foreach { cr =>
       val s1 = globals(cr.name1)
       val s2 = globals(cr.name2)
-      val rk = mkRuleKey(getSymbolId(s1), getSymbolId(s2))
-      def generic = {
-        val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
-        if(debugLog) g.log()
-        codeGen.compile(g, cl)(lookup)
-        //if(g.maxCells > max) max = g.maxCells
-        //new InterpretedRuleImpl(s1id, g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
-      }
-      val ri = generic
-//        if(cr.r.derived) {
-//          (cr.name1.s, cr.args2.length) match {
-//            case ("Dup", 0) => new Dup0RuleImpl(s1id)
-//            case ("Dup", 1) => new Dup1RuleImpl(s1id)
-//            case ("Dup", 2) => new Dup2RuleImpl(s1id)
-//            case ("Erase", _) => new EraseRuleImpl(s1id)
-//            case _ => generic
-//          }
-//        } else generic
-      ruleImpls(rk) = ri
+      val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
+      if(debugLog) g.log()
+      val ri =
+        if(compile) codeGen.compile(g, cl)(lookup)
+        else {
+          if(g.maxCells > max) max = g.maxCells
+          new InterpretedRuleImpl(getSymbolId(s1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
+        }
+      ruleImpls(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
       ris.addOne(ri)
     }
     max
@@ -346,7 +286,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
   }
 
   def reduce(): Int = {
-    totalSteps = 0
+    resetStats()
     val initial = detectInitialCuts
     val w = new PerThreadWorker(this) {
       protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne(wr, ri)
@@ -356,7 +296,10 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule]) extends 
       w.setNext(wr, ri)
       w.processAll()
     }
-    w.resetSteps
+    val steps = w.resetSteps
+    if(collectStats)
+      println(s"Total steps: $steps, allocated cells: $cellAllocations, allocated wires: $wireAllocations")
+    steps
   }
 }
 
@@ -388,6 +331,7 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
   private[this] final var nextCut: WireRef = _
   private[this] final var nextRule: RuleImpl = _
   private[this] final var steps = 0
+  private[this] final val collectStats = inter.collectStats
 
   final def resetSteps: Int = { val i = steps; steps = 0; i }
 
@@ -437,12 +381,16 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     val ri = nextRule
     nextCut = null
     ri.reduce(c, this)
+    if(collectStats) {
+      steps += 1
+      inter.cellAllocations += ri.cellAllocationCount
+      inter.wireAllocations += ri.wireAllocationCount
+    }
   }
 
   @tailrec
   final def processAll(): Unit = {
     processNext()
-    steps += 1
     if(nextCut != null) processAll()
   }
 }

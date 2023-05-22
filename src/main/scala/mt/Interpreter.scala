@@ -299,7 +299,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       }
       val ri =
         if(cr.r.derived) {
-          (cr.name1.s, cr.args2.length) match {
+          (cr.name1, cr.args2.length) match {
             case ("Dup", 0) => new Dup0RuleImpl(s1id)
             case ("Dup", 1) => new Dup1RuleImpl(s1id)
             case ("Dup", 2) => new Dup2RuleImpl(s1id)

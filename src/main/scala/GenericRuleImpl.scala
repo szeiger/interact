@@ -42,7 +42,7 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
   }
 
   def log(): Unit = {
-    println(s"Rule ${sym1.id.s} ${sym2.id.s}")
+    println(s"Rule ${sym1.id} ${sym2.id}")
     println("  Cells:")
     cells.zipWithIndex.foreach { case (sym, idx) => println(s"    [$idx] $sym ${sym.arity}") }
     println("  Connections:")
@@ -52,7 +52,7 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
 
 object GenericRuleImpl {
   def apply[C >: Null <: AnyRef](scope: Scope[C], reduced: Seq[AST.Cut], globals: Symbols, sym1: Symbol, sym2: Symbol,
-    args1: Seq[AST.Ident], args2: Seq[AST.Ident]): GenericRuleImpl = {
+    args1: Seq[String], args2: Seq[String]): GenericRuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val sc = new scope.Delegate

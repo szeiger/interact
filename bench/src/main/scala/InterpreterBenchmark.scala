@@ -89,23 +89,23 @@ class InterpreterBenchmark {
   }
 
   def getInterpreter(m: Model): BaseInterpreter =
-    if(mode == -2) m.createST2Interpreter else m.createMTInterpreter(mode)
+    if(mode == -2) m.createST2Interpreter(true) else m.createMTInterpreter(mode)
 
   @Benchmark
   def mult1(bh: Blackhole): Unit =
     bh.consume(mult1Inter.setup().reduce())
 
-//  @Benchmark
-//  def mult2(bh: Blackhole): Unit =
-//    bh.consume(mult2Inter.setup().reduce())
-//
-//  @Benchmark
-//  def mult3(bh: Blackhole): Unit =
-//    bh.consume(mult3Inter.setup().reduce())
-//
-//  @Benchmark
-//  def fib22(bh: Blackhole): Unit =
-//    bh.consume(fib22Inter.setup().reduce())
+  @Benchmark
+  def mult2(bh: Blackhole): Unit =
+    bh.consume(mult2Inter.setup().reduce())
+
+  @Benchmark
+  def mult3(bh: Blackhole): Unit =
+    bh.consume(mult3Inter.setup().reduce())
+
+  @Benchmark
+  def fib22(bh: Blackhole): Unit =
+    bh.consume(fib22Inter.setup().reduce())
 
 //  @Benchmark
 //  def createInterpreter(bh: Blackhole): Unit = {

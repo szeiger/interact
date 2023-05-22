@@ -14,7 +14,7 @@ object Main extends App {
   //println("Data:")
   //model.data.foreach(r => println(s"  ${r.show}"))
 
-  val inter = model.createST2Interpreter
+  val inter = model.createST2Interpreter()
   model.setData(inter)
   println("Initial state:")
   inter.scope.log(System.out)

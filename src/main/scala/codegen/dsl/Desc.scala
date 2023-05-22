@@ -28,6 +28,10 @@ sealed trait Owner extends ValDesc {
   def isInterface: Boolean
   final override def toString: String = className
   def desc: String = s"L$className;"
+
+  def method(name: String, desc: MethodDesc): MethodRef = new MethodRef(this, name, desc)
+  def constr(desc: MethodDesc): ConstructorRef = new ConstructorRef(this, desc)
+  def field(name: String, desc: ValDesc): FieldRef = new FieldRef(this, name, desc)
 }
 class ClassOwner(val className: String) extends Owner {
   def isInterface = false
@@ -47,3 +51,9 @@ object InterfaceOwner {
     new InterfaceOwner(ct.runtimeClass.getName.replace('.', '/'))
   }
 }
+
+case class MethodRef(owner: Owner, name: String, desc: MethodDesc)
+
+case class ConstructorRef(tpe: Owner, desc: MethodDesc)
+
+case class FieldRef(owner: Owner, name: String, desc: ValDesc)

@@ -7,13 +7,13 @@ import java.nio.file.{Files, Path}
 
 object AST {
   sealed trait Statement
-  case class Cons(name: Ident, args: Seq[Ident], ret: Option[Ident], der: Option[Deriving], rules: Seq[ConsRule]) extends Statement {
+  case class Cons(name: String, args: Seq[String], ret: Option[String], der: Option[Deriving], rules: Seq[ConsRule]) extends Statement {
     def arity = args.length
     def show: String = {
-      val a = if(args.isEmpty) "" else args.map(_.s).mkString("(", ", ", ")")
-      val r = if(ret.isEmpty) "" else s" . ${ret.get.show}"
+      val a = if(args.isEmpty) "" else args.mkString("(", ", ", ")")
+      val r = if(ret.isEmpty) "" else s" . ${ret.get}"
       val d = if(der.isEmpty) "" else s" deriving ${der.get.show}"
-      s"${name.s}$a$r$d"
+      s"$name$a$r$d"
     }
   }
   sealed trait ExprOrCut {
@@ -35,11 +35,11 @@ object AST {
     def show = s"${left.show} . ${right.show}"
   }
   case class Rule(cut: Cut, reduced: Seq[Cut], derived: Boolean) extends Statement
-  case class Data(free: Seq[Ident], cuts: Seq[Cut]) extends Statement {
+  case class Data(free: Seq[String], cuts: Seq[Cut]) extends Statement {
     def show = cuts.map(_.show).mkString(", ")
   }
-  case class Deriving(constructors: Seq[Ident]) {
-    def show = constructors.map(_.show).mkString(", ")
+  case class Deriving(constructors: Seq[String]) {
+    def show = constructors.mkString(", ")
   }
   case class ConsRule(rhs: Expr, reduced: Seq[Cut])
 }
@@ -49,7 +49,7 @@ object Lexical {
 
   val keywords = Set("cons", "rule", "let", "deriving", "cut")
 
-  def identifier[_: P]: P[String] =
+  def ident[_: P]: P[String] =
      P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!keywords.contains(_))
   def kw[_: P](s: String) = P(  s ~ !(letter | digit | "_")  )
   def letter[_: P] = P( CharIn("a-z") | CharIn("A-Z") )
@@ -61,17 +61,17 @@ object Parser {
   import ScriptWhitespace._
   import Lexical._
 
-  def ident[_: P]: P[AST.Ident] = identifier.map(AST.Ident(_))
+  def identExpr[_: P]: P[AST.Ident] = ident.map(AST.Ident(_))
 
   def church[_: P]: P[AST.Expr] = churchLit.map { i =>
     (1 to i).foldLeft(AST.Ident("Z"): AST.Expr) { case (z, _) => AST.Ap(AST.Ident("S"), z :: Nil) }
   }
 
   def app[_: P]: P[AST.Ap] =
-    P(  ident ~ "(" ~ expr.rep(sep = ",") ~ ")"  ).map(AST.Ap.tupled)
+    P(  identExpr ~ "(" ~ expr.rep(sep = ",") ~ ")"  ).map(AST.Ap.tupled)
 
   def simpleExpr[_: P]: P[AST.Expr] =
-    P(  (app | ident | church)  )
+    P(  (app | identExpr | church)  )
 
   def expr[_: P]: P[AST.Expr] =
     P(  simpleExpr.rep(1, "::")  ).map {
@@ -88,7 +88,7 @@ object Parser {
   def cutList[_: P]: P[Seq[AST.Cut]] =
     P(  cut.rep(min = 1, sep = ",") | P("()").map(_ => Nil)  )
 
-  def paramsOpt[_: P]: P[Seq[AST.Ident]] =
+  def paramsOpt[_: P]: P[Seq[String]] =
     P(  ("(" ~ ident.rep(sep = ",") ~ ")").?  ).map(_.getOrElse(Nil))
 
   def deriving[_ : P]: P[AST.Deriving] =

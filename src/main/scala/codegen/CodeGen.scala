@@ -8,39 +8,39 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
   private val MAX_SPEC_CELL = 2
   private val riT = tp.c(s"$interpreterPackage/RuleImpl")
   private val wrT = tp.c(s"$interpreterPackage/WireRef")
+  private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")
   private val cellNT = tp.c(s"$interpreterPackage/CellN")
   private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell$i"))
-  private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
-  private val cell_symId = MethodRef(cellT, "symId", tp.m().I)
-  private val cell_symIdSetter = MethodRef(cellT, "symId_$eq", tp.m(tp.I).V)
-  private val cell_auxRef = MethodRef(cellT, "auxRef", tp.m(tp.I)(wrT))
-  private val cell_pref = MethodRef(cellT, "pref", tp.m()(wrT))
+  private val cell_symId = cellT.method("symId", tp.m().I)
+  private val cell_symIdSetter = cellT.method("symId_$eq", tp.m(tp.I).V)
+  private val cell_auxRef = cellT.method("auxRef", tp.m(tp.I)(wrT))
+  private val cell_pref = cellT.method("pref", tp.m()(wrT))
   private val cell_aref = (0 to MAX_SPEC_CELL).map { a =>
-    (0 until a).map(p => MethodRef(cellSpecTs(a), s"aref$p", tp.m()(wrT)))
+    (0 until a).map(p => cellSpecTs(a).method(s"aref$p", tp.m()(wrT)))
   }
-  private val wr_cell = MethodRef(wrT, "cell", tp.m()(cellT))
-  private val wr_oppo = MethodRef(wrT, "oppo", tp.m()(wrT))
-  private val wr_reconnect = MethodRef(wrT, "reconnect", tp.m(cellT, tp.I, cellT, tp.I).V)
-  private val ptw_connectFreeToFree = MethodRef(ptwT, "connectFreeToFree", tp.m(wrT, wrT).V)
-  private val ptw_connectAux = MethodRef(ptwT, "connectAux", tp.m(wrT, cellT, tp.I).V)
+  private val wr_cell = wrT.method("cell", tp.m()(cellT))
+  private val wr_oppo = wrT.method("oppo", tp.m()(wrT))
+  private val wr_reconnect = wrT.method("reconnect", tp.m(cellT, tp.I, cellT, tp.I).V)
+  private val ptw_connectFreeToFree = ptwT.method("connectFreeToFree", tp.m(wrT, wrT).V)
+  private val ptw_connectAux = ptwT.method("connectAux", tp.m(wrT, cellT, tp.I).V)
   private val ptw_connectAuxSpec = (0 to MAX_SPEC_CELL).map { a =>
-    (0 until a).map(p => MethodRef(ptwT, s"connectAux_${a}_$p", tp.m(wrT, cellSpecTs(a)).V))
+    (0 until a).map(p => ptwT.method(s"connectAux_${a}_$p", tp.m(wrT, cellSpecTs(a)).V))
   }
-  private val ptw_connectPrincipal = MethodRef(ptwT, "connectPrincipal", tp.m(wrT, cellT).V)
-  private val ptw_createCut = MethodRef(ptwT, "createCut", tp.m(wrT).V)
-  private val new_CellN_II = ConstructorRef(cellNT, tp.m(tp.I, tp.I).V)
-  private val new_CellSpec_I = cellSpecTs.map(t => ConstructorRef(t, tp.m(tp.I).V))
-  private val new_WireRef_LILI = ConstructorRef(wrT, tp.m(cellT, tp.I, cellT, tp.I).V)
+  private val ptw_connectPrincipal = ptwT.method("connectPrincipal", tp.m(wrT, cellT).V)
+  private val ptw_createCut = ptwT.method("createCut", tp.m(wrT).V)
+  private val new_CellN_II = cellNT.constr(tp.m(tp.I, tp.I).V)
+  private val new_CellSpec_I = cellSpecTs.map(_.constr(tp.m(tp.I).V))
+  private val new_WireRef_LILI = wrT.constr(tp.m(cellT, tp.I, cellT, tp.I).V)
 
   def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
-    val name1 = g.sym1.cons.name.s
-    val name2 = g.sym2.cons.name.s
+    val name1 = g.sym1.cons.name
+    val name2 = g.sym2.cons.name
     val implClassName = s"$genPackage/Rule$$$name1$$$name2"
     val factClassName = s"$genPackage/RuleFactory$$$name1$$$name2"
     val syms = (Iterator.single(g.sym1) ++ g.cells.iterator).distinct.toArray
     val ric = createRuleClass(implClassName, syms.iterator.zipWithIndex.toMap, g)
-    val fac = createFactoryClass(ric, factClassName, syms.map(_.cons.name.s))
+    val fac = createFactoryClass(ric, factClassName, syms.map(_.cons.name))
     def extName(n: String) = n.replace('/', '.')
     cl.add(extName(implClassName), () => ric)
     cl.add(extName(factClassName), () => fac)
@@ -246,6 +246,10 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
       //g.log()
       //println(s"Cell allocations: $cellAllocations, wire allocations: $wireAllocations")
     }
+
+    // statistics
+    c.method(Acc.PUBLIC, "cellAllocationCount", tp.m().I).iconst(cellAllocations).ireturn
+    c.method(Acc.PUBLIC, "wireAllocationCount", tp.m().I).iconst(wireAllocations).ireturn
     c
   }
 
