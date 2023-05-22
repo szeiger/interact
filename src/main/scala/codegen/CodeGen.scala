@@ -69,6 +69,8 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
     // reduce
     {
       val internalConns = g.internalConns.toArray
+      val allConns = (g.wireConnsDistinct ++ internalConns.iterator).toArray
+
       val (reuse1, reuse2, fullReuseConn) = {
         val matchingArity1 = g.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }.map(_._2).toSet
         val matchingArity2 = g.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }.map(_._2).toSet
@@ -95,8 +97,6 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           var match2 = matchingArity2.find { case (sym, _) => sym == g.sym2 }.orNull
           if(match2 != null && sameA) matchingArity1 = matchingArity1.filter(_._2 != match2._2)
           // Find arity matches
-          val full1 = match1
-          val full2 = match2
           if(match1 == null) {
             match1 = matchingArity1.headOption.orNull
             if(match1 != null && sameA) matchingArity2 = matchingArity2.filter(_._2 != match1._2)
@@ -188,16 +188,20 @@ class CodeGen[RI](interpreterPackage: String, genPackage: String) {
           }
           m.storeLocal(s"c$idx", cellT, Acc.FINAL)
       }
-      (g.wireConnsDistinct ++ internalConns.iterator).foreach { case conn @ Connection(idx1, idx2) =>
+      allConns.foreach { case conn @ Connection(idx1, idx2) =>
         def connectWW(i1: FreeIdx, i2: FreeIdx): Unit = {
           val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
           val r = if(i2.rhs) rhs(i2.idx) else lhs(i2.idx)
           m.aload(ptw).aload(l).aload(r).invokevirtual(ptw_connectFreeToFree)
         }
         def connectWC(i1: FreeIdx, i2: CellIdx): Unit = {
-          val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
-          m.aload(ptw).aload(l).aload(cells(i2.idx))
-          ptwConnectLL(g.cells(i2.idx).arity, i2.port)
+          val skip1 = i2.idx == reuse1 && !i1.rhs && i2.port == i1.idx
+          val skip2 = i2.idx == reuse2 && i1.rhs && i2.port == i1.idx
+          if((!skip1 && !skip2) || i2.port == -1) { //TODO: Allow i2.port == -1 and check for cut
+            val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
+            m.aload(ptw).aload(l).aload(cells(i2.idx))
+            ptwConnectLL(g.cells(i2.idx).arity, i2.port)
+          }
         }
         def connectCC(i1: CellIdx, i2: CellIdx): Unit = {
           def args = m.aload(cells(i1.idx)).iconst(i1.port).aload(cells(i2.idx)).iconst(i2.port)
