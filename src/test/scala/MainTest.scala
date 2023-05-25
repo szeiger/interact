@@ -48,10 +48,15 @@ object MainTest {
     Seq[(Model => BaseInterpreter, String)](
       (_.createST2Interpreter(compile = false, collectStats = true), "st2.i"),
       (_.createST2Interpreter(compile = true, collectStats = true, debugLog = false, debugBytecode = false), "st2.c"),
-      (_.createMTInterpreter(0), "mt0"),
-      (_.createMTInterpreter(1), "mt1"),
-      (_.createMTInterpreter(8), "mt8"),
-      (_.createMTInterpreter(1001), "mt1001"),
-      (_.createMTInterpreter(1008), "mt1008"),
+      (_.createMTInterpreter(0, compile = false, collectStats = true), "mt0.i"),
+      (_.createMTInterpreter(1, compile = false, collectStats = true), "mt1.i"),
+      (_.createMTInterpreter(8, compile = false, collectStats = true), "mt8.i"),
+      (_.createMTInterpreter(1001, compile = false, collectStats = true), "mt1001.i"),
+      (_.createMTInterpreter(1008, compile = false, collectStats = true), "mt1008.i"),
+      (_.createMTInterpreter(0, compile = true, collectStats = true), "mt0.c"),
+      (_.createMTInterpreter(1, compile = true, collectStats = true), "mt1.c"),
+      (_.createMTInterpreter(8, compile = true, collectStats = true), "mt8.c"),
+      (_.createMTInterpreter(1001, compile = true, collectStats = true), "mt1001.c"),
+      (_.createMTInterpreter(1008, compile = true, collectStats = true), "mt1008.c"),
     ).map { case (f, s) => Array[AnyRef](f, s) }.asJava
 }

@@ -1,0 +1,64 @@
+package de.szeiger.interact.codegen
+
+import de.szeiger.interact.{GenericRuleImpl, RuleImplFactory, Symbol, SymbolIdLookup}
+import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
+
+abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, genPackage: String) {
+  protected val riT = tp.c(s"$interpreterPackage/RuleImpl")
+
+  def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
+    val name1 = g.sym1.cons.name
+    val name2 = g.sym2.cons.name
+    val implClassName = s"$genPackage/Rule$$$name1$$$name2"
+    val factClassName = s"$genPackage/RuleFactory$$$name1$$$name2"
+    val syms = (Iterator.single(g.sym1) ++ g.cells.iterator).distinct.toArray
+    val sids = syms.iterator.zipWithIndex.toMap
+    val (ric, sidFields) = createRuleClassBase(implClassName, riT, sids)
+    implementRuleClass(ric, sids, sidFields, g)
+    val fac = createFactoryClass(ric, factClassName, syms.map(_.cons.name))
+    def extName(n: String) = n.replace('/', '.')
+    cl.add(extName(implClassName), () => ric)
+    cl.add(extName(factClassName), () => fac)
+    val c = cl.loadClass(fac.javaName)
+    c.getDeclaredConstructor().newInstance().asInstanceOf[RuleImplFactory[RI]]
+  }
+
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRuleImpl): Unit
+
+  private def createFactoryClass(implClass: ClassDSL, factClassName: String, names: Seq[String]): ClassDSL = {
+    val implClassT = implClass.thisTp
+    val riFactoryT = tp.c[RuleImplFactory[_]]
+    val sidLookupT = tp.i[SymbolIdLookup]
+    val new_implClass = ConstructorRef(implClassT, tp.m(Seq.fill(names.length)(tp.I): _*).V)
+    val sidLookup_getSymbolId = MethodRef(sidLookupT, "getSymbolId", tp.m(tp.c[String]).I)
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, factClassName, riFactoryT)
+    c.emptyNoArgsConstructor(Acc.PUBLIC)
+    val m = c.method(Acc.PUBLIC, "apply", tp.m(sidLookupT)(tp.c[Object]))
+    val lookup = m.param("lookup", sidLookupT, Acc.FINAL)
+    m.newInitDup(new_implClass) {
+      names.foreach { n => m.aload(lookup).ldc(n).invokeinterface(sidLookup_getSymbolId) }
+    }
+    m.areturn
+    c
+  }
+
+  private def createRuleClassBase(implClassName: String, riT: ClassOwner, sids: Map[Symbol, Int]): (ClassDSL, IndexedSeq[FieldRef]) = {
+    val sidCount = sids.size
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, implClassName, riT)
+    val sidFields = for(i <- 0 until sidCount) yield c.field(Acc.PRIVATE | Acc.FINAL, s"sid$i", tp.I)
+    val constrDesc = tp.m(Seq.fill(sidCount)(tp.I): _*).V
+    var cellAllocations, wireAllocations = 0
+
+    // init
+    {
+      val m = c.method(Acc.PUBLIC, "<init>", constrDesc)
+      for(i <- 0 until sidCount) {
+        val sid = m.param(s"sid$i", tp.I, Acc.FINAL)
+        m.aload(m.receiver).iload(sid).putfield(sidFields(i))
+      }
+      m.aload(m.receiver).invokespecial(c.superTp, "<init>", tp.m().V)
+      m.return_
+    }
+    (c, sidFields)
+  }
+}

@@ -1,7 +1,7 @@
 package de.szeiger.interact.st2
 
-import de.szeiger.interact.codegen.{CodeGen, LocalClassLoader}
-import de.szeiger.interact.{AST, BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.codegen.LocalClassLoader
+import de.szeiger.interact.{BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays
@@ -32,7 +32,6 @@ abstract class Cell(final var symId: Int) {
     if(w == null) null else w.opposite
   }
   final def allPorts: Iterator[WireRef] = (-1 until arity).iterator.map(getWireRef)
-  final def allCells: Iterator[(WireRef, (Cell, Int))] = (-1 until arity).iterator.map { i => (getWireRef(i), getCell(i)) }
   override def toString = s"Cell($symId, $arity, ${allPorts.map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
@@ -92,16 +91,6 @@ object Cells {
     case 2 => new Cell2(symId)
     case _ => new CellN(symId, arity)
   }
-  def getCell(c: Cell, p: Int): (Cell, Int) = {
-      val w = c.getWireRef(p)
-      if(w == null) null else w.opposite
-    }
-  def allPorts(c: Cell): Iterator[WireRef] = (-1 until c.arity).iterator.map(c.getWireRef)
-  def allCells(c: Cell): Iterator[(WireRef, (Cell, Int))] = (-1 until c.arity).iterator.map { i => (c.getWireRef(i), getCell(c, i)) }
-  def str(c: Cell) = c match {
-    case c: WireCell => s"WireCell(${c.sym}, ${c.symId}, ${c.arity}, ${allPorts(c).map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
-    case c => s"Cell(${c.symId}, ${c.arity}, ${allPorts(c).map { case w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
-  }
 }
 
 class WireCell(final val sym: Symbol, _symId: Int) extends Cell0(_symId) {
@@ -132,6 +121,30 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       cells(i) = Cells.mk(sid, ari)
       i += 1
     }
+
+    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
+
+    // Connect cut wire to new cell
+    @inline def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit =
+      ptw.connect(wr, cells(cIdx), cp)
+
+    i = 0
+    while(i < freeWiresPorts1.length) {
+      val fwp = freeWiresPorts1(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c1.auxRef(i))
+      else if(i < -1-fw) ptw.connectFreeToFree(c1.auxRef(i), cutTarget(-1-fw))
+      i += 1
+    }
+    i = 0
+    while(i < freeWiresPorts2.length) {
+      val fwp = freeWiresPorts2(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c2.auxRef(i))
+      else if(i+c1.arity < -1-fw) ptw.connectFreeToFree(c2.auxRef(i), cutTarget(-1-fw))
+      i += 1
+    }
+
     i = 0
     while(i < connections.length) {
       val conn = connections(i)
@@ -141,36 +154,6 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val p2 = byte3(conn)
       val w = new WireRef(t1, p1, t2, p2)
       if(p1 < 0 && p2 < 0) ptw.createCut(w)
-      i += 1
-    }
-
-    @inline def cutTarget(i: Int) = if(i < c1.arity) c1.auxRef(i) else c2.auxRef(i-c1.arity)
-
-    // Connect cut wire to new cell
-    @inline def connectFreeToInternal(cIdx: Int, cp: Int, wr: WireRef): Unit =
-      ptw.connect(wr, cells(cIdx), cp)
-
-    // Connect 2 cut wires
-    @inline def connectFreeToFree(wr1: WireRef, cutIdx2: Int): Unit = {
-      val wr2 = cutTarget(cutIdx2)
-      val (wt, wp) = wr1.opposite
-      ptw.connect(wr2, wt, wp)
-    }
-
-    i = 0
-    while(i < freeWiresPorts1.length) {
-      val fwp = freeWiresPorts1(i)
-      val fw = short0(fwp)
-      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c1.auxRef(i))
-      else if(i < -1-fw) connectFreeToFree(c1.auxRef(i), -1-fw)
-      i += 1
-    }
-    i = 0
-    while(i < freeWiresPorts2.length) {
-      val fwp = freeWiresPorts2(i)
-      val fw = short0(fwp)
-      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), c2.auxRef(i))
-      else if(i+c1.arity < -1-fw) connectFreeToFree(c2.auxRef(i), -1-fw)
       i += 1
     }
   }
@@ -188,21 +171,13 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
-    def getConnected(c: Cell, port: Int): (Cell, Int) = Cells.getCell(c, port)
+    def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
-
-  var totalSteps, cellAllocations, wireAllocations = 0
-
-  def resetStats(): Unit = {
-    totalSteps = 0
-    cellAllocations = 0
-    wireAllocations = 0
-  }
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
 
@@ -218,7 +193,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
         val lookup = new SymbolIdLookup {
           override def getSymbolId(name: String): Int = self.getSymbolId(globals(name))
         }
-        val codeGen = new CodeGen[RuleImpl]("de/szeiger/interact/st2", "de/szeiger/interact/st2/gen")
+        val codeGen = new CodeGen("de/szeiger/interact/st2/gen")
         (cl, lookup, codeGen)
       } else (null, null, null)
     }
@@ -274,7 +249,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   }
 
   def reduce(): Int = {
-    resetStats()
     val initial = detectInitialCuts
     val w = new PerThreadWorker(this) {
       protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne(wr, ri)
@@ -284,10 +258,9 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
       w.setNext(wr, ri)
       w.processAll()
     }
-    val steps = w.resetSteps
     if(collectStats)
-      println(s"Total steps: $steps, allocated cells: $cellAllocations, allocated wires: $wireAllocations")
-    steps
+      println(s"Total steps: ${w.steps}, allocated cells: ${w.cellAllocations}, allocated wires: ${w.wireAllocations}")
+    w.steps
   }
 }
 
@@ -318,10 +291,8 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
   final val tempCells = inter.createTempCells()
   private[this] final var nextCut: WireRef = _
   private[this] final var nextRule: RuleImpl = _
-  private[this] final var steps = 0
   private[this] final val collectStats = inter.collectStats
-
-  final def resetSteps: Int = { val i = steps; steps = 0; i }
+  var steps, cellAllocations, wireAllocations = 0
 
   protected[this] def enqueueCut(wr: WireRef, ri: RuleImpl): Unit
 
@@ -371,8 +342,8 @@ abstract class PerThreadWorker(final val inter: Interpreter) {
     ri.reduce(c, this)
     if(collectStats) {
       steps += 1
-      inter.cellAllocations += ri.cellAllocationCount
-      inter.wireAllocations += ri.wireAllocationCount
+      cellAllocations += ri.cellAllocationCount
+      wireAllocations += ri.wireAllocationCount
     }
   }
 

@@ -167,11 +167,12 @@ class Model(val statements: Seq[AST.Statement]) {
     checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
   }
 
-  def createMTInterpreter(numThreads: Int) : mt.Interpreter =
-    new mt.Interpreter(globals, ruleCuts.values, numThreads)
+  def createMTInterpreter(numThreads: Int, compile: Boolean = true, debugLog: Boolean = false,
+    debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
+    new mt.Interpreter(globals, ruleCuts.values, numThreads, compile, debugLog, debugBytecode, collectStats)
 
-  def createST2Interpreter(compile: Boolean = true, debugLog: Boolean = false, debugBytecode: Boolean = false,
-    collectStats: Boolean = false) : st2.Interpreter =
+  def createST2Interpreter(compile: Boolean = true, debugLog: Boolean = false,
+    debugBytecode: Boolean = false, collectStats: Boolean = false) : st2.Interpreter =
     new st2.Interpreter(globals, ruleCuts.values, compile, debugLog, debugBytecode, collectStats)
 
   def setData(inter: BaseInterpreter): Unit = {
