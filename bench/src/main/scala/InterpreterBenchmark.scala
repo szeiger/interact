@@ -44,6 +44,7 @@ class InterpreterBenchmark {
   private var mult2Inter: PreparedInterpreter = _
   private var mult3Inter: PreparedInterpreter = _
   private var fib22Inter: PreparedInterpreter = _
+  private var fib29Inter: PreparedInterpreter = _
 
   @Setup(Level.Trial)
   def init: Unit = {
@@ -86,6 +87,19 @@ class InterpreterBenchmark {
         |let res =
         |   22'c . Fib(res)
         |""".stripMargin)
+    this.fib29Inter = new PreparedInterpreter(prelude +
+      """cons Fib(res) . x deriving Erase, Dup
+        |  cut Z = res . 1'c
+        |  cut S(n) = Fib2(res) . n
+        |cons Fib2(res) . x deriving Erase, Dup
+        |  cut Z = res . 1'c
+        |  cut S(n) = Dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
+        |cons Add2(y, r) . x deriving Erase, Dup
+        |  cut Z = y . r
+        |  cut S(x) = r . S(v), x . Add2(y, v)
+        |let res =
+        |   29'c . Fib(res)
+        |""".stripMargin)
   }
 
   def getInterpreter(m: Model): BaseInterpreter =
@@ -108,6 +122,10 @@ class InterpreterBenchmark {
   @Benchmark
   def fib22(bh: Blackhole): Unit =
     bh.consume(fib22Inter.setup().reduce())
+
+//  @Benchmark
+//  def fib29(bh: Blackhole): Unit =
+//    bh.consume(fib29Inter.setup().reduce())
 
 //  @Benchmark
 //  def createInterpreter(bh: Blackhole): Unit = {

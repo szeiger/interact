@@ -89,6 +89,8 @@ class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/
       val (r1, r2, skip) = bestReuse2
       (r1.map(_._2).getOrElse(-1), r2.map(_._2).getOrElse(-1), skip)
     }
+    def isReuse(cellIdx: Int): Boolean = cellIdx == reuse1 || cellIdx == reuse2
+    def oldPort(cellIdx: Int): Int = if(isReuse(cellIdx)) -2 else 0
 
     val m = c.method(Acc.PUBLIC, "reduce", tp.m(cellT, ptwT).V)
     val cut1 = m.param("cut1", cellT, Acc.FINAL)
@@ -104,15 +106,19 @@ class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/
       else if(a < cell_aport.length) m.invokevirtual(cell_aport(a)(p))
       else m.iconst(p).invokevirtual(cell_auxPort)
     }
-    def setCell(a: Int, p: Int)(loadC2: => Unit)(loadP2: => Unit): m.type = {
+    def setCell(a: Int, p: Int, skipPort: Boolean = false)(loadC2: => Unit)(loadP2: => Unit): m.type = {
       if(p < 0) {
-        m.dup
+        if(!skipPort) {
+          m.dup
+          loadP2; m.invokevirtual(cell_pportSetter)
+        }
         loadC2; m.invokevirtual(cell_pcellSetter)
-        loadP2; m.invokevirtual(cell_pportSetter)
       } else if(a < cell_acell.length) {
-        m.dup
+        if(!skipPort) {
+          m.dup
+          loadP2; m.invokevirtual(cell_aportSetter(a)(p))
+        }
         loadC2; m.invokevirtual(cell_acellSetter(a)(p))
-        loadP2; m.invokevirtual(cell_aportSetter(a)(p))
       }
       else {
         m.iconst(p) ; loadC2 ; loadP2
@@ -189,8 +195,8 @@ class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
       val (c2, p2) = (ct2.idx, ct2.port)
-      m.aload(cells(c1)); setCell(g.cells(c1).arity, p1)(m.aload(cells(c2)))(m.iconst(p2))
-      m.aload(cells(c2)); setCell(g.cells(c2).arity, p2)(m.aload(cells(c1)))(m.iconst(p1))
+      m.aload(cells(c1)); setCell(g.cells(c1).arity, p1, oldPort(c1) == p2)(m.aload(cells(c2)))(m.iconst(p2))
+      m.aload(cells(c2)); setCell(g.cells(c2).arity, p2, oldPort(c2) == p1)(m.aload(cells(c1)))(m.iconst(p1))
       if(p1 < 0 && p2 < 0)
         m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut)
     }

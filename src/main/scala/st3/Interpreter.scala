@@ -20,34 +20,31 @@ abstract class Cell(final var symId: Int) {
   def setCell(p: Int, c2: Cell, p2: Int): Unit
   def getCell(p: Int): Cell
   def getPort(p: Int): Int
-  def copy(): Cell
 
   final def allPorts: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (getCell(i), getPort(i)))
   override def toString = s"Cell($symId, $arity, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
 class Cell0(_symId: Int) extends Cell(_symId) {
-  def arity: Int = 0
-  def auxCell(p: Int): Cell = null
-  def auxPort(p: Int): Int = 0
-  def setAux(p: Int, c2: Cell, p2: Int): Unit = ()
-  def setCell(p: Int, c2: Cell, p2: Int): Unit = { pcell = c2; pport = p2 }
-  def getCell(p: Int): Cell = pcell
-  def getPort(p: Int): Int = pport
-  def copy() = new Cell0(symId)
+  final def arity: Int = 0
+  final def auxCell(p: Int): Cell = null
+  final def auxPort(p: Int): Int = 0
+  final def setAux(p: Int, c2: Cell, p2: Int): Unit = ()
+  final def setCell(p: Int, c2: Cell, p2: Int): Unit = { pcell = c2; pport = p2 }
+  final def getCell(p: Int): Cell = pcell
+  final def getPort(p: Int): Int = pport
 }
 
 class Cell1(_symId: Int) extends Cell(_symId) {
   final var acell0: Cell = _
   final var aport0: Int = _
-  def arity: Int = 1
-  def auxCell(p: Int): Cell = acell0
-  def auxPort(p: Int): Int = aport0
-  def setAux(p: Int, c2: Cell, p2: Int): Unit = { acell0 = c2; aport0 = p2 }
-  def setCell(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { pcell = c2; pport = p2 }
-  def getCell(p: Int): Cell = if(p == 0) acell0 else pcell
-  def getPort(p: Int): Int = if(p == 0) aport0 else pport
-  def copy() = new Cell1(symId)
+  final def arity: Int = 1
+  final def auxCell(p: Int): Cell = acell0
+  final def auxPort(p: Int): Int = aport0
+  final def setAux(p: Int, c2: Cell, p2: Int): Unit = { acell0 = c2; aport0 = p2 }
+  final def setCell(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { pcell = c2; pport = p2 }
+  final def getCell(p: Int): Cell = if(p == 0) acell0 else pcell
+  final def getPort(p: Int): Int = if(p == 0) aport0 else pport
 }
 
 class Cell2(_symId: Int) extends Cell(_symId) {
@@ -55,39 +52,37 @@ class Cell2(_symId: Int) extends Cell(_symId) {
   final var aport0: Int = _
   final var acell1: Cell = _
   final var aport1: Int = _
-  def arity: Int = 2
-  def auxCell(p: Int): Cell = if(p == 0) acell0 else acell1
-  def auxPort(p: Int): Int = if(p == 0) aport0 else aport1
-  def setAux(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { acell1 = c2; aport1 = p2 }
-  def setCell(p: Int, c2: Cell, p2: Int): Unit = (p: @switch) match {
+  final def arity: Int = 2
+  final def auxCell(p: Int): Cell = if(p == 0) acell0 else acell1
+  final def auxPort(p: Int): Int = if(p == 0) aport0 else aport1
+  final def setAux(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { acell1 = c2; aport1 = p2 }
+  final def setCell(p: Int, c2: Cell, p2: Int): Unit = (p: @switch) match {
     case 0 => acell0 = c2; aport0 = p2
     case 1 => acell1 = c2; aport1 = p2
     case _ => pcell = c2; pport = p2
   }
-  def getCell(p: Int): Cell = (p: @switch) match {
+  final def getCell(p: Int): Cell = (p: @switch) match {
     case 0 => acell0
     case 1 => acell1
     case _ => pcell
   }
-  def getPort(p: Int): Int = (p: @switch) match {
+  final def getPort(p: Int): Int = (p: @switch) match {
     case 0 => aport0
     case 1 => aport1
     case _ => pport
   }
-  def copy() = new Cell2(symId)
 }
 
 class CellN(_symId: Int, val arity: Int) extends Cell(_symId) {
   private[this] final val auxCells = new Array[Cell](arity)
   private[this] final val auxPorts = new Array[Int](arity)
-  def auxCell(p: Int): Cell = auxCells(p)
-  def auxPort(p: Int): Int = auxPorts(p)
-  def setAux(p: Int, c2: Cell, p2: Int): Unit = { auxCells(p) = c2; auxPorts(p) = p2 }
-  def setCell(p: Int, c2: Cell, p2: Int): Unit =
+  final def auxCell(p: Int): Cell = auxCells(p)
+  final def auxPort(p: Int): Int = auxPorts(p)
+  final def setAux(p: Int, c2: Cell, p2: Int): Unit = { auxCells(p) = c2; auxPorts(p) = p2 }
+  final def setCell(p: Int, c2: Cell, p2: Int): Unit =
     if(p < 0) { pcell = c2; pport = p2 } else { auxCells(p) = c2; auxPorts(p) = p2 }
-  def getCell(p: Int): Cell = if(p < 0) pcell else auxCells(p)
-  def getPort(p: Int): Int = if(p < 0) pport else auxPorts(p)
-  def copy() = new CellN(symId, arity)
+  final def getCell(p: Int): Cell = if(p < 0) pcell else auxCells(p)
+  final def getPort(p: Int): Int = if(p < 0) pport else auxPorts(p)
 }
 
 object Cells {
