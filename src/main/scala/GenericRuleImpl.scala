@@ -14,6 +14,7 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
   val cells: Array[Symbol], val connectionsPacked: Array[Int],
   val freeWiresPacked: Array[Int]) {
 
+  def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
   def arity1: Int = sym1.arity
   def arity2: Int = sym2.arity
   def maxCells: Int = cells.length

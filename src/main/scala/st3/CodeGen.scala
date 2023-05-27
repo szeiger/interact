@@ -39,26 +39,55 @@ class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/
 
   protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRuleImpl): Unit = {
     val internalConns = g.internalConns.toArray
-    val allConns = (g.wireConnsDistinct ++ internalConns.iterator).toArray
+    val wireConnsDistinct = g.wireConnsDistinct.toArray
+    val allConns = wireConnsDistinct ++ internalConns
     var cellAllocations = 0
 
-    val (reuse1, reuse2) = {
-      // Find individual cells for reuse (with potential relabeling)
-      val sameA = g.sym1.arity == g.sym2.arity
-      var matchingArity1 = g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }
-      var matchingArity2 = g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }
-      // Find full Symbol matches first
-      var match1 = matchingArity1.find { case (sym, _) => sym == g.sym1 }.orNull
-      if(match1 != null && sameA) matchingArity2 = matchingArity2.filter(_._2 != match1._2)
-      var match2 = matchingArity2.find { case (sym, _) => sym == g.sym2 }.orNull
-      if(match2 != null && sameA) matchingArity1 = matchingArity1.filter(_._2 != match2._2)
-      // Find arity matches
-      if(match1 == null) {
-        match1 = matchingArity1.headOption.orNull
-        if(match1 != null && sameA) matchingArity2 = matchingArity2.filter(_._2 != match1._2)
+    // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
+    def countReuseConnections(cellIdx: Int, rhs: Boolean): Int =
+      reuseSkip(cellIdx, rhs).length
+    // Find connections to skip for reuse
+    def reuseSkip(cellIdx: Int, rhs: Boolean): IndexedSeq[Connection] =
+      (0 until g.cells(cellIdx).arity).flatMap { p =>
+        val ci = new CellIdx(cellIdx, p)
+        wireConnsDistinct.collect {
+          case c @ Connection(FreeIdx(rhs2, fi2), ci2) if ci2 == ci && rhs2 == rhs && fi2 == p => c
+          case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
+        }
       }
-      if(match2 == null) match2 = matchingArity2.headOption.orNull
-      (if(match1 != null) match1._2 else -1, if(match2 != null) match2._2 else -1)
+    // Find cellIdx/sym/quality of best reuse candidate for rhs/lhs
+    // - Prefer max. reuse first, then same symbol
+    def bestReuse(candidates: Array[(Symbol, Int)], rhs: Boolean): Option[(Symbol, Int, Int)] =
+      candidates.map { case (s, i) => (s, i, 2*countReuseConnections(i, rhs) + (if(s == g.symFor(rhs)) 1 else 0)) }
+        .sortBy { case (s, i, q) => -q }.headOption
+    // Find sym/cellIdx of cells with same arity as rhs/lhs
+    def reuseCandidates(rhs: Boolean): Array[(Symbol, Int)] =
+      g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.symFor(rhs).arity }
+    // Find best reuse combination for both sides
+    def bestReuse2: (Option[(Symbol, Int, Int)], Option[(Symbol, Int, Int)], Set[Connection]) = {
+      var cand1 = reuseCandidates(false)
+      var cand2 = reuseCandidates(true)
+      var best1 = bestReuse(cand1, false)
+      var best2 = bestReuse(cand2, true)
+      (best1, best2) match {
+        case (Some((s1, ci1, q1)), Some((si2, ci2, q2))) if ci1 == ci2 =>
+          if(q1 >= q2) { // redo best2
+            cand2 = cand2.filter { case (s, i) => i != ci1 }
+            best2 = bestReuse(cand2, true)
+          } else { // redo best1
+            cand1 = cand1.filter { case (s, i) => i != ci2 }
+            best1 = bestReuse(cand1, false)
+          }
+        case _ =>
+      }
+      val skipConn1 = best1.iterator.flatMap { case (_, ci, _) => reuseSkip(ci, false) }
+      val skipConn2 = best2.iterator.flatMap { case (_, ci, _) => reuseSkip(ci, true) }
+      (best1, best2, (skipConn1 ++ skipConn2).toSet)
+    }
+
+    val (reuse1, reuse2, skipConns) = {
+      val (r1, r2, skip) = bestReuse2
+      (r1.map(_._2).getOrElse(-1), r2.map(_._2).getOrElse(-1), skip)
     }
 
     val m = c.method(Acc.PUBLIC, "reduce", tp.m(cellT, ptwT).V)
@@ -142,36 +171,35 @@ class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/
         m.storeLocal(s"c$idx", cellT, Acc.FINAL)
     }
 
-    allConns.foreach { case conn @ Connection(idx1, idx2) =>
-      def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
-        val (c1, p1) = (ct1.idx, ct1.port)
-        val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
-        m.aload(cells(c1)); setCell(g.cells(c1).arity, p1)(m.aload(c2))(m.iload(p2))
-        m.aload(c2).iload(p2).aload(cells(c1)).iconst(p1).invokevirtual(cell_setCell)
-        if(p1 < 0)
-          m.iload(p2).iconst(0).ifThenI_< { m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut) }
-      }
-      def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
-        val (c1, p1) = if(ct1.rhs) rhs(ct1.idx) else lhs(ct1.idx)
-        val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
-        m.aload(c1).iload(p1).aload(c2).iload(p2).invokevirtual(cell_setCell)
-        m.aload(c2).iload(p2).aload(c1).iload(p1).invokevirtual(cell_setCell)
-        m.iload(p1).iload(p2).iand.iconst(0).ifThenI_< { m.aload(ptw).aload(c1).invokevirtual(ptw_createCut) }
-      }
-      def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
-        val (c1, p1) = (ct1.idx, ct1.port)
-        val (c2, p2) = (ct2.idx, ct2.port)
-        m.aload(cells(c1)); setCell(g.cells(c1).arity, p1)(m.aload(cells(c2)))(m.iconst(p2))
-        m.aload(cells(c2)); setCell(g.cells(c2).arity, p2)(m.aload(cells(c1)))(m.iconst(p1))
-        if(p1 < 0 && p2 < 0)
-          m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut)
-      }
-      (idx1, idx2) match {
-        case (i1: FreeIdx, i2: FreeIdx) => connectFF(i1, i2)
-        case (i1: FreeIdx, i2: CellIdx) => connectCF(i2, i1)
-        case (i1: CellIdx, i2: FreeIdx) => connectCF(i1, i2)
-        case (i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
-      }
+    def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
+      val (c1, p1) = (ct1.idx, ct1.port)
+      val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
+      m.aload(cells(c1)); setCell(g.cells(c1).arity, p1)(m.aload(c2))(m.iload(p2))
+      m.aload(c2).iload(p2).aload(cells(c1)).iconst(p1).invokevirtual(cell_setCell)
+      if(p1 < 0)
+        m.iload(p2).iconst(0).ifThenI_< { m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut) }
+    }
+    def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
+      val (c1, p1) = if(ct1.rhs) rhs(ct1.idx) else lhs(ct1.idx)
+      val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
+      m.aload(c1).iload(p1).aload(c2).iload(p2).invokevirtual(cell_setCell)
+      m.aload(c2).iload(p2).aload(c1).iload(p1).invokevirtual(cell_setCell)
+      m.iload(p1).iload(p2).iand.iconst(0).ifThenI_< { m.aload(ptw).aload(c1).invokevirtual(ptw_createCut) }
+    }
+    def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
+      val (c1, p1) = (ct1.idx, ct1.port)
+      val (c2, p2) = (ct2.idx, ct2.port)
+      m.aload(cells(c1)); setCell(g.cells(c1).arity, p1)(m.aload(cells(c2)))(m.iconst(p2))
+      m.aload(cells(c2)); setCell(g.cells(c2).arity, p2)(m.aload(cells(c1)))(m.iconst(p1))
+      if(p1 < 0 && p2 < 0)
+        m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut)
+    }
+    allConns.foreach {
+      case c if skipConns.contains(c) => ()
+      case Connection(i1: FreeIdx, i2: FreeIdx) => connectFF(i1, i2)
+      case Connection(i1: FreeIdx, i2: CellIdx) => connectCF(i2, i1)
+      case Connection(i1: CellIdx, i2: FreeIdx) => connectCF(i1, i2)
+      case Connection(i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
     }
     m.return_
 
