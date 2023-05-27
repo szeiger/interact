@@ -175,6 +175,10 @@ class Model(val statements: Seq[AST.Statement]) {
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st2.Interpreter =
     new st2.Interpreter(globals, ruleCuts.values, compile, debugLog, debugBytecode, collectStats)
 
+  def createST3Interpreter(compile: Boolean = true, debugLog: Boolean = false,
+    debugBytecode: Boolean = false, collectStats: Boolean = false) : st3.Interpreter =
+    new st3.Interpreter(globals, ruleCuts.values, compile, debugLog, debugBytecode, collectStats)
+
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
     data.foreach(d => inter.scope.add(d.cuts, new Symbols(Some(globals))))

@@ -30,6 +30,11 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
       val checkFile = Path.of(basePath+".check")
       if(Files.exists(checkFile)) {
         val check = Files.readString(checkFile, StandardCharsets.UTF_8)
+        //println("---- Expected ----")
+        //println(check.trim)
+        //println("---- Actual ----")
+        //println(s.trim)
+        //println("---- End ----")
         assertEquals(check.trim, s.trim)
       }
       if(expectedSteps >= 0) assertEquals(expectedSteps, steps)
@@ -48,6 +53,8 @@ object MainTest {
     Seq[(Model => BaseInterpreter, String)](
       (_.createST2Interpreter(compile = false, collectStats = true), "st2.i"),
       (_.createST2Interpreter(compile = true, collectStats = true, debugLog = false, debugBytecode = false), "st2.c"),
+      (_.createST3Interpreter(compile = false, collectStats = true), "st3.i"),
+      (_.createST3Interpreter(compile = true, collectStats = true, debugLog = false, debugBytecode = false), "st3.c"),
       (_.createMTInterpreter(0, compile = false, collectStats = true), "mt0.i"),
       (_.createMTInterpreter(1, compile = false, collectStats = true), "mt1.i"),
       (_.createMTInterpreter(8, compile = false, collectStats = true), "mt8.i"),

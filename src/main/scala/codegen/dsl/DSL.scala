@@ -149,7 +149,14 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   private[this] def typeInsn(opcode: Int, tpe: Owner): this.type = insn(new TypeInsnNode(opcode, tpe.className))
 
   def label(l: Label): this.type = insn(new LabelNode(l))
-  def line(lineNumber: Int, l: Label = null): this.type = insn(new LineNumberNode(lineNumber, new LabelNode(l)))
+  def line(lineNumber: Int, l: Label = null): this.type = {
+    val l2 = if(l == null) {
+      val l2 = new Label
+      label(l2)
+      l2
+    } else l
+    insn(new LineNumberNode(lineNumber, new LabelNode(l2)))
+  }
 
   def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
 
@@ -166,6 +173,10 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def dup_x2: this.type = insn(DUP_X2)
   def pop: this.type = insn(POP)
   def swap: this.type = insn(SWAP)
+  def ior: this.type = insn(IOR)
+  def iand: this.type = insn(IAND)
+  def ixor: this.type = insn(IXOR)
+
   def iconst(i: Int): this.type = i match {
     case -1 => insn(ICONST_M1)
     case 0 => insn(ICONST_0)
@@ -189,15 +200,23 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def if_icmple(l: Label): this.type = jumpInsn(IF_ICMPLE, l)
   def if_icmplt(l: Label): this.type = jumpInsn(IF_ICMPLT, l)
 
-  private[this] def ifElse(opcode: Int, cont: => Unit, skip: => Unit): this.type = {
+  private[this] def ifThenElse(opcode: Int, cont: => Unit, skip: => Unit): this.type = {
     val lElse, lEndif = new Label
     jumpInsn(opcode, lElse); cont; goto(lEndif)
     label(lElse); skip
     label(lEndif)
     this
   }
-  def ifElseI_== (cont: => Unit)(skip: => Unit): this.type = ifElse(IF_ICMPNE, cont, skip)
-  def ifElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifElse(IF_ICMPEQ, cont, skip)
+  private[this] def ifThen(opcode: Int, cont: => Unit): this.type = {
+    val lEndif = new Label
+    jumpInsn(opcode, lEndif)
+    cont
+    label(lEndif)
+    this
+  }
+  def ifThenElseI_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPNE, cont, skip)
+  def ifThenElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPEQ, cont, skip)
+  def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
 
   def putfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(PUTFIELD, owner, name, desc)
   def getfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(GETFIELD, owner, name, desc)

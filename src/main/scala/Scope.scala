@@ -143,22 +143,35 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
   }
 
   def getCutLogs: Iterator[(Cell, String, String, Option[String])] = {
+    class Wire(val c1: Cell, val p1: Int, val c2: Cell, val p2: Int) {
+      override def hashCode(): Int = (c1, p1).hashCode() + (c2, p2).hashCode()
+      override def equals(obj: Any): Boolean = obj match {
+        case w: Wire =>
+          (c1 == w.c1 && p1 == w.p1 && c2 == w.c2 && p2 == w.p2) || (c1 == w.c2 && p1 == w.p2 && c2 == w.c1 && p2 == w.p1)
+        case _ => false
+      }
+    }
     val freeWireNames = freeWires.map(symbolName)
-    val leaders = mutable.HashMap.empty[Cell, Cell]
-    def leader(w: Cell): Cell = leaders.getOrElse(w, leaders.getOrElseUpdate(getConnected(w, -1)._1, w))
-    val cuts = mutable.HashSet.from(reachableCells.filter(c => getConnected(c, -1)._2 == -1)).map(leader)
+    val wires = mutable.HashMap.empty[Wire, Wire]
+    def wire(c1: Cell, p1: Int): Wire = {
+      val (c2, p2) = getConnected(c1, p1)
+      val w1 = new Wire(c1, p1, c2, p2)
+      wires.getOrElseUpdate(w1, w1)
+    }
+    val cuts = mutable.HashSet.from(reachableCells.filter(c => getConnected(c, -1)._2 == -1)).map(c => wire(c, -1))
     var nextTemp = -1
-    val helpers = mutable.Map.empty[Cell, String]
-    def explicit(ldr: Cell): String = helpers.getOrElseUpdate(ldr, {
+    val helpers = mutable.Map.empty[Wire, String]
+    def explicit(w: Wire): String = helpers.getOrElseUpdate(w, {
       nextTemp += 1
       "$" + nextTemp
     })
     def targetOrReplacement(t: Cell, p: Int): String = {
-      val ldr = leader(t)
-      helpers.get(ldr) match {
+      val w = wire(t, p)
+      if(freeWires.contains(t)) symbolName(t)
+      else helpers.get(w) match {
         case Some(s) => s
         case None if p == -1 => show(t)
-        case None => explicit(ldr)
+        case None => explicit(w)
       }
     }
     def show(c: Cell): String = c match {
@@ -168,8 +181,8 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
       case c => getAllConnected(c).drop(1).map { case (t, p) => targetOrReplacement(t, p) }.mkString(s"${symbolName(c)}(", ", ", ")")
     }
     val strs = cuts.iterator.map { w =>
-      val c1 = leader(w)
-      val c2 = getConnected(c1, -1)._1
+      val c1 = w.c1
+      val c2 = w.c2
       if(isFreeWire(c1)) (c1, symbolName(c1), show(c2), None)
       else if(isFreeWire(c2)) (c1, symbolName(c2), show(c1), None)
       else (c1, explicit(w), show(c1), Some(show(c2)))

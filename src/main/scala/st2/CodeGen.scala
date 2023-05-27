@@ -105,7 +105,7 @@ class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/
     val cut2 = m.storeLocal("cut2", cellT, Acc.FINAL)
     m.aload(cut1).invokevirtual(cell_symId)
     m.aload(m.receiver).getfield(sidFields(0))
-    m.ifElseI_== {
+    m.ifThenElseI_== {
       if(needs1) m.aload(cut1)
       if(needs2) m.aload(cut2)
     } {

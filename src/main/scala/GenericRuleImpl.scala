@@ -48,6 +48,8 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
     println("  Connections:")
     (internalConns ++ wireConnsDistinct).foreach { c => println(s"    ${c.str}") }
   }
+
+  override def toString: String = s"$sym1 . $sym2"
 }
 
 object GenericRuleImpl {

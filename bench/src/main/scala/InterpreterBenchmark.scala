@@ -18,7 +18,7 @@ class InterpreterBenchmark {
   //@Param(Array("-2", "0", "1", "2", "4", "1001", "1002", "1004"))
   //@Param(Array("1", "2", "4"))
   //@Param(Array("1001", "1004"))
-  @Param(Array("0"))
+  @Param(Array("-3"))
   private var mode: Int = _
 
   private val prelude =
@@ -89,7 +89,9 @@ class InterpreterBenchmark {
   }
 
   def getInterpreter(m: Model): BaseInterpreter =
-    if(mode == -2) m.createST2Interpreter(true) else m.createMTInterpreter(mode, true)
+    if(mode == -2) m.createST2Interpreter(true)
+    else if(mode == -3) m.createST3Interpreter(true)
+    else m.createMTInterpreter(mode, true)
 
   @Benchmark
   def mult1(bh: Blackhole): Unit =

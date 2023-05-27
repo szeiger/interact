@@ -1,0 +1,363 @@
+package de.szeiger.interact.st3
+
+import de.szeiger.interact.codegen.LocalClassLoader
+import de.szeiger.interact.{BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.mt.BitOps._
+
+import java.util.Arrays
+import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.annotation.{switch, tailrec}
+
+abstract class Cell(final var symId: Int) {
+  final var pcell: Cell = _
+  final var pport: Int = _
+
+  def arity: Int
+  def auxCell(p: Int): Cell
+  def auxPort(p: Int): Int
+  def setAux(p: Int, c2: Cell, p2: Int): Unit
+  def setCell(p: Int, c2: Cell, p2: Int): Unit
+  def getCell(p: Int): Cell
+  def getPort(p: Int): Int
+  def copy(): Cell
+
+  final def allPorts: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (getCell(i), getPort(i)))
+  override def toString = s"Cell($symId, $arity, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+}
+
+class Cell0(_symId: Int) extends Cell(_symId) {
+  def arity: Int = 0
+  def auxCell(p: Int): Cell = null
+  def auxPort(p: Int): Int = 0
+  def setAux(p: Int, c2: Cell, p2: Int): Unit = ()
+  def setCell(p: Int, c2: Cell, p2: Int): Unit = { pcell = c2; pport = p2 }
+  def getCell(p: Int): Cell = pcell
+  def getPort(p: Int): Int = pport
+  def copy() = new Cell0(symId)
+}
+
+class Cell1(_symId: Int) extends Cell(_symId) {
+  final var acell0: Cell = _
+  final var aport0: Int = _
+  def arity: Int = 1
+  def auxCell(p: Int): Cell = acell0
+  def auxPort(p: Int): Int = aport0
+  def setAux(p: Int, c2: Cell, p2: Int): Unit = { acell0 = c2; aport0 = p2 }
+  def setCell(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { pcell = c2; pport = p2 }
+  def getCell(p: Int): Cell = if(p == 0) acell0 else pcell
+  def getPort(p: Int): Int = if(p == 0) aport0 else pport
+  def copy() = new Cell1(symId)
+}
+
+class Cell2(_symId: Int) extends Cell(_symId) {
+  final var acell0: Cell = _
+  final var aport0: Int = _
+  final var acell1: Cell = _
+  final var aport1: Int = _
+  def arity: Int = 2
+  def auxCell(p: Int): Cell = if(p == 0) acell0 else acell1
+  def auxPort(p: Int): Int = if(p == 0) aport0 else aport1
+  def setAux(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { acell1 = c2; aport1 = p2 }
+  def setCell(p: Int, c2: Cell, p2: Int): Unit = (p: @switch) match {
+    case 0 => acell0 = c2; aport0 = p2
+    case 1 => acell1 = c2; aport1 = p2
+    case _ => pcell = c2; pport = p2
+  }
+  def getCell(p: Int): Cell = (p: @switch) match {
+    case 0 => acell0
+    case 1 => acell1
+    case _ => pcell
+  }
+  def getPort(p: Int): Int = (p: @switch) match {
+    case 0 => aport0
+    case 1 => aport1
+    case _ => pport
+  }
+  def copy() = new Cell2(symId)
+}
+
+class CellN(_symId: Int, val arity: Int) extends Cell(_symId) {
+  private[this] final val auxCells = new Array[Cell](arity)
+  private[this] final val auxPorts = new Array[Int](arity)
+  def auxCell(p: Int): Cell = auxCells(p)
+  def auxPort(p: Int): Int = auxPorts(p)
+  def setAux(p: Int, c2: Cell, p2: Int): Unit = { auxCells(p) = c2; auxPorts(p) = p2 }
+  def setCell(p: Int, c2: Cell, p2: Int): Unit =
+    if(p < 0) { pcell = c2; pport = p2 } else { auxCells(p) = c2; auxPorts(p) = p2 }
+  def getCell(p: Int): Cell = if(p < 0) pcell else auxCells(p)
+  def getPort(p: Int): Int = if(p < 0) pport else auxPorts(p)
+  def copy() = new CellN(symId, arity)
+}
+
+object Cells {
+  @inline def mk(symId: Int, arity: Int): Cell = arity match {
+    case 0 => new Cell0(symId)
+    case 1 => new Cell1(symId)
+    case 2 => new Cell2(symId)
+    case _ => new CellN(symId, arity)
+  }
+}
+
+class WireCell(final val sym: Symbol, _symId: Int) extends Cell0(_symId) {
+  override def toString = s"WireCell($sym, $symId, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+}
+
+abstract class RuleImpl {
+  var rule: GenericRuleImpl = _
+  def reduce(cut: Cell, ptw: PerThreadWorker): Unit
+  def cellAllocationCount: Int
+}
+
+final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Int]) extends RuleImpl {
+  override def toString = rule.toString
+
+  private[this] def delay(nanos: Int): Unit = {
+    val end = System.nanoTime() + nanos
+    while(System.nanoTime() < end) Thread.onSpinWait()
+  }
+
+  def reduce(cell: Cell, ptw: PerThreadWorker): Unit = {
+    val (c1, c2) = if(cell.symId == s1id) (cell, cell.pcell) else (cell.pcell, cell)
+    val cells = ptw.tempCells
+    val cccells = ptw.cutCacheCells
+    val ccports = ptw.cutCachePorts
+    //delay(20)
+    var i = 0
+    while(i < protoCells.length) {
+      val pc = protoCells(i)
+      val sid = short0(pc)
+      val ari = short1(pc)
+      cells(i) = Cells.mk(sid, ari)
+      i += 1
+    }
+
+    i = 0
+    while(i < c1.arity) {
+      cccells(i) = c1.auxCell(i)
+      ccports(i) = c1.auxPort(i)
+      i += 1
+    }
+    i = 0
+    while(i < c2.arity) {
+      cccells(i + c1.arity) = c2.auxCell(i)
+      ccports(i + c1.arity) = c2.auxPort(i)
+      i += 1
+    }
+
+    // Connect cut wire to new cell
+    @inline def connectFreeToInternal(ct1: Int, p1: Int, ct2: Int): Unit = {
+      val c2 = cccells(ct2)
+      val p2 = ccports(ct2)
+      val c1 = cells(ct1)
+      c1.setCell(p1, c2, p2)
+      c2.setCell(p2, c1, p1)
+      if((p1 & p2) < 0) ptw.createCut(c1)
+    }
+
+    @inline def connectFreeToFree(ct1: Int, ct2: Int): Unit = {
+      val c1 = cccells(ct1)
+      val p1 = ccports(ct1)
+      val c2 = cccells(ct2)
+      val p2 = ccports(ct2)
+      c1.setCell(p1, c2, p2)
+      c2.setCell(p2, c1, p1)
+      if((p1 & p2) < 0) ptw.createCut(c1)
+    }
+
+    i = 0
+    while(i < freeWiresPorts.length) {
+      val fwp = freeWiresPorts(i)
+      val fw = short0(fwp)
+      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), i)
+      else if(i < -1-fw) connectFreeToFree(i, -1-fw)
+      i += 1
+    }
+
+    i = 0
+    while(i < connections.length) {
+      val conn = connections(i)
+      val c1 = cells(byte0(conn))
+      val p1 = byte1(conn)
+      val c2 = cells(byte2(conn))
+      val p2 = byte3(conn)
+      c1.setCell(p1, c2, p2)
+      c2.setCell(p2, c1, p1)
+      if((p1 & p2) < 0) ptw.createCut(c1)
+      i += 1
+    }
+  }
+
+  def cellAllocationCount: Int = protoCells.length
+}
+
+final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
+  debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter { self =>
+  final val scope: Scope[Cell] = new Scope[Cell] {
+    def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0)
+    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
+      c1.setCell(p1, c2, p2)
+      c2.setCell(p2, c1, p1)
+    }
+    def getSymbol(c: Cell): Symbol = c match {
+      case c: WireCell => c.sym
+      case c => reverseSymIds(c.symId)
+    }
+    def getConnected(c: Cell, port: Int): (Cell, Int) = (c.getCell(port), c.getPort(port))
+    def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
+  }
+  private[this] final val allSymbols = globals.symbols
+  private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
+  private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
+  private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
+
+  def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
+
+  final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
+  private[this] final val (maxRuleCells, maxArity) = createRuleImpls()
+
+  def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
+  def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
+
+  def createRuleImpls(): (Int, Int) = {
+    val (cl, lookup, codeGen) = {
+      if(compile) {
+        val cl = new LocalClassLoader(debugBytecode)
+        val lookup = new SymbolIdLookup {
+          override def getSymbolId(name: String): Int = self.getSymbolId(globals(name))
+        }
+        val codeGen = new CodeGen("de/szeiger/interact/st2/gen")
+        (cl, lookup, codeGen)
+      } else (null, null, null)
+    }
+    val ris = new ArrayBuffer[RuleImpl]()
+    var maxC, maxA = 0
+    rules.foreach { cr =>
+      val s1 = globals(cr.name1)
+      val s2 = globals(cr.name2)
+      val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
+      if(debugLog) g.log()
+      val ri =
+        if(compile) codeGen.compile(g, cl)(lookup)
+        else {
+          if(g.maxCells > maxC) maxC = g.maxCells
+          if(g.arity1 > maxA) maxA = g.arity1
+          if(g.arity2 > maxA) maxA = g.arity2
+          new InterpretedRuleImpl(getSymbolId(s1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked, g.connectionsPacked)
+        }
+      ri.rule = g
+      ruleImpls(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
+      ris.addOne(ri)
+    }
+    (maxC, maxA)
+  }
+
+  @inline def mkRuleKey(c: Cell): Int = mkRuleKey(c.symId, c.pcell.symId)
+
+  @inline def mkRuleKey(s1: Int, s2: Int): Int =
+    if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
+
+  def detectInitialCuts: CutBuffer = {
+    val detected = mutable.HashSet.empty[Cell]
+    val buf = new CutBuffer(16)
+    scope.reachableCells.foreach { c =>
+      val ri = ruleImpls(mkRuleKey(c))
+      if(ri != null) {
+        if(c.pport < 0 && c.pcell.pport < 0 && !detected.contains(c.pcell)) {
+          detected.addOne(c)
+          buf.addOne(c, ri)
+        }
+      }
+    }
+    buf
+  }
+
+  // Used by the debugger
+  def getRuleImpl(c: Cell): RuleImpl = ruleImpls(mkRuleKey(c))
+  def reduce1(c: Cell): Unit = {
+    val w = new PerThreadWorker(this) {
+      protected[this] override def enqueueCut(c: Cell, ri: RuleImpl): Unit = ()
+    }
+    w.setNext(c, getRuleImpl(c))
+    w.processNext()
+  }
+
+  def reduce(): Int = {
+    val initial = detectInitialCuts
+    val w = new PerThreadWorker(this) {
+      protected[this] override def enqueueCut(c: Cell, ri: RuleImpl): Unit = initial.addOne(c, ri)
+    }
+    while(initial.nonEmpty) {
+      val (wr, ri) = initial.pop()
+      w.setNext(wr, ri)
+      w.processAll()
+    }
+    if(collectStats)
+      println(s"Total steps: ${w.steps}, allocated cells: ${w.cellAllocations}")
+    w.steps
+  }
+}
+
+final class CutBuffer(initialSize: Int) {
+  private[this] var wrs = new Array[Cell](initialSize)
+  private[this] var ris = new Array[RuleImpl](initialSize)
+  private[this] var len = 0
+  @inline def addOne(wr: Cell, ri: RuleImpl): Unit = {
+    if(len == wrs.length) {
+      wrs = Arrays.copyOf(wrs, wrs.length*2)
+      ris = Arrays.copyOf(ris, ris.length*2)
+    }
+    wrs(len) = wr
+    ris(len) = ri
+    len += 1
+  }
+  @inline def nonEmpty: Boolean = len != 0
+  @inline def pop(): (Cell, RuleImpl) = {
+    len -= 1
+    val wr = wrs(len)
+    val ri = ris(len)
+    wrs(len) = null
+    (wr, ri)
+  }
+}
+
+abstract class PerThreadWorker(final val inter: Interpreter) {
+  final val tempCells = inter.createTempCells()
+  final val (cutCacheCells, cutCachePorts) = inter.createCutCache()
+  private[this] final var nextCut: Cell = _
+  private[this] final var nextRule: RuleImpl = _
+  private[this] final val collectStats = inter.collectStats
+  var steps, cellAllocations = 0
+
+  protected[this] def enqueueCut(c: Cell, ri: RuleImpl): Unit
+
+  final def createCut(c: Cell): Unit = {
+    val ri = inter.ruleImpls(inter.mkRuleKey(c))
+    if(ri != null) {
+      if(nextCut == null) { nextCut = c; nextRule = ri }
+      else enqueueCut(c, ri)
+    }
+  }
+
+  final def setNext(c: Cell, ri: RuleImpl): Unit = {
+    this.nextCut = c
+    this.nextRule = ri
+  }
+
+  final def processNext(): Unit = {
+    val c = nextCut
+    val ri = nextRule
+    nextCut = null
+    ri.reduce(c, this)
+    if(collectStats) {
+      steps += 1
+      cellAllocations += ri.cellAllocationCount
+    }
+  }
+
+  @tailrec
+  final def processAll(): Unit = {
+    processNext()
+    if(nextCut != null) processAll()
+  }
+}
