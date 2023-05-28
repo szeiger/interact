@@ -28,18 +28,33 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
   private[this] def mkIdx(t: Int, p: Int): Idx =
     if(t >= 0) CellIdx(t, p) else mkFreeIdx(-1-t)
 
-  def internalConns: Iterator[Connection] = connectionsPacked.iterator.map { i =>
+  lazy val internalConns: Array[Connection] = connectionsPacked.map { i =>
     Connection(mkIdx(byte0(i), byte1(i)), mkIdx(byte2(i), byte3(i)))
   }
 
-  def wireConns: Iterator[Connection] = freeWiresPacked.zipWithIndex.iterator.map { case (fw, idx) =>
+  lazy val wireConns: Array[Connection] = freeWiresPacked.zipWithIndex.map { case (fw, idx) =>
     Connection(mkFreeIdx(idx), mkIdx(short0(fw), short1(fw)))
   }
 
-  def wireConnsDistinct: Iterator[Connection] = wireConns.filter {
+  lazy val wireConnsDistinct: Array[Connection] = wireConns.filter {
     case Connection(FreeIdx(r1, i1), FreeIdx(r2, i2)) =>
       if(r1 == r2) i1 < i2 else r1 < r2
     case _ => true
+  }
+
+  // Connections by cell & port (-1-based, includes principal)
+  lazy val cellConns: Array[Array[Idx]] = {
+    val a = new Array[Array[Idx]](cells.length)
+    for(i <- 0 until cells.length) a(i) = new Array[Idx](cells(i).arity+1)
+    def f(cs: Array[Connection]): Unit = cs.foreach {
+      case Connection(c1: CellIdx, c2: CellIdx) => a(c1.idx)(c1.port+1) = c2; a(c2.idx)(c2.port+1) = c1
+      case Connection(c1: CellIdx, c2) => a(c1.idx)(c1.port+1) = c2
+      case Connection(c1, c2: CellIdx) => a(c2.idx)(c2.port+1) = c1
+      case _ =>
+    }
+    f(internalConns)
+    f(wireConns)
+    a
   }
 
   def log(): Unit = {

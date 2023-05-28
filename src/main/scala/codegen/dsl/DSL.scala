@@ -176,6 +176,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def ior: this.type = insn(IOR)
   def iand: this.type = insn(IAND)
   def ixor: this.type = insn(IXOR)
+  def aconst_null: this.type = insn(ACONST_NULL)
 
   def iconst(i: Int): this.type = i match {
     case -1 => insn(ICONST_M1)

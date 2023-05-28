@@ -9,9 +9,9 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.annotation.{switch, tailrec}
 
-abstract class Cell(final var symId: Int) {
-  final var pcell: Cell = _
-  final var pport: Int = _
+abstract class Cell(final var symId: Int, _pcell: Cell, _pport: Int) {
+  final var pcell: Cell = _pcell
+  final var pport: Int = _pport
 
   def arity: Int
   def auxCell(p: Int): Cell
@@ -25,7 +25,8 @@ abstract class Cell(final var symId: Int) {
   override def toString = s"Cell($symId, $arity, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
-class Cell0(_symId: Int) extends Cell(_symId) {
+class Cell0(_symId: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
+  def this(_symId: Int) = this(_symId, null, 0)
   final def arity: Int = 0
   final def auxCell(p: Int): Cell = null
   final def auxPort(p: Int): Int = 0
@@ -35,9 +36,10 @@ class Cell0(_symId: Int) extends Cell(_symId) {
   final def getPort(p: Int): Int = pport
 }
 
-class Cell1(_symId: Int) extends Cell(_symId) {
-  final var acell0: Cell = _
-  final var aport0: Int = _
+class Cell1(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell(_symId, _pcell, _pport) {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+  final var acell0: Cell = _acell0
+  final var aport0: Int = _aport0
   final def arity: Int = 1
   final def auxCell(p: Int): Cell = acell0
   final def auxPort(p: Int): Int = aport0
@@ -47,11 +49,12 @@ class Cell1(_symId: Int) extends Cell(_symId) {
   final def getPort(p: Int): Int = if(p == 0) aport0 else pport
 }
 
-class Cell2(_symId: Int) extends Cell(_symId) {
-  final var acell0: Cell = _
-  final var aport0: Int = _
-  final var acell1: Cell = _
-  final var aport1: Int = _
+class Cell2(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell(_symId, _pcell, _pport) {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+  final var acell0: Cell = _acell0
+  final var aport0: Int = _aport0
+  final var acell1: Cell = _acell1
+  final var aport1: Int = _aport1
   final def arity: Int = 2
   final def auxCell(p: Int): Cell = if(p == 0) acell0 else acell1
   final def auxPort(p: Int): Int = if(p == 0) aport0 else aport1
@@ -73,7 +76,8 @@ class Cell2(_symId: Int) extends Cell(_symId) {
   }
 }
 
-class CellN(_symId: Int, val arity: Int) extends Cell(_symId) {
+class CellN(_symId: Int, val arity: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
+  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
   private[this] final val auxCells = new Array[Cell](arity)
   private[this] final val auxPorts = new Array[Int](arity)
   final def auxCell(p: Int): Cell = auxCells(p)
