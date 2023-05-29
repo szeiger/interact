@@ -7,7 +7,7 @@ import org.objectweb.asm.Label
 
 import scala.collection.mutable
 
-class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st3", genPackage) {
+class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st3", genPackage, logGenerated) {
   private val MAX_SPEC_CELL = 2
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")

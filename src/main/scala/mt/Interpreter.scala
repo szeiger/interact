@@ -1,6 +1,6 @@
 package de.szeiger.interact.mt
 
-import de.szeiger.interact.codegen.LocalClassLoader
+import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact.{BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
@@ -11,7 +11,7 @@ import scala.collection.mutable.ArrayBuffer
 import BitOps._
 
 import java.lang.invoke.{MethodHandles, VarHandle}
-import java.util.concurrent.{CountDownLatch, ForkJoinPool, ForkJoinWorkerThread, RecursiveAction, TimeUnit}
+import java.util.concurrent.{CountDownLatch, ForkJoinPool, ForkJoinWorkerThread, RecursiveAction}
 import scala.annotation.{switch, tailrec}
 
 final class WireRef(final var cell: Cell, final var cellPort: Int, private[this] final var _principals: AtomicInteger, _oppo: WireRef, _oppoCell: Cell, _oppoPort: Int) {
@@ -243,26 +243,25 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
   // This unused object makes mt branching workloads 20% faster. HotSpot optimization bug?
   private[this] final val boundaryRuleImpl = new InterpretedRuleImpl(0, null, null, null, null)
 
-  final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
-  private[this] final val (maxRuleCells, maxRuleWires) = createRuleImpls()
+  final val (ruleImpls, maxRuleCells, maxRuleWires) = createRuleImpls()
 
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
   def createTempWires(): Array[WireRef] = new Array[WireRef](maxRuleWires)
 
-  def createRuleImpls(): (Int, Int) = {
+  def createRuleImpls(): (Array[RuleImpl], Int, Int) = {
     val (cl, lookup, codeGen) = {
       if(compile) {
-        val cl = new LocalClassLoader(debugBytecode)
+        val cl = new LocalClassLoader()
         val lookup = new SymbolIdLookup {
           override def getSymbolId(name: String): Int = self.getSymbolId(globals(name))
         }
-        val codeGen = new CodeGen("de/szeiger/interact/mt/gen")
+        val codeGen = new CodeGen("de/szeiger/interact/mt/gen", debugBytecode)
         (cl, lookup, codeGen)
       } else (null, null, null)
     }
-    val ris = new ArrayBuffer[RuleImpl]()
-    var maxC, maxW = 0
-    rules.foreach { cr =>
+    val ris = new Array[RuleImpl](1 << (symBits << 1))
+    val maxC, maxW = new ParSupport.AtomicCounter
+    ParSupport.foreach(rules) { cr =>
       val s1 = globals(cr.name1)
       val s2 = globals(cr.name2)
       val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
@@ -270,14 +269,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       val ri =
         if(compile) codeGen.compile(g, cl)(lookup)
         else {
-          if(g.maxWires > maxW) maxW = g.maxWires
-          if(g.maxCells > maxC) maxC = g.maxCells
+          maxW.max(g.maxWires)
+          maxC.max(g.maxCells)
           new InterpretedRuleImpl(getSymbolId(s1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
         }
-      ruleImpls(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
-      ris.addOne(ri)
+      ris(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
+      VarHandle.releaseFence()
     }
-    (maxC, maxW)
+    (ris, maxC.get, maxW.get)
   }
 
   @inline def mkRuleKey(w: WireRef): Int =

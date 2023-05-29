@@ -5,7 +5,7 @@ import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, Symbo
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
-class CodeGen(genPackage: String) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st2", genPackage) {
+class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st2", genPackage, logGenerated) {
   private val MAX_SPEC_CELL = 2
   private val wrT = tp.c(s"$interpreterPackage/WireRef")
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")

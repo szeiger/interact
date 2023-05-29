@@ -2,8 +2,12 @@ package de.szeiger.interact.codegen
 
 import de.szeiger.interact.{GenericRuleImpl, RuleImplFactory, Symbol, SymbolIdLookup}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
+import org.objectweb.asm.util.{Textifier, TraceClassVisitor}
+import org.objectweb.asm.{ClassReader, ClassWriter}
 
-abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, genPackage: String) {
+import java.io.{OutputStreamWriter, PrintWriter}
+
+abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, genPackage: String, logGenerated: Boolean) {
   protected val riT = tp.c(s"$interpreterPackage/RuleImpl")
 
   def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
@@ -17,10 +21,21 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
     implementRuleClass(ric, sids, sidFields, g)
     val fac = createFactoryClass(ric, factClassName, syms.map(_.cons.name))
     def extName(n: String) = n.replace('/', '.')
-    cl.add(extName(implClassName), () => ric)
-    cl.add(extName(factClassName), () => fac)
+    addClass(cl, extName(implClassName), ric)
+    addClass(cl, extName(factClassName), fac)
     val c = cl.loadClass(fac.javaName)
     c.getDeclaredConstructor().newInstance().asInstanceOf[RuleImplFactory[RI]]
+  }
+
+  private def addClass(cl: LocalClassLoader, name: String, cls: ClassDSL): Unit = {
+    val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+    cls.accept(cw)
+    val raw = cw.toByteArray
+    if(logGenerated) {
+      val cr = new ClassReader(raw)
+      cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
+    }
+    cl.defineClass(name, raw)
   }
 
   protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRuleImpl): Unit

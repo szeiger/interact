@@ -1,13 +1,13 @@
 package de.szeiger.interact.st3
 
-import de.szeiger.interact.codegen.LocalClassLoader
+import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact.{BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
+import java.lang.invoke.VarHandle
 import java.util.Arrays
-import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 import scala.annotation.{switch, tailrec}
+import scala.collection.mutable
 
 abstract class Cell(final var symId: Int, _pcell: Cell, _pport: Int) {
   final var pcell: Cell = _pcell
@@ -209,29 +209,26 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
+  final val (ruleImpls, maxRuleCells, maxArity) = createRuleImpls()
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
-
-  final val ruleImpls = new Array[RuleImpl](1 << (symBits << 1))
-  private[this] final val (maxRuleCells, maxArity) = createRuleImpls()
-
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
   def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
 
-  def createRuleImpls(): (Int, Int) = {
+  def createRuleImpls(): (Array[RuleImpl], Int, Int) = {
     val (cl, lookup, codeGen) = {
       if(compile) {
-        val cl = new LocalClassLoader(debugBytecode)
+        val cl = new LocalClassLoader()
         val lookup = new SymbolIdLookup {
           override def getSymbolId(name: String): Int = self.getSymbolId(globals(name))
         }
-        val codeGen = new CodeGen("de/szeiger/interact/st2/gen")
+        val codeGen = new CodeGen("de/szeiger/interact/st2/gen", debugBytecode)
         (cl, lookup, codeGen)
       } else (null, null, null)
     }
-    val ris = new ArrayBuffer[RuleImpl]()
-    var maxC, maxA = 0
-    rules.foreach { cr =>
+    val ris = new Array[RuleImpl](1 << (symBits << 1))
+    val maxC, maxA = new ParSupport.AtomicCounter
+    ParSupport.foreach(rules) { cr =>
       val s1 = globals(cr.name1)
       val s2 = globals(cr.name2)
       val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
@@ -239,16 +236,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
       val ri =
         if(compile) codeGen.compile(g, cl)(lookup)
         else {
-          if(g.maxCells > maxC) maxC = g.maxCells
-          if(g.arity1 > maxA) maxA = g.arity1
-          if(g.arity2 > maxA) maxA = g.arity2
+          maxC.max(g.maxCells)
+          maxA.max(g.arity1)
+          maxA.max(g.arity2)
           new InterpretedRuleImpl(getSymbolId(s1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked, g.connectionsPacked)
         }
       ri.rule = g
-      ruleImpls(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
-      ris.addOne(ri)
+      ris(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
+      VarHandle.releaseFence()
     }
-    (maxC, maxA)
+    (ris, maxC.get, maxA.get)
   }
 
   @inline def mkRuleKey(c: Cell): Int = mkRuleKey(c.symId, c.pcell.symId)
