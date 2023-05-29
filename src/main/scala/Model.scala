@@ -179,6 +179,18 @@ class Model(val statements: Seq[AST.Statement]) {
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st3.Interpreter =
     new st3.Interpreter(globals, ruleCuts.values, compile, debugLog, debugBytecode, collectStats)
 
+  def createInterpreter(spec: String, debugLog: Boolean = false,
+      debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {
+    spec match {
+      case s"st2.i" => createST2Interpreter(compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st2.c" => createST2Interpreter(compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st3.i" => createST3Interpreter(compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st3.c" => createST3Interpreter(compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"mt${mode}.i" => createMTInterpreter(mode.toInt, compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+    }
+  }
+
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
     data.foreach(d => inter.scope.add(d.cuts, new Symbols(Some(globals))))

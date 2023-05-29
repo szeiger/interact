@@ -12,7 +12,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters._
 
 @RunWith(classOf[Parameterized])
-class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String) {
+class MainTest(spec: String) {
   val SCALE = 0
 
   def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1): Unit = {
@@ -21,7 +21,7 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
       //if(i % scaleFactor == 0) println(i)
       val statements = Parser.parse(Path.of(basePath+".in"))
       val model = new Model(statements)
-      val inter = newInterpreter(model)
+      val inter = model.createInterpreter(spec, collectStats = true, debugLog = false, debugBytecode = false)
       model.setData(inter)
       val steps = inter.reduce()
       val out = new ByteArrayOutputStream()
@@ -48,22 +48,13 @@ class MainTest(newInterpreter: Model => BaseInterpreter, interpreterName: String
 }
 
 object MainTest {
-  @Parameters(name = "{1}")
-  def interpreters =
-    Seq[(Model => BaseInterpreter, String)](
-      (_.createST2Interpreter(compile = false, collectStats = true), "st2.i"),
-      (_.createST2Interpreter(compile = true, collectStats = true, debugLog = false, debugBytecode = false), "st2.c"),
-      (_.createST3Interpreter(compile = false, collectStats = true), "st3.i"),
-      (_.createST3Interpreter(compile = true, collectStats = true, debugLog = false, debugBytecode = false), "st3.c"),
-      (_.createMTInterpreter(0, compile = false, collectStats = true), "mt0.i"),
-      (_.createMTInterpreter(1, compile = false, collectStats = true), "mt1.i"),
-      (_.createMTInterpreter(8, compile = false, collectStats = true), "mt8.i"),
-      (_.createMTInterpreter(1001, compile = false, collectStats = true), "mt1001.i"),
-      (_.createMTInterpreter(1008, compile = false, collectStats = true), "mt1008.i"),
-      (_.createMTInterpreter(0, compile = true, collectStats = true), "mt0.c"),
-      (_.createMTInterpreter(1, compile = true, collectStats = true), "mt1.c"),
-      (_.createMTInterpreter(8, compile = true, collectStats = true), "mt8.c"),
-      (_.createMTInterpreter(1001, compile = true, collectStats = true), "mt1001.c"),
-      (_.createMTInterpreter(1008, compile = true, collectStats = true), "mt1008.c"),
-    ).map { case (f, s) => Array[AnyRef](f, s) }.asJava
+  @Parameters(name = "{0}")
+  def interpreters = Seq(
+    "st2.i", "st2.c",
+    "st3.i", "st3.c",
+    "mt0.i", "mt1.i", "mt8.i",
+    "mt1000.i", "mt1001.i", "mt1008.i",
+    "mt0.c", "mt1.c", "mt8.c",
+    "mt1000.c", "mt1001.c", "mt1008.c",
+  ).map(s => Array[AnyRef](s)).asJava
 }
