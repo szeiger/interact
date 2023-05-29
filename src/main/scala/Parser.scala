@@ -22,14 +22,17 @@ object AST {
   sealed trait Expr extends ExprOrCut {
     def target: Ident
     def args: Seq[Expr]
+    def allIdents: Iterator[Ident]
   }
   case class Ident(s: String) extends Expr {
     def show = s
     def target = this
     def args = Nil
+    def allIdents: Iterator[Ident] = Iterator.single(this)
   }
   case class Ap(target: Ident, args: Seq[Expr]) extends Expr {
     def show = args.iterator.map(_.show).mkString(s"${target.show}(", ", ", ")")
+    def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   }
   case class Cut(left: Expr, right: Expr) extends ExprOrCut {
     def show = s"${left.show} . ${right.show}"

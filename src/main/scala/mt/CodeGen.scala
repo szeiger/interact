@@ -234,7 +234,5 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     // statistics
     c.method(Acc.PUBLIC, "cellAllocationCount", tp.m().I).iconst(cellAllocations).ireturn
     c.method(Acc.PUBLIC, "wireAllocationCount", tp.m().I).iconst(wireAllocations).ireturn
-
-    c
   }
 }

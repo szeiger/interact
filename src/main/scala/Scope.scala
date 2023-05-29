@@ -4,140 +4,90 @@ import java.io.PrintStream
 import scala.annotation.tailrec
 import scala.collection.mutable
 
-abstract class Scope[Cell >: Null <: AnyRef] { self =>
+abstract class Scope[Cell] { self =>
   val freeWires = mutable.HashSet.empty[Cell]
 
   def createCell(sym: Symbol): Cell
   def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit
-  def getSymbol(c: Cell): Symbol
-  def getConnected(c: Cell, port: Int): (Cell, Int)
-  def isFreeWire(c: Cell): Boolean
-
-  class Delegate extends Scope[Cell] {
-    def createCell(sym: Symbol): Cell = self.createCell(sym)
-    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = self.connectCells(c1, p1, c2, p2)
-    def getSymbol(c: Cell): Symbol = self.getSymbol(c)
-    def getConnected(c: Cell, port: Int): (Cell, Int) = self.getConnected(c, port)
-    def isFreeWire(c: Cell): Boolean = self.isFreeWire(c)
-  }
-
-  def symbolName(c: Cell): String = getSymbol(c).id
-  def getArity(c: Cell): Int = getSymbol(c).arity
-  def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
-
-  private def addSymbols(cs: Iterable[AST.Cut], symbols: Symbols): Unit = {
-    def f(e: AST.Expr): Unit = e match {
-      case i: AST.Ident =>
-        val s = symbols.getOrAdd(i.s)
-        if(!s.isCons) s.refs += 1
-      case AST.Ap(i, es) => f(i); es.foreach(f)
-    }
-    cs.foreach { c => f(c.left); f(c.right) }
-  }
 
   def clear(): Unit = freeWires.clear()
 
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
-    @tailrec
-    def connectAny(t1: AnyRef, p1: Int, t2: AnyRef, p2: Int): Unit = {
-      (t1, t2) match {
-        case (t1: TempWire, t2: Cell) =>
-          connectAny(t2, p2, t1, p1)
-        case (t1: Cell, t2: TempWire) =>
-          if(t2.c == null) { t2.c = t1; t2.p = p1 }
-          else connectCells(t1, p1, t2.c, t2.p)
-        case (t1: Cell, t2: Cell) =>
-          connectCells(t1, p1, t2, p2)
-      }
+    @tailrec def connectAny(t1: Any, p1: Int, t2: Any): Unit = (t1, t2) match {
+      case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, -1, t1)
+      case (t1: Cell @unchecked, t2: TempWire) if t2.c == null => t2.c = t1; t2.p = p1
+      case (t1: Cell @unchecked, t2: TempWire) => connectCells(t1, p1, t2.c, t2.p)
+      case (t1: Cell @unchecked, t2: Cell @unchecked) => connectCells(t1, p1, t2, -1)
     }
-    addSymbols(cuts, syms)
+    def addSyms(e: AST.Expr): Unit = e.allIdents.foreach { i =>
+      val s = syms.getOrAdd(i.s)
+      if(!s.isCons) s.refs += 1
+    }
+    cuts.foreach { case AST.Cut(e1, e2) => addSyms(e1); addSyms(e2) }
     val bind = mutable.HashMap.empty[Symbol, TempWire]
-    val toCreate = mutable.Queue.empty[(AST.Expr, Cell, Int)]
-    def create(e: AST.Expr, cCell: Cell, cPort: Int): (AnyRef, Int) = {
-      val (wr: AnyRef, pr: Int) = e match {
-        case i: AST.Ident =>
-          val s = syms.getOrAdd(i.s)
-          if(s.isCons) {
-            val s = syms.getOrAdd(i.s)
-            val c = createCell(s)
-            (c, -1)
-          } else if(s.refs == 1) {
-            val c = createCell(s)
-            freeWires.addOne(c)
-            (c, -1)
-          } else if(s.refs == 2) {
-            bind.get(s) match {
-              case Some(w) => (w, 0)
-              case None =>
-                val w = new TempWire
-                bind.put(s, w)
-                (w, -1)
-            }
-          } else sys.error(s"Non-linear use of ${i.show} in data")
-        case AST.Ap(i, args) =>
-          val s = syms.getOrAdd(i.s)
-          assert(s.isCons)
-          val c = createCell(s)
-          args.zipWithIndex.foreach { case (a, p) => toCreate.enqueue((a, c, p)) }
-          (c, -1)
-      }
-      if(cCell != null) connectAny(cCell, cPort, wr, pr)
-      (wr, pr)
+    def create(e: AST.Expr): Any = e match {
+      case i: AST.Ident =>
+        val s = syms.getOrAdd(i.s)
+        s.refs match {
+          case 0 => createCell(s)
+          case 1 => val c = createCell(s); freeWires.addOne(c); c
+          case 2 => bind.getOrElseUpdate(s, new TempWire)
+          case _ => sys.error(s"Non-linear use of ${i.show} in data")
+        }
+      case AST.Ap(i, args) =>
+        val s = syms.getOrAdd(i.s)
+        assert(s.isCons)
+        val c = createCell(s)
+        args.zipWithIndex.foreach { case (a, p) => connectAny(c, p, create(a)) }
+        c
     }
-    def createCut(e: AST.Cut): Unit = {
-      val (lt, ls) = create(e.left, null, 0)
-      val (rt, rs) = create(e.right, null, 0)
-      connectAny(lt, ls, rt, rs)
-    }
-    cuts.foreach { c =>
-      createCut(c)
-      while(toCreate.nonEmpty) {
-        val (e, c, p) = toCreate.dequeue()
-        create(e, c, p)
-      }
-    }
+    cuts.foreach(e => connectAny(create(e.left), -1, create(e.right)))
   }
+}
 
-  def validate(): Unit = {
+abstract class Analyzer[Cell] extends Scope[Cell] { self =>
+  def getSymbol(c: Cell): Symbol
+  def getConnected(c: Cell, port: Int): (Cell, Int)
+  def isFreeWire(c: Cell): Boolean
+
+  def symbolName(c: Cell): String = getSymbol(c).id
+  def getArity(c: Cell): Int = getSymbol(c).arity
+  def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
+
+  def validate(): Unit =
     reachableCells.flatMap { c1 => getAllConnected(c1).zipWithIndex.map(t => (c1, t)) }.foreach { case (c1, ((c2, p2), p1)) =>
       assert(getConnected(c2, p2) == (c1, p1-1))
     }
-  }
 
   object Church {
-    def unapply(_c: Cell): Option[Int] = {
-      var acc = 0
-      var c = _c
-      while(true) {
-        if(symbolName(c) == "Z" && getArity(c) == 0) return Some(acc)
-        else if(symbolName(c) == "S" && getArity(c) == 1) {
-          getConnected(c, 0) match {
-            case (c2, -1) => c = c2; acc += 1
-            case _ => return None
-          }
-        } else return None
-      }
-      None
+    def unapply(c: Cell): Option[Int] = unapply(c, 0)
+    @tailrec private[this] def unapply(c: Cell, acc: Int): Option[Int] = (symbolName(c), getArity(c)) match {
+      case ("Z", 0) => Some(acc)
+      case ("S", 1) =>
+        val (c2, p2) = getConnected(c, 0)
+        if(p2 != -1) None else unapply(c2, acc+1)
+      case _ => None
     }
   }
 
   object ListCons {
-    def unapply(c: Cell): Option[(Cell, Cell)] = {
-      if(symbolName(c) == "Cons" && getArity(c) == 2) {
+    def unapply(c: Cell): Option[(Cell, Cell)] = (symbolName(c), getArity(c)) match {
+      case ("Cons", 2) =>
         val (c1, p1) = getConnected(c, 0)
         val (c2, p2) = getConnected(c, 1)
         if(p1 < 0 && p2 < 0) Some((c1, c2)) else None
-      } else None
+      case _ => None
     }
   }
 
   def reachableCells: Iterator[Cell] = {
     val s = mutable.HashSet.empty[Cell]
-    val q = mutable.Queue.from(freeWires.flatMap(c => getAllConnected(c).map(_._1)))
+    val q = mutable.ArrayBuffer.from(freeWires.flatMap(getAllConnected(_).map(_._1)))
     while(q.nonEmpty) {
-      val w = q.dequeue()
-      if(s.add(w)) q.enqueueAll(getAllConnected(w).map(_._1))
+      val w = q.last
+      q.dropRightInPlace(1)
+      if(s.add(w)) q.addAll(getAllConnected(w).map(_._1))
     }
     s.iterator
   }
@@ -151,7 +101,6 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
         case _ => false
       }
     }
-    val freeWireNames = freeWires.map(symbolName)
     val wires = mutable.HashMap.empty[Wire, Wire]
     def wire(c1: Cell, p1: Int): Wire = {
       val (c2, p2) = getConnected(c1, p1)
@@ -187,6 +136,7 @@ abstract class Scope[Cell >: Null <: AnyRef] { self =>
       else if(isFreeWire(c2)) (c1, symbolName(c2), show(c1), None)
       else (c1, explicit(w), show(c1), Some(show(c2)))
     }
+    val freeWireNames = freeWires.map(symbolName)
     strs.zipWithIndex.toIndexedSeq.sortBy { case ((_, l, _, _), idx) =>
       val f = freeWireNames.contains(l)
       (!f, if(f) l else "", idx)

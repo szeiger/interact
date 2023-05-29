@@ -69,28 +69,28 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
 }
 
 object GenericRuleImpl {
-  def apply[C >: Null <: AnyRef](scope: Scope[C], reduced: Seq[AST.Cut], globals: Symbols, sym1: Symbol, sym2: Symbol,
-    args1: Seq[String], args2: Seq[String]): GenericRuleImpl = {
+  def apply[C](cr: CheckedRule, globals: Symbols): GenericRuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
-    val sc = new scope.Delegate
-    sc.add(reduced, syms)
-    //sc.validate()
-    val cells = sc.reachableCells.filter(c => !sc.freeWires.contains(c)).toIndexedSeq
-    val protoCells = cells.iterator.map(scope.getSymbol).toArray
-    val freeLookup = sc.freeWires.iterator.map { w => (scope.getSymbol(w), w) }.toMap
-    val wires = (args1 ++ args2).map { i => freeLookup(syms(i)) }.toIndexedSeq
-    val lookup = (cells.iterator.zipWithIndex ++ wires.iterator.zipWithIndex.map { case (w, p) => (w, -p-1) }).toMap
+    val cells = mutable.ArrayBuffer.empty[Symbol]
     val conns = mutable.HashSet.empty[Int]
-    cells.iterator.zipWithIndex.foreach { case (c, i) =>
-      scope.getAllConnected(c).zipWithIndex.foreach { case ((t, p), j) =>
-        val w = lookup(t)
-        if(w >= 0 && !conns.contains(checkedIntOfBytes(w, p, i, j-1)))
-          conns.add(checkedIntOfBytes(i, j-1, w, p))
+    val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (syms.getOrAdd(n), -i-1) }.toMap
+    assert(freeLookup.size == cr.args1.length + cr.args2.length)
+    val fwp = new Array[Int](freeLookup.size)
+    val sc = new Scope[Int] {
+      override def createCell(sym: Symbol): Int = if(sym.isCons) { cells += sym; cells.length-1 } else freeLookup(sym)
+      override def connectCells(c1: Int, p1: Int, c2: Int, p2: Int): Unit = {
+        if(c1 >= 0 && c2 >= 0) {
+          if(!conns.contains(checkedIntOfBytes(c2, p2, c1, p1)))
+            conns.add(checkedIntOfBytes(c1, p1, c2, p2))
+        } else {
+          if(c1 < 0) fwp(-1-c1) = checkedIntOfShorts(c2, p2)
+          if(c2 < 0) fwp(-1-c2) = checkedIntOfShorts(c1, p1)
+        }
       }
     }
-    val fwp = wires.iterator.map { w => val (c, p) = scope.getConnected(w, -1); checkedIntOfShorts(lookup(c), p) }.toArray
-    new GenericRuleImpl(sym1, sym2, protoCells, conns.toArray, fwp)
+    sc.add(cr.r.reduced, syms)
+    new GenericRuleImpl(globals(cr.name1), globals(cr.name2), cells.toArray, conns.toArray, fwp)
   }
 }
 

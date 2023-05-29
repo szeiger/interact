@@ -1,10 +1,9 @@
 package de.szeiger.interact.st2
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{BaseInterpreter, CheckedRule, GenericRuleImpl, Scope, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{BaseInterpreter, CheckedRule, GenericRuleImpl, Analyzer, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
-import java.lang.invoke.VarHandle
 import java.util.Arrays
 import scala.collection.mutable
 import scala.annotation.{switch, tailrec}
@@ -163,8 +162,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 }
 
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
-  debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter { self =>
-  final val scope: Scope[Cell] = new Scope[Cell] {
+  debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
+  final val scope: Analyzer[Cell] = new Analyzer[Cell] {
     def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.cons.arity) else new WireCell(sym, 0)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def getSymbol(c: Cell): Symbol = c match {
@@ -181,34 +180,25 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   final val (ruleImpls, maxRuleCells) = createRuleImpls()
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
+  def getSymbolId(name: String): Int = getSymbolId(globals(name))
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
   def createRuleImpls(): (Array[RuleImpl], Int) = {
-    val (cl, lookup, codeGen) = {
-      if(compile) {
-        val cl = new LocalClassLoader()
-        val lookup = new SymbolIdLookup {
-          override def getSymbolId(name: String): Int = self.getSymbolId(globals(name))
-        }
-        val codeGen = new CodeGen("de/szeiger/interact/st2/gen", debugBytecode)
-        (cl, lookup, codeGen)
-      } else (null, null, null)
-    }
+    val (cl, codeGen) =
+      if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/st2/gen", debugBytecode))
+      else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val max = new ParSupport.AtomicCounter
     ParSupport.foreach(rules) { cr =>
-      val s1 = globals(cr.name1)
-      val s2 = globals(cr.name2)
-      val g = GenericRuleImpl(scope, cr.r.reduced, globals, s1, s2, cr.args1, cr.args2)
+      val g = GenericRuleImpl(cr, globals)
       if(debugLog) g.log()
       val ri =
-        if(compile) codeGen.compile(g, cl)(lookup)
+        if(compile) codeGen.compile(g, cl)(this)
         else {
           max.max(g.maxCells)
-          new InterpretedRuleImpl(getSymbolId(s1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
+          new InterpretedRuleImpl(getSymbolId(g.sym1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
         }
-      ris(mkRuleKey(getSymbolId(s1), getSymbolId(s2))) = ri
-      VarHandle.releaseFence()
+      ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri
     }
     (ris, max.get)
   }

@@ -10,7 +10,7 @@ object Main extends App {
   println("Constructors:")
   model.constrs.values.foreach(c => println(s"  ${c.show}"))
   println("Rules:")
-  model.ruleCuts.values.foreach(r => println(s"  ${r.show}"))
+  model.rules.foreach(r => println(s"  ${r.show}"))
   //println("Data:")
   //model.data.foreach(r => println(s"  ${r.show}"))
 

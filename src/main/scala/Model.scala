@@ -6,17 +6,6 @@ class CheckedRule(val r: AST.Rule, val name1: String, val args1: Seq[String], va
   def show: String = s"${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}"
 }
 
-class RuleKey(_name1: String, _name2: String) {
-  val (name1, name2) =
-    if(_name1.compareTo(_name2) <= 0) (_name1, _name2)
-    else (_name2, _name1)
-  override def hashCode(): Int = name1.hashCode() + name2.hashCode()
-  override def equals(obj: Any): Boolean = obj match {
-    case o: RuleKey => name1 == o.name1 && name2 == o.name2
-    case _ => false
-  }
-}
-
 class Symbol(val id: String) {
   var refs = 0
   var cons: AST.Cons = null
@@ -47,14 +36,16 @@ class Symbols(parent: Option[Symbols] = None) {
 }
 
 trait BaseInterpreter {
-  def scope: Scope[_]
+  def scope: Analyzer[_]
   def reduce(): Int
 }
 
 class Model(val statements: Seq[AST.Statement]) {
+  private[this] val ruleCuts = mutable.Map.empty[(String, String), CheckedRule]
   val constrs = mutable.Map.empty[String, AST.Cons]
-  val ruleCuts = mutable.Map.empty[RuleKey, CheckedRule]
   val data = mutable.ArrayBuffer.empty[AST.Data]
+
+  def rules: Iterable[CheckedRule] = ruleCuts.values
 
   def derive(cons: AST.Cons, id: String): AST.Rule = {
     var nextId = 0
@@ -100,7 +91,7 @@ class Model(val statements: Seq[AST.Statement]) {
     val (n1, a1) = checkCutCell(r.cut.left)
     val (n2, a2) = checkCutCell(r.cut.right)
     val impl = new CheckedRule(r, n1, a1, n2, a2)
-    val key = new RuleKey(impl.name1, impl.name2)
+    val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
     if(ruleCuts.contains(key)) sys.error(s"Rule ${r.cut.show} duplicates ${impl.name1} . ${impl.name2}")
     ruleCuts.put(key, impl)
   }
@@ -169,15 +160,15 @@ class Model(val statements: Seq[AST.Statement]) {
 
   def createMTInterpreter(numThreads: Int, compile: Boolean = true, debugLog: Boolean = false,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
-    new mt.Interpreter(globals, ruleCuts.values, numThreads, compile, debugLog, debugBytecode, collectStats)
+    new mt.Interpreter(globals, rules, numThreads, compile, debugLog, debugBytecode, collectStats)
 
   def createST2Interpreter(compile: Boolean = true, debugLog: Boolean = false,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st2.Interpreter =
-    new st2.Interpreter(globals, ruleCuts.values, compile, debugLog, debugBytecode, collectStats)
+    new st2.Interpreter(globals, rules, compile, debugLog, debugBytecode, collectStats)
 
   def createST3Interpreter(compile: Boolean = true, debugLog: Boolean = false,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st3.Interpreter =
-    new st3.Interpreter(globals, ruleCuts.values, compile, debugLog, debugBytecode, collectStats)
+    new st3.Interpreter(globals, rules, compile, debugLog, debugBytecode, collectStats)
 
   def createInterpreter(spec: String, debugLog: Boolean = false,
       debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {

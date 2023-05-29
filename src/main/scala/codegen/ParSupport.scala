@@ -1,5 +1,6 @@
 package de.szeiger.interact.codegen
 
+import java.lang.invoke.VarHandle
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{CountedCompleter, ForkJoinPool}
 import scala.annotation.tailrec
@@ -29,8 +30,12 @@ object ParSupport {
       def getNext: T = it.synchronized { if(it.hasNext) it.next() else null }
       final class Task(parent: CountedCompleter[_]) extends CountedCompleter[Null](parent) {
         @tailrec def compute: Unit = getNext match {
-          case null => propagateCompletion()
-          case v => f(v); compute
+          case null =>
+            VarHandle.releaseFence()
+            propagateCompletion()
+          case v =>
+            f(v)
+            compute
         }
       }
       (new CountedCompleter[Null](null, parallelism) {
