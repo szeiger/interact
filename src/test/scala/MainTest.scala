@@ -42,6 +42,7 @@ class MainTest(spec: String) {
   }
 
   @Test def testSeq = check("seq", scaleFactor = 50, expectedSteps = 128)
+  @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 128)
   @Test def testParMult = check("par-mult")
   @Test def testReduceRHS = check("reduce-rhs", expectedSteps = 2)
   @Test def testFib = check("fib")

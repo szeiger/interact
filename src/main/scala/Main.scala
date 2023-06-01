@@ -8,13 +8,15 @@ object Main extends App {
   val model = new Model(statements)
 
   println("Constructors:")
-  model.constrs.values.foreach(c => println(s"  ${c.show}"))
+  model.constrs.foreach(c => println(s"  ${c.show}"))
+  println("Defs:")
+  model.defs.foreach(d => println(s"  ${d.show}"))
   println("Rules:")
   model.rules.foreach(r => println(s"  ${r.show}"))
   //println("Data:")
   //model.data.foreach(r => println(s"  ${r.show}"))
 
-  val inter = model.createST2Interpreter()
+  val inter = model.createST2Interpreter(compile = false)
   model.setData(inter)
   println("Initial state:")
   inter.scope.log(System.out)

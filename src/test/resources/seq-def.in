@@ -1,0 +1,64 @@
+# Church numerals
+cons Z     deriving Erase, Dup
+cons S(n)  deriving Erase, Dup
+
+# Erasure and Duplication
+def Erase(_)
+def Dup(_): (a, b)
+  | Dup(_) = (c, d) => (c, d)
+
+# Addition
+def add(_, y): r
+  | Z => y
+  | S(x) => add(x, S(y))
+
+# Multiplication
+def mult(_, y): r
+  | Z => Erase(y), Z
+  | S(x) => (y1, y2) = Dup(y), add(mult(x, y1), y2)
+
+# Example: Computations on church numerals
+let example_3_plus_5 =
+  y . 5'c,
+  x . 3'c,
+  add(y, example_3_plus_5) . x
+let example_3_times_2 =
+  mult(2'c, example_3_times_2) . 3'c
+
+# Lists
+cons Nil                     deriving Erase, Dup
+cons Cons(head, tail) . l    deriving Erase, Dup
+
+def length(list): r
+  | Nil => Z
+  | Cons(x, xs) => Erase(x) , S(length(xs))
+
+def map(list, fi, fo): r
+  | Nil => Erase(fi), Erase(fo), Nil
+  | Cons(x, xs) => (x, fi2) = Dup(fi),
+                   (fo1, fo2) = Dup(fo),
+                   Cons(fo1, map(xs, fi2, fo2))
+
+# Example: List operations
+let l0_length, l0_mapped =
+  l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+  l0 . Dup(l0a, l0b),
+  length(l0_length) . l0a,
+  fin . add(2'c, fout),
+  map(fin, fout, l0_mapped) . l0b
+
+# Explicit lambdas
+cons Lambda(in, out)         deriving Erase, Dup
+def apply(l, in): out
+  | Lambda(i, o) => in = i, o
+
+# Example: List mapping with lambdas
+def map2(l, f): r
+  | Nil => Erase(f), Nil
+  | Cons(x, xs) => (f1, f2) = Dup(f),
+                   Cons(apply(f1, x), map2(xs, f2))
+
+let l0_mapped_lambda =
+  l0 . 1'c ::  2'c :: 3'c :: Nil,
+  f . Lambda(add(2'c, fout), fout),
+  map2(f, l0_mapped_lambda) . l0

@@ -1,0 +1,5 @@
+  example_3_plus_5 . 8'c
+  example_3_times_2 . 6'c
+  l0_length . 3'c
+  l0_mapped . 3'c :: 4'c :: 5'c :: Nil
+  l0_mapped_lambda . 3'c :: 4'c :: 5'c :: Nil

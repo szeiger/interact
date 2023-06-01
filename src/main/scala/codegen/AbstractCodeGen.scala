@@ -11,15 +11,15 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
   protected val riT = tp.c(s"$interpreterPackage/RuleImpl")
 
   def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
-    val name1 = g.sym1.cons.name
-    val name2 = g.sym2.cons.name
+    val name1 = g.sym1.id
+    val name2 = g.sym2.id
     val implClassName = s"$genPackage/Rule$$$name1$$$name2"
     val factClassName = s"$genPackage/RuleFactory$$$name1$$$name2"
     val syms = (Iterator.single(g.sym1) ++ g.cells.iterator).distinct.toArray
     val sids = syms.iterator.zipWithIndex.toMap
     val (ric, sidFields) = createRuleClassBase(implClassName, riT, sids)
     implementRuleClass(ric, sids, sidFields, g)
-    val fac = createFactoryClass(ric, factClassName, syms.map(_.cons.name))
+    val fac = createFactoryClass(ric, factClassName, syms.map(_.id))
     def extName(n: String) = n.replace('/', '.')
     addClass(cl, extName(implClassName), ric)
     addClass(cl, extName(factClassName), fac)
