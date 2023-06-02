@@ -1,12 +1,13 @@
 cons Z
 cons S(n)
-cons Add(y, r) . x
-  cut Z = y . r
-  cut S(x) = Add(S(y), r) . x
-cons Mult(y, r) . x
-  cut Z = r . Z, y . erase
-  cut S(x) = x . Mult(a, s1), y . dup (a, b), b . Add(s1, r)
-let res =
-  y . 1000'c,
-  x . 1000'c,
-  Mult(y, res) . x
+
+def add(_, y): r
+  | Z => y
+  | S(x) => add(x, S(y))
+
+def mult(_, y): r
+  | Z => erase(y), Z
+  | S(x) => (a, b) = dup(y),
+            r = add(b, mult(x, a))
+
+let res = mult(1000'c, 1000'c)

@@ -24,12 +24,10 @@ cons Mult(y, r) . x
   cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
 
 # Example: Computations on church numerals
-let example_3_plus_5 =
-  y . S(S(S(S(S(Z))))),
-  x . S(S(S(Z))),
-  Add(y, example_3_plus_5) . x
-let example_3_times_2 =
-  Mult(2'c, example_3_times_2) . 3'c
+let y = S(S(S(S(S(Z))))),
+    x = S(S(S(Z))),
+    Add(y, example_3_plus_5) = x
+let Mult(2'c, example_3_times_2) = 3'c
 
 # Lists
 cons Nil
@@ -44,12 +42,11 @@ cons Map(fin, fout, res) . l
   cut Cons(x, xs) = res . Cons(fouta, xsm), xs . Map(finb, foutb, xsm), fin . dup(x, finb), fout . dup(fouta, foutb)
 
 # Example: List operations
-let l0_length, l0_mapped =
-  l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
-  l0 . dup(l0a, l0b),
-  Length(l0_length) . l0a,
-  fin . Add(2'c, fout),
-  Map(fin, fout, l0_mapped) . l0b
+let l0 = Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+    l0 = dup(l0a, l0b),
+    Length(l0_length) = l0a,
+    fin = Add(2'c, fout),
+    Map(fin, fout, l0_mapped) = l0b
 
 # Explicit lambdas
 cons Lambda(in, out)
@@ -60,7 +57,6 @@ cons Apply(in, out) . l
 cons Map2(f, res) . l
   cut Nil = res . Nil, f . erase
   cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . dup(Apply(x, fx), fb)
-let l0_mapped_lambda =
-  l0 . 1'c ::  2'c :: 3'c :: Nil,
-  f . Lambda(Add(2'c, fout), fout),
-  Map2(f, l0_mapped_lambda) . l0
+let l0 = 1'c :: 2'c :: 3'c :: Nil,
+    f = Lambda(Add(2'c, fout), fout),
+    Map2(f, l0_mapped_lambda) = l0

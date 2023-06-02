@@ -1,82 +1,62 @@
 # Church numerals
-cons Z          deriving () # Don't auto-derive
-cons S(n)       deriving ()
+cons Z
+cons S(n)
 
-# Pre-defined Erasure and Duplication
-# cons erase                   deriving (erase) # Only auto-derive erase, but not dup
-# cons dup(a, b) . in          deriving (erase)
-#   cut dup(c, d) = a . c, b . d
-
-# Example: Manual dup and erase rules (instead of deriving)
-rule erase . Z = ()
-rule erase . S(x) = erase . x
-rule dup(a, b) . Z  = a . Z, b . Z
-rule dup(a, b) . S(x) = x . dup(sa, sb), a . S(sa), b . S(sb)
+# Erasure and Duplication
+# def erase(_)
+# def dup(_): (a, b)
+#   | dup(_) = (c, d) => (c, d)
 
 # Addition
-cons Add(y, r) . x
-  cut Z = y . r
-  cut S(x) = Add(S(y), r) . x
+def add(_, y): r
+  | Z => y
+  | S(x) => add(x, S(y))
 
 # Multiplication
-cons Mult(y, r) . x
-  cut Z = r . Z, y . erase
-  cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
+def mult(_, y): r
+  | Z => erase(y), Z
+  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
 
 # Example: Computations on church numerals
-let example_3_plus_5 =
-  y . S(S(S(S(S(Z))))),
-  x . S(S(S(Z))),
-  Add(y, example_3_plus_5) . x
-let example_3_times_2 =
-  Mult(2'c, example_3_times_2) . 3'c
+let y = 5'c,
+    x = 3'c,
+    example_3_plus_5 = add(x, y)
+
+let example_3_times_2 = mult(3'c, 2'c)
 
 # Lists
 cons Nil
 cons Cons(head, tail) . l
 
-cons Length(res) . list
-  cut Nil = res . Z
-  cut Cons(x, xs) = res . S(lxs), xs . Length(lxs), x . erase
+def length(list): r
+  | Nil => Z
+  | Cons(x, xs) => erase(x) , S(length(xs))
 
-cons Map(fin, fout, res) . l
-  cut Nil = res . Nil, fin . erase, fout.erase
-  cut Cons(x, xs) = res . Cons(fouta, xsm), xs . Map(finb, foutb, xsm), fin . dup(x, finb), fout . dup(fouta, foutb)
+def map(list, fi, fo): r
+  | Nil => erase(fi), erase(fo), Nil
+  | Cons(x, xs) => (x, fi2) = dup(fi),
+                   (fo1, fo2) = dup(fo),
+                   Cons(fo1, map(xs, fi2, fo2))
 
 # Example: List operations
-let l0_length, l0_mapped =
-  l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
-  l0 . dup(l0a, l0b),
-  Length(l0_length) . l0a,
-  fin . Add(2'c, fout),
-  Map(fin, fout, l0_mapped) . l0b
+let l0 = Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+    (l0a, l0b) = dup(l0),
+    l0_length = length(l0a),
+    fout = add(fin, 2'c),
+    l0_mapped = map(l0b, fin, fout)
 
 # Explicit lambdas
 cons Lambda(in, out)
-cons Apply(in, out) . l
-  cut Lambda(li, lo) = li . in, lo . out
+def apply(l, in): out
+  | Lambda(i, o) => in = i, o
 
 # Example: List mapping with lambdas
-cons Map2(f, res) . l
-  cut Nil = res . Nil, f . erase
-  cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . dup(Apply(x, fx), fb)
-let l0_mapped_lambda =
-  l0 . 1'c ::  2'c :: 3'c :: Nil,
-  f . Lambda(Add(2'c, fout), fout),
-  Map2(f, l0_mapped_lambda) . l0
+def map2(l, f): r
+  | Nil => erase(f), Nil
+  | Cons(x, xs) => (f1, f2) = dup(f),
+                   Cons(apply(f1, x), map2(xs, f2))
 
-# Fibonacci
-cons Fib(res) . x
-  cut Z = res . 1'c
-  cut S(n) = Fib2(res) . n
-cons Fib2(res) . x
-  cut Z = res . 1'c
-  cut S(n) = dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
-cons Add2(y, r) . x
-  cut Z = y . r
-  cut S(x) = r . S(v), x . Add2(y, v)
-let fibs, fib_10 =
-   fin . Fib(fout),
-   l0 . 0'c :: 1'c :: 2'c :: 3'c :: 4'c :: 5'c :: Nil,
-   Map(fin, fout, fibs) . l0,
-   10'c . Fib(fib_10)
+let l0 = 1'c :: 2'c :: 3'c :: Nil,
+    fout = add(fin, 2'c),
+    f = Lambda(fin, fout),
+    l0_mapped_lambda = map2(l0, f)

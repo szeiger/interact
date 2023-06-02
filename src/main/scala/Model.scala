@@ -12,7 +12,8 @@ class Symbol(val id: String) {
   var isCons = false
   var isDef = false
   var returnArity = 1
-  override def toString = id
+  def callArity: Int = arity + 1 - returnArity
+  override def toString: String = id
 }
 
 class Symbols(parent: Option[Symbols] = None) {
@@ -133,7 +134,38 @@ class Model(val statements: Seq[AST.Statement],
     if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1).mkString(", ")} in $in")
   }
 
+  // Check DefExpr and return free identifiers
+  def checkDefs(defs: Seq[AST.DefExpr])(in: => String): Seq[String] = {
+    val locals = new Symbols(None)
+    def f(e: AST.DefExpr): Unit = e match {
+      case AST.Assignment(l, r) => f(l); f(r)
+      case AST.Tuple(es) => es.foreach(f)
+      case AST.Wildcard => ()
+      case e @ AST.Ident(s) =>
+        val symO = globals.get(s)
+        if(symO.exists(_.isCons)) f(AST.Ap(e, Nil))
+        else if(symO.isDefined) sys.error(s"Unexpected global non-constructor symbol $s in $in")
+        else {
+          val sym = locals.getOrAdd(s)
+          sym.refs += 1
+        }
+      case AST.Ap(AST.Ident(s), args) =>
+        val symO = globals.get(s)
+        if(!symO.exists(_.isCons))
+          sys.error(s"Illegal use of non-constructor symbol $s as constructor in $in")
+        val a = symO.get.callArity
+        if(a != args.length)
+          sys.error(s"Wrong number of arguments for $s in $in: got ${args.length}, expected $a")
+        args.foreach(f)
+    }
+    defs.foreach(f)
+    val badLocal = locals.symbols.filter(_.refs > 2).toSeq
+    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_.id).mkString(", ")} in $in")
+    locals.symbols.filter(_.refs == 1).map(_.id).toSeq
+  }
+
   val globals = new Symbols
+  val unnest = new Unnest(globals)
 
   if(addEraseDup) {
     val erase = globals.getOrAdd("erase")
@@ -289,9 +321,7 @@ class Model(val statements: Seq[AST.Statement],
     }
   }
   data.foreach { d =>
-    val freeSet = d.free.toSet
-    if(freeSet.size != d.free.size) sys.error(s"Duplicate free symbol in ${d.show}")
-    checkLinearity(d.cuts, freeSet, globals)(d.show)
+    d.free = checkDefs(d.defs)(d.show)
   }
   rules.foreach { cr =>
     val free = cr.args1 ++ cr.args2
@@ -326,7 +356,20 @@ class Model(val statements: Seq[AST.Statement],
 
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
-    data.foreach(d => inter.scope.add(d.cuts, new Symbols(Some(globals))))
+    data.foreach { d =>
+//      println(s"***** Adding data: $d")
+//      println("  Defs:")
+//      d.defs.foreach(e => println(s"    ${e.show}"))
+//      val unnested = unnest(d.defs)
+//      println("  Unnested:")
+//      unnested.foreach(e => println(s"    ${e.show}"))
+//      val cuts = unnested.map(defExprToCut)
+//      println("  Cuts:")
+//      cuts.foreach(e => println(s"    ${e.show}"))
+//      inter.scope.add(cuts, new Symbols(Some(globals)))
+      inter.scope.addDefExprs(d.defs, new Symbols(Some(globals)))
+//      inter.scope.log(System.out)
+    }
   }
 }
 
@@ -353,6 +396,19 @@ class Unnest(globals: Symbols) {
           ls ++ rs ++ as
         case (e1, e2: AST.Tuple) if !e1.isInstanceOf[AST.Tuple] =>
           ls ++ rs :+ AST.Assignment(e2, e1)
+        case (l1: AST.Ap, l2: AST.Ap) =>
+          val a1 = globals(l1.target.s).returnArity
+          val a2 = globals(l2.target.s).returnArity
+          assert(a1 == a2)
+          if(a1 == 1) {
+            val id = mk()
+            ls ++ rs :+ AST.Assignment(id, l1) :+ AST.Assignment(id, l2)
+          } else {
+            val ids = for(_ <- 1 to a1) yield mk()
+            val tup = AST.Tuple(ids)
+            ls ++ rs :+ AST.Assignment(tup, l1) :+ AST.Assignment(tup, l2)
+          }
+        case (l1: AST.Ap, l2) => ls ++ rs :+ AST.Assignment(r1, l1)
         case _ => ls ++ rs :+ AST.Assignment(l1, r1)
       }
     case (e: AST.Expr) =>

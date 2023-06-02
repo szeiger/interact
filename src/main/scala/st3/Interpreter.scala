@@ -21,7 +21,7 @@ abstract class Cell(final var symId: Int, _pcell: Cell, _pport: Int) {
   def getPort(p: Int): Int
 
   final def allPorts: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (getCell(i), getPort(i)))
-  override def toString = s"Cell($symId, $arity, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+  override def toString = s"Cell($symId, $arity, ${allPorts.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
 }
 
 class Cell0(_symId: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {

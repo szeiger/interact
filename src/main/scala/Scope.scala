@@ -12,6 +12,64 @@ abstract class Scope[Cell] { self =>
 
   def clear(): Unit = freeWires.clear()
 
+  def addDefExprs(defs: Iterable[AST.DefExpr], syms: Symbols): Unit = {
+    class TempWire { var c: Cell = _; var p: Int = 0 }
+    @tailrec def connectAny(t1: Any, p1: Int, t2: Any, p2: Int): Unit = (t1, t2) match {
+      case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, p2, t1, p1)
+      case (t1: Cell @unchecked, t2: TempWire) if t2.c == null => t2.c = t1; t2.p = p1
+      case (t1: Cell @unchecked, t2: TempWire) => connectCells(t1, p1, t2.c, t2.p)
+      case (t1: Cell @unchecked, t2: Cell @unchecked) => connectCells(t1, p1, t2, p2)
+    }
+    def addSyms(e: AST.Expr): Unit = e.allIdents.foreach { i =>
+      val s = syms.getOrAdd(i.s)
+      if(!s.isCons) s.refs += 1
+    }
+    defs.foreach {
+      case AST.Assignment(e1, e2) => addSyms(e1); addSyms(e2)
+      case e: AST.Expr => addSyms(e)
+    }
+    def cellRet(s: Symbol, c: Cell): Seq[(Any, Int)] = {
+      if(s.isDef) (s.arity-s.returnArity).until(s.arity).map(p => (c, p))
+      else Seq((c, -1))
+    }
+    val bind = mutable.HashMap.empty[Symbol, TempWire]
+    def create(e: AST.Expr): Seq[(Any, Int)] = e match {
+      case i: AST.Ident =>
+        val s = syms.getOrAdd(i.s)
+        s.refs match {
+          case 0 => cellRet(s, createCell(s))
+          case 1 => val c = createCell(s); freeWires.addOne(c); cellRet(s, c)
+          case 2 => Seq((bind.getOrElseUpdate(s, new TempWire), -1))
+          case _ => sys.error(s"Non-linear use of ${i.show} in data")
+        }
+      case AST.Tuple(es) => es.flatMap(create)
+      case AST.Ap(i, args) =>
+        val s = syms.getOrAdd(i.s)
+        assert(s.isCons)
+        val c = createCell(s)
+        args.zipWithIndex.foreach { case (a, p0) =>
+          val p =
+            if(!s.isDef) p0
+            else if(p0 == 0) -1
+            else p0-1
+          val ca = create(a)
+          assert(ca.length == 1)
+          connectAny(c, p, ca.head._1, ca.head._2)
+        }
+        cellRet(s, c)
+    }
+    defs.foreach {
+      case AST.Assignment(e1, e2) =>
+        val c1 = create(e1)
+        val c2 = create(e2)
+        assert(c1.length == c2.length)
+        c1.zip(c2).foreach { case ((t1, p1), (t2, p2)) => connectAny(t1, p1, t2, p2) }
+      case e: AST.Ap =>
+        val c = create(e)
+        assert(c.length == 0)
+    }
+  }
+
   def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
     @tailrec def connectAny(t1: Any, p1: Int, t2: Any): Unit = (t1, t2) match {

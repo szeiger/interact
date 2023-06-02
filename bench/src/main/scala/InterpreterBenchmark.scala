@@ -16,10 +16,11 @@ class InterpreterBenchmark {
 
   @Param(Array(
     //"st2.i", "st2.c",
-    "st3.i", "st3.c",
-    //"mt0.i", "mt1.i", "mt8.i",
+    "st3.i",
+    "st3.c",
+    //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
-    //"mt0.c", "mt1.c", "mt8.c",
+    //"mt0.c", //"mt1.c", "mt8.c",
     //"mt1000.c", "mt1001.c", "mt1008.c",
   ))
   var spec: String = _
@@ -36,29 +37,28 @@ class InterpreterBenchmark {
     """cons Mult(y, r) . x
       |  cut Z = r . Z, y . erase
       |  cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
-      |let res =
-      |  y . 100'c, x . 100'c, Mult(y, res) . x
+      |let y = 100'c, x = 100'c, Mult(y, res) = x
       |""".stripMargin
 
   private val mult2Src =
     """cons Mult(y, r) . x
       |  cut Z = r . Z, y . erase
       |  cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
-      |let res1, res2, res3, res4 =
-      |  y1 . 100'c, x1 . 100'c, Mult(y1, res1) . x1,
-      |  y2 . 100'c, x2 . 100'c, Mult(y2, res2) . x2,
-      |  y3 . 100'c, x3 . 100'c, Mult(y3, res3) . x3,
-      |  y4 . 100'c, x4 . 100'c, Mult(y4, res4) . x4
+      |let
+      |  y1 = 100'c, x1 = 100'c, Mult(y1, res1) = x1,
+      |  y2 = 100'c, x2 = 100'c, Mult(y2, res2) = x2,
+      |  y3 = 100'c, x3 = 100'c, Mult(y3, res3) = x3,
+      |  y4 = 100'c, x4 = 100'c, Mult(y4, res4) = x4
       |""".stripMargin
 
   private val mult3Src =
     """cons Mult(y, r) . x
       |  cut Z = r . Z, y . erase
       |  cut S(x) = x . Mult(a, s1), y . dup (a, b), b . Add(s1, r)
-      |let res =
-      |  y . 1000'c,
-      |  x . 1000'c,
-      |  Mult(y, res) . x
+      |let
+      |  y = 1000'c,
+      |  x = 1000'c,
+      |  Mult(y, res) = x
       |""".stripMargin
 
   private val fib22Src =
@@ -71,8 +71,8 @@ class InterpreterBenchmark {
       |cons Add2(y, r) . x
       |  cut Z = y . r
       |  cut S(x) = r . S(v), x . Add2(y, v)
-      |let res =
-      |   22'c . Fib(res)
+      |let
+      |   22'c = Fib(res)
       |""".stripMargin
 
   private val fib29Src =
@@ -85,8 +85,8 @@ class InterpreterBenchmark {
       |cons Add2(y, r) . x
       |  cut Z = y . r
       |  cut S(x) = r . S(v), x . Add2(y, v)
-      |let res =
-      |   29'c . Fib(res)
+      |let
+      |   29'c = Fib(res)
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {
@@ -113,32 +113,32 @@ class InterpreterBenchmark {
     this.fib29Inter = new PreparedInterpreter(prelude + fib29Src)
   }
 
-//  @Benchmark
-//  def mult1(bh: Blackhole): Unit =
-//    bh.consume(mult1Inter.setup().reduce())
-//
-//  @Benchmark
-//  def mult2(bh: Blackhole): Unit =
-//    bh.consume(mult2Inter.setup().reduce())
-//
-//  @Benchmark
-//  def mult3(bh: Blackhole): Unit =
-//    bh.consume(mult3Inter.setup().reduce())
-//
-//  @Benchmark
-//  def fib22(bh: Blackhole): Unit =
-//    bh.consume(fib22Inter.setup().reduce())
-//
-//  @Benchmark
-//  def fib29(bh: Blackhole): Unit =
-//    bh.consume(fib29Inter.setup().reduce())
+  @Benchmark
+  def mult1(bh: Blackhole): Unit =
+    bh.consume(mult1Inter.setup().reduce())
 
   @Benchmark
-  def createInterpreter(bh: Blackhole): Unit = {
-    bh.consume(new PreparedInterpreter(prelude + mult1Src))
-    bh.consume(new PreparedInterpreter(prelude + mult2Src))
-    bh.consume(new PreparedInterpreter(prelude + mult3Src))
-    bh.consume(new PreparedInterpreter(prelude + fib22Src))
-    bh.consume(new PreparedInterpreter(prelude + fib29Src))
-  }
+  def mult2(bh: Blackhole): Unit =
+    bh.consume(mult2Inter.setup().reduce())
+
+  @Benchmark
+  def mult3(bh: Blackhole): Unit =
+    bh.consume(mult3Inter.setup().reduce())
+
+  @Benchmark
+  def fib22(bh: Blackhole): Unit =
+    bh.consume(fib22Inter.setup().reduce())
+
+  @Benchmark
+  def fib29(bh: Blackhole): Unit =
+    bh.consume(fib29Inter.setup().reduce())
+
+//  @Benchmark
+//  def createInterpreter(bh: Blackhole): Unit = {
+//    bh.consume(new PreparedInterpreter(prelude + mult1Src))
+//    bh.consume(new PreparedInterpreter(prelude + mult2Src))
+//    bh.consume(new PreparedInterpreter(prelude + mult3Src))
+//    bh.consume(new PreparedInterpreter(prelude + fib22Src))
+//    bh.consume(new PreparedInterpreter(prelude + fib29Src))
+//  }
 }

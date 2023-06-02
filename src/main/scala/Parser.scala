@@ -51,8 +51,9 @@ object AST {
     def show = s"${left.show} . ${right.show}"
   }
   case class Rule(cut: Cut, reduced: Seq[Cut], derived: Boolean) extends Statement
-  case class Data(free: Seq[String], cuts: Seq[Cut]) extends Statement {
-    def show = cuts.map(_.show).mkString(", ")
+  case class Data(defs: Seq[DefExpr]) extends Statement {
+    def show = defs.map(_.show).mkString(", ")
+    var free: Seq[String] = _
   }
   case class Def(name: String, args: Seq[String], ret: Seq[String], rules: Seq[DefRule]) extends Statement {
     def show: String = {
@@ -163,7 +164,7 @@ object Parser {
     P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map { case (c, e) => AST.Rule(c, e, false) }
 
   def data[_: P]: P[AST.Data] =
-    P(  kw("let") ~/ ident.rep(1, sep = ",") ~ "=" ~ cutList ).map(AST.Data.tupled)
+    P(  kw("let") ~/ defExpr.rep(1, sep = ",") ).map(AST.Data)
 
   def unit[_: P]: P[Seq[AST.Statement]] =
     P(  Start ~ (cons | rule | data | definition ).rep ~ End  )

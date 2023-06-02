@@ -1,18 +1,21 @@
 cons Z
 cons S(n)
 
-cons Add(y, r) . x
-  cut Z = y . r
-  cut S(x) = Add(S(y), r) . x
+def add(_, y): r
+  | Z    => y
+  | S(x) => add(x, S(y))
 
-cons Fib(res) . x
-  cut Z = res . 1'c
-  cut S(n) = Fib2(res) . n
-cons Fib2(res) . x
-  cut Z = res . 1'c
-  cut S(n) = dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
-cons Add2(y, r) . x
-  cut Z = y . r
-  cut S(x) = r . S(v), x . Add2(y, v)
-let res =
-   10'c . Fib(res)
+def add2(_, y): r
+  | Z    => y
+  | S(x) => S(add(x, y))
+
+def fib(_): r
+  | Z    => 1'c
+  | S(n) => fib2(n)
+
+def fib2(_): r
+  | Z    => 1'c
+  | S(n) => (n1, n2) = dup(n),
+            add2(fib(S(n1)), fib(n2))
+
+let res = fib(10'c)
