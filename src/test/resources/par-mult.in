@@ -1,12 +1,9 @@
-cons Z deriving erase, dup
-cons S(n) deriving erase, dup
-cons erase                   deriving erase
-cons dup(a, b) . in          deriving erase
-  cut dup(c, d) = a . c, b . d
-cons Add(y, r) . x           deriving erase, dup
+cons Z
+cons S(n)
+cons Add(y, r) . x
   cut Z = y . r
   cut S(x) = Add(S(y), r) . x
-cons Mult(y, r) . x          deriving erase, dup
+cons Mult(y, r) . x
   cut Z = r . Z, y . erase
   cut S(x) = x . Mult(a, s1), y . dup (a, b), b . Add(s1, r)
 let res =

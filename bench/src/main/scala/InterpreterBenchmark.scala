@@ -25,28 +25,25 @@ class InterpreterBenchmark {
   var spec: String = _
 
   private val prelude =
-    """cons Z deriving Erase, Dup
-      |cons S(n) deriving Erase, Dup
-      |cons Erase                   deriving Erase
-      |cons Dup(a, b) . in          deriving Erase
-      |  cut Dup(c, d) = a . c, b . d
-      |cons Add(y, r) . x           deriving Erase, Dup
+    """cons Z
+      |cons S(n)
+      |cons Add(y, r) . x
       |  cut Z = y . r
       |  cut S(x) = Add(S(y), r) . x
       |""".stripMargin
 
   private val mult1Src =
-    """cons Mult(y, r) . x          deriving Erase, Dup
-      |  cut Z = r . Z, y . Erase
-      |  cut S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
+    """cons Mult(y, r) . x
+      |  cut Z = r . Z, y . erase
+      |  cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
       |let res =
       |  y . 100'c, x . 100'c, Mult(y, res) . x
       |""".stripMargin
 
   private val mult2Src =
-    """cons Mult(y, r) . x          deriving Erase, Dup
-      |  cut Z = r . Z, y . Erase
-      |  cut S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
+    """cons Mult(y, r) . x
+      |  cut Z = r . Z, y . erase
+      |  cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
       |let res1, res2, res3, res4 =
       |  y1 . 100'c, x1 . 100'c, Mult(y1, res1) . x1,
       |  y2 . 100'c, x2 . 100'c, Mult(y2, res2) . x2,
@@ -55,9 +52,9 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   private val mult3Src =
-    """cons Mult(y, r) . x          deriving Erase, Dup
-      |  cut Z = r . Z, y . Erase
-      |  cut S(x) = x . Mult(a, s1), y . Dup (a, b), b . Add(s1, r)
+    """cons Mult(y, r) . x
+      |  cut Z = r . Z, y . erase
+      |  cut S(x) = x . Mult(a, s1), y . dup (a, b), b . Add(s1, r)
       |let res =
       |  y . 1000'c,
       |  x . 1000'c,
@@ -65,13 +62,13 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   private val fib22Src =
-    """cons Fib(res) . x deriving Erase, Dup
+    """cons Fib(res) . x
       |  cut Z = res . 1'c
       |  cut S(n) = Fib2(res) . n
-      |cons Fib2(res) . x deriving Erase, Dup
+      |cons Fib2(res) . x
       |  cut Z = res . 1'c
-      |  cut S(n) = Dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
-      |cons Add2(y, r) . x deriving Erase, Dup
+      |  cut S(n) = dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
+      |cons Add2(y, r) . x
       |  cut Z = y . r
       |  cut S(x) = r . S(v), x . Add2(y, v)
       |let res =
@@ -79,13 +76,13 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   private val fib29Src =
-    """cons Fib(res) . x deriving Erase, Dup
+    """cons Fib(res) . x
       |  cut Z = res . 1'c
       |  cut S(n) = Fib2(res) . n
-      |cons Fib2(res) . x deriving Erase, Dup
+      |cons Fib2(res) . x
       |  cut Z = res . 1'c
-      |  cut S(n) = Dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
-      |cons Add2(y, r) . x deriving Erase, Dup
+      |  cut S(n) = dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
+      |cons Add2(y, r) . x
       |  cut Z = y . r
       |  cut S(x) = r . S(v), x . Add2(y, v)
       |let res =

@@ -1,11 +1,11 @@
 # Church numerals
-cons Z     deriving erase, dup
-cons S(n)  deriving erase, dup
+cons Z
+cons S(n)
 
 # Erasure and Duplication
-def erase(_)
-def dup(_): (a, b)
-  | dup(_) = (c, d) => (c, d)
+# def erase(_)
+# def dup(_): (a, b)
+#   | dup(_) = (c, d) => (c, d)
 
 # Addition
 def add(_, y): r
@@ -26,8 +26,8 @@ let example_3_times_2 =
   mult(2'c, example_3_times_2) . 3'c
 
 # Lists
-cons Nil                     deriving erase, dup
-cons Cons(head, tail) . l    deriving erase, dup
+cons Nil
+cons Cons(head, tail) . l
 
 def length(list): r
   | Nil => Z
@@ -48,7 +48,7 @@ let l0_length, l0_mapped =
   map(fin, fout, l0_mapped) . l0b
 
 # Explicit lambdas
-cons Lambda(in, out)         deriving erase, dup
+cons Lambda(in, out)
 def apply(l, in): out
   | Lambda(i, o) => in = i, o
 

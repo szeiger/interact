@@ -139,7 +139,7 @@ object Parser {
     P(  params(1) | ident.map(Seq(_))  )
 
   def deriving[_ : P]: P[AST.Deriving] =
-    P(  kw("deriving") ~/ ident.rep(1, sep=",")  ).map(AST.Deriving(_))
+    P(  kw("deriving") ~/ "(" ~ ident.rep(0, sep=",") ~ ")" ).map(AST.Deriving(_))
 
   def consRule[_: P]: P[AST.ConsRule] =
     P(  kw("cut") ~/ expr ~ "=" ~ cutList  ).map(AST.ConsRule.tupled)

@@ -15,12 +15,12 @@ import scala.jdk.CollectionConverters._
 class MainTest(spec: String) {
   val SCALE = 0
 
-  def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1): Unit = {
+  def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1, addEraseDup: Boolean = true): Unit = {
     val basePath = s"src/test/resources/$testName"
     for(i <- 1 to (if(SCALE == 0) 1 else SCALE * scaleFactor)) {
       //if(i % scaleFactor == 0) println(i)
       val statements = Parser.parse(Path.of(basePath+".in"))
-      val model = new Model(statements)
+      val model = new Model(statements, addEraseDup = addEraseDup)
       val inter = model.createInterpreter(spec, collectStats = true, debugLog = false, debugBytecode = false)
       model.setData(inter)
       val steps = inter.reduce()
@@ -41,10 +41,10 @@ class MainTest(spec: String) {
     }
   }
 
-  @Test def testSeq = check("seq", scaleFactor = 50, expectedSteps = 128)
+  @Test def testSeq = check("seq", scaleFactor = 50, expectedSteps = 128, addEraseDup = false)
   @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 128)
   @Test def testParMult = check("par-mult")
-  @Test def testReduceRHS = check("reduce-rhs", expectedSteps = 2)
+  @Test def testReduceRHS = check("reduce-rhs", expectedSteps = 2, addEraseDup = false)
   @Test def testFib = check("fib")
 }
 

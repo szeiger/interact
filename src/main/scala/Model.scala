@@ -41,7 +41,10 @@ trait BaseInterpreter {
   def reduce(): Int
 }
 
-class Model(val statements: Seq[AST.Statement]) {
+class Model(val statements: Seq[AST.Statement],
+  defaultDerive: Seq[String] = Seq("erase", "dup"),
+  addEraseDup: Boolean = true) {
+
   private[this] val ruleCuts = mutable.Map.empty[(String, String), CheckedRule]
   val constrs = mutable.ArrayBuffer.empty[AST.Cons]
   val defs = mutable.ArrayBuffer.empty[AST.Def]
@@ -132,6 +135,33 @@ class Model(val statements: Seq[AST.Statement]) {
 
   val globals = new Symbols
 
+  if(addEraseDup) {
+    val erase = globals.getOrAdd("erase")
+    erase.isCons = true
+    erase.isDef = true
+    erase.returnArity = 0
+    val dup = globals.getOrAdd("dup")
+    dup.isCons = true
+    dup.isDef = true
+    dup.arity = 2
+    dup.returnArity = 2
+    addRule(derive("erase", 0, "erase"))
+    addRule(derive("dup", 2, "erase"))
+    // cons dup(a, b) . in          deriving (erase)
+    //  cut dup(c, d) = a . c, b . d
+    addRule(AST.Rule(
+      AST.Cut(
+        AST.Ap(AST.Ident("dup"), Seq(AST.Ident("a"), AST.Ident("b"))),
+        AST.Ap(AST.Ident("dup"), Seq(AST.Ident("c"), AST.Ident("d")))
+      ),
+      Seq(
+        AST.Cut(AST.Ident("a"), AST.Ident("c")),
+        AST.Cut(AST.Ident("b"), AST.Ident("d")),
+      ),
+      true
+    ))
+  }
+
   statements.foreach {
     case c: AST.Cons =>
       if(globals.get(c.name).isDefined) sys.error(s"Duplicate cons/def: ${c.name}")
@@ -140,12 +170,6 @@ class Model(val statements: Seq[AST.Statement]) {
       s.arity = c.args.length
       s.isCons = true
       constrs += c
-      c.der.foreach { der =>
-        der.constructors.foreach(i => addRule(derive(c.name, c.args.length, i)))
-      }
-      c.rules.foreach { r =>
-        addRule(AST.Rule(AST.Cut(AST.Ap(AST.Ident(c.name), c.args.map(AST.Ident)), r.rhs), r.reduced, false))
-      }
     case r: AST.Rule => addRule(r)
     case d: AST.Data => data.addOne(d)
     case d: AST.Def =>
@@ -255,6 +279,15 @@ class Model(val statements: Seq[AST.Statement]) {
     }
   }
 
+  constrs.foreach { c =>
+    val der = c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons))
+    der.foreach { i =>
+      addRule(derive(c.name, c.args.length, i))
+    }
+    c.rules.foreach { r =>
+      addRule(AST.Rule(AST.Cut(AST.Ap(AST.Ident(c.name), c.args.map(AST.Ident)), r.rhs), r.reduced, false))
+    }
+  }
   data.foreach { d =>
     val freeSet = d.free.toSet
     if(freeSet.size != d.free.size) sys.error(s"Duplicate free symbol in ${d.show}")
