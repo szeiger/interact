@@ -1,11 +1,11 @@
 # Church numerals
-cons Z     deriving Erase, Dup
-cons S(n)  deriving Erase, Dup
+cons Z     deriving erase, dup
+cons S(n)  deriving erase, dup
 
 # Erasure and Duplication
-def Erase(_)
-def Dup(_): (a, b)
-  | Dup(_) = (c, d) => (c, d)
+def erase(_)
+def dup(_): (a, b)
+  | dup(_) = (c, d) => (c, d)
 
 # Addition
 def add(_, y): r
@@ -14,8 +14,8 @@ def add(_, y): r
 
 # Multiplication
 def mult(_, y): r
-  | Z => Erase(y), Z
-  | S(x) => (y1, y2) = Dup(y), add(mult(x, y1), y2)
+  | Z => erase(y), Z
+  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
 
 # Example: Computations on church numerals
 let example_3_plus_5 =
@@ -26,36 +26,36 @@ let example_3_times_2 =
   mult(2'c, example_3_times_2) . 3'c
 
 # Lists
-cons Nil                     deriving Erase, Dup
-cons Cons(head, tail) . l    deriving Erase, Dup
+cons Nil                     deriving erase, dup
+cons Cons(head, tail) . l    deriving erase, dup
 
 def length(list): r
   | Nil => Z
-  | Cons(x, xs) => Erase(x) , S(length(xs))
+  | Cons(x, xs) => erase(x) , S(length(xs))
 
 def map(list, fi, fo): r
-  | Nil => Erase(fi), Erase(fo), Nil
-  | Cons(x, xs) => (x, fi2) = Dup(fi),
-                   (fo1, fo2) = Dup(fo),
+  | Nil => erase(fi), erase(fo), Nil
+  | Cons(x, xs) => (x, fi2) = dup(fi),
+                   (fo1, fo2) = dup(fo),
                    Cons(fo1, map(xs, fi2, fo2))
 
 # Example: List operations
 let l0_length, l0_mapped =
   l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
-  l0 . Dup(l0a, l0b),
+  l0 . dup(l0a, l0b),
   length(l0_length) . l0a,
   fin . add(2'c, fout),
   map(fin, fout, l0_mapped) . l0b
 
 # Explicit lambdas
-cons Lambda(in, out)         deriving Erase, Dup
+cons Lambda(in, out)         deriving erase, dup
 def apply(l, in): out
   | Lambda(i, o) => in = i, o
 
 # Example: List mapping with lambdas
 def map2(l, f): r
-  | Nil => Erase(f), Nil
-  | Cons(x, xs) => (f1, f2) = Dup(f),
+  | Nil => erase(f), Nil
+  | Cons(x, xs) => (f1, f2) = dup(f),
                    Cons(apply(f1, x), map2(xs, f2))
 
 let l0_mapped_lambda =

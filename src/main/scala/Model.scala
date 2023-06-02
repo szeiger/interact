@@ -57,19 +57,19 @@ class Model(val statements: Seq[AST.Statement]) {
       s
     }
     val (cut, reduced) = id match {
-      case "Erase" =>
-        val Erase = AST.Ident("Erase")
+      case "erase" =>
+        val erase = AST.Ident("erase")
         val ids = (0 until arity).map(_ => genId()).toArray
-        val cut = AST.Cut(Erase, AST.Ap(AST.Ident(consName), ids))
-        val reduced = ids.map(i => AST.Cut(Erase, i))
+        val cut = AST.Cut(erase, AST.Ap(AST.Ident(consName), ids))
+        val reduced = ids.map(i => AST.Cut(erase, i))
         (cut, reduced.toSeq)
-      case "Dup" =>
-        val Dup = AST.Ident("Dup")
+      case "dup" =>
+        val dup = AST.Ident("dup")
         val ids, aIds, bIds = (0 until arity).map(_ => genId()).toArray
         val a, b = genId()
-        val cut = AST.Cut(AST.Ap(Dup, Seq(a, b)), AST.Ap(AST.Ident(consName), ids))
+        val cut = AST.Cut(AST.Ap(dup, Seq(a, b)), AST.Ap(AST.Ident(consName), ids))
         val dupPorts = ids.zip(aIds).zip(bIds).map { case ((id, aId), bId) =>
-          AST.Cut(AST.Ap(Dup, Seq(aId, bId)), id)
+          AST.Cut(AST.Ap(dup, Seq(aId, bId)), id)
         }
         val recombA = AST.Cut(a, AST.Ap(AST.Ident(consName), aIds))
         val recombB = AST.Cut(b, AST.Ap(AST.Ident(consName), bIds))
@@ -157,9 +157,9 @@ class Model(val statements: Seq[AST.Statement]) {
       s.isDef = true
       s.returnArity = d.ret.length
       defs += d
-      addRule(derive(d.name, s.arity, "Erase"))
-      if(d.name != "Dup" && d.name != "Erase")
-        addRule(derive(d.name, s.arity, "Dup"))
+      addRule(derive(d.name, s.arity, "erase"))
+      if(d.name != "dup" && d.name != "erase")
+        addRule(derive(d.name, s.arity, "dup"))
   }
 
   private def cutArgs[T](sym: Symbol, args: Seq[T], ret: Seq[T]): Seq[T] =

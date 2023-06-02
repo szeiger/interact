@@ -46,8 +46,8 @@ The body of the `let` clause is a list of cuts (`a . b` where a and b are expres
 All rules are defined on a cut. Detached rules use a cut pattern that names the ports on the left-hand side and has a list of cuts as the replacement on the right-hand side:
 
 ```
-rule Dup(a, b) . Z  = a . Z, b . Z
-rule Dup(a, b) . S(x) = x . Dup(sa, sb),
+rule dup(a, b) . Z  = a . Z, b . Z
+rule dup(a, b) . S(x) = x . dup(sa, sb),
                         a . S(sa), b . S(sb)
 ```
 
@@ -56,37 +56,37 @@ All port names in the pattern must be unique, and their use across the combinati
 Rules can be defined in a simpler way together with one of their constructors using a `cut` clause. This avoids repeating the constructor name and assigning names to the ports in a pattern match. Instead the auxiliary ports use the names defined in the constructor:
 
 ```
-cons Dup(a, b)
+cons dup(a, b)
   cut Z  = a . Z, b . Z
-  cut S(x) = x . Dup(sa, sb), a . S(sa), b . S(sb)
+  cut S(x) = x . dup(sa, sb), a . S(sa), b . S(sb)
 ```
 
 ### Rule derivation
 
-Rules that reduce a cut between a constructor and the standard `Erase` and `Dup` constructors can be derived automatically using a `deriving` clause:
+Rules that reduce a cut between a constructor and the standard `erase` and `dup` constructors can be derived automatically using a `deriving` clause:
 
 ```
 cons Add(y, r) . x
-  deriving Erase, Dup
+  deriving erase, dup
 ```
 
 The above example is equivalent to:
 
 ```
 cons Add(y, r) . x
-  cut Erase = y . Erase, r . Erase
-  cut Dup(a, b) = a . Add(s2, s3),
+  cut erase = y . erase, r . erase
+  cut dup(a, b) = a . Add(s2, s3),
                   b . Add(s4, s5),
-                  y . Dup(s2, s4),
-                  r . Dup(s3, s5)
+                  y . dup(s2, s4),
+                  r . dup(s3, s5)
 ```
 
-Note that this expansion is purely syntactical. You still need to define suitable `Dup` and `Erase` constructors by yourself, e.g.:
+Note that this expansion is purely syntactical. You still need to define suitable `dup` and `erase` constructors by yourself, e.g.:
 
 ```
-cons Erase                   deriving Erase
-cons Dup(a, b) . in          deriving Erase
-  cut Dup(c, d) = a . c, b . d
+cons erase                   deriving erase
+cons dup(a, b) . in          deriving erase
+  cut dup(c, d) = a . c, b . d
 ```
 
 ### Church numerals
@@ -108,8 +108,8 @@ let example_3_times_2 =
 This assumes that you have suitable definitions of `Z` and `S` like:
 
 ```
-cons Z                       deriving Erase, Dup
-cons S(n)                    deriving Erase, Dup
+cons Z                       deriving erase, dup
+cons S(n)                    deriving erase, dup
 ```
 
 ### Lists
@@ -131,6 +131,6 @@ let list_1_2_3 =
 This assumes that you have a suitable definitions of `Cons` like:
 
 ```
-cons Nil                     deriving Erase, Dup
-cons Cons(head, tail) . l    deriving Erase, Dup
+cons Nil                     deriving erase, dup
+cons Cons(head, tail) . l    deriving erase, dup
 ```

@@ -3,25 +3,25 @@ cons Z
 cons S(n)
 
 # Erasure and Duplication
-cons Erase                   deriving Erase
-cons Dup(a, b) . in          deriving Erase
-  cut Dup(c, d) = a . c, b . d
+cons erase                   deriving erase
+cons dup(a, b) . in          deriving erase
+  cut dup(c, d) = a . c, b . d
 
 # Example: Manual dup and erase rules (instead of deriving)
-rule Erase . Z = ()
-rule Erase . S(x) = Erase . x
-rule Dup(a, b) . Z  = a . Z, b . Z
-rule Dup(a, b) . S(x) = x . Dup(sa, sb), a . S(sa), b . S(sb)
+rule erase . Z = ()
+rule erase . S(x) = erase . x
+rule dup(a, b) . Z  = a . Z, b . Z
+rule dup(a, b) . S(x) = x . dup(sa, sb), a . S(sa), b . S(sb)
 
 # Addition
-cons Add(y, r) . x           deriving Erase, Dup
+cons Add(y, r) . x           deriving erase, dup
   cut Z = y . r
   cut S(x) = Add(S(y), r) . x
 
 # Multiplication
-cons Mult(y, r) . x          deriving Erase, Dup
-  cut Z = r . Z, y . Erase
-  cut S(x) = x . Mult(a, Add(b, r)), y . Dup (a, b)
+cons Mult(y, r) . x          deriving erase, dup
+  cut Z = r . Z, y . erase
+  cut S(x) = x . Mult(a, Add(b, r)), y . dup (a, b)
 
 # Example: Computations on church numerals
 let example_3_plus_5 =
@@ -32,34 +32,34 @@ let example_3_times_2 =
   Mult(2'c, example_3_times_2) . 3'c
 
 # Lists
-cons Nil                     deriving Erase, Dup
-cons Cons(head, tail) . l    deriving Erase, Dup
+cons Nil                     deriving erase, dup
+cons Cons(head, tail) . l    deriving erase, dup
 
-cons Length(res) . list      deriving Erase, Dup
+cons Length(res) . list      deriving erase, dup
   cut Nil = res . Z
-  cut Cons(x, xs) = res . S(lxs), xs . Length(lxs), x . Erase
+  cut Cons(x, xs) = res . S(lxs), xs . Length(lxs), x . erase
 
-cons Map(fin, fout, res) . l deriving Erase, Dup
-  cut Nil = res . Nil, fin . Erase, fout.Erase
-  cut Cons(x, xs) = res . Cons(fouta, xsm), xs . Map(finb, foutb, xsm), fin . Dup(x, finb), fout . Dup(fouta, foutb)
+cons Map(fin, fout, res) . l deriving erase, dup
+  cut Nil = res . Nil, fin . erase, fout.erase
+  cut Cons(x, xs) = res . Cons(fouta, xsm), xs . Map(finb, foutb, xsm), fin . dup(x, finb), fout . dup(fouta, foutb)
 
 # Example: List operations
 let l0_length, l0_mapped =
   l0 . Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
-  l0 . Dup(l0a, l0b),
+  l0 . dup(l0a, l0b),
   Length(l0_length) . l0a,
   fin . Add(2'c, fout),
   Map(fin, fout, l0_mapped) . l0b
 
 # Explicit lambdas
-cons Lambda(in, out)         deriving Erase, Dup
-cons Apply(in, out) . l      deriving Erase, Dup
+cons Lambda(in, out)         deriving erase, dup
+cons Apply(in, out) . l      deriving erase, dup
   cut Lambda(li, lo) = li . in, lo . out
 
 # Example: List mapping with lambdas
-cons Map2(f, res) . l        deriving Erase, Dup
-  cut Nil = res . Nil, f . Erase
-  cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . Dup(Apply(x, fx), fb)
+cons Map2(f, res) . l        deriving erase, dup
+  cut Nil = res . Nil, f . erase
+  cut Cons(x, xs) = res . Cons(fx, xsm), xs . Map2(fb, xsm), f . dup(Apply(x, fx), fb)
 let l0_mapped_lambda =
   l0 . 1'c ::  2'c :: 3'c :: Nil,
   f . Lambda(Add(2'c, fout), fout),

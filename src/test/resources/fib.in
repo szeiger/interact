@@ -1,20 +1,20 @@
-cons Z deriving Erase, Dup
-cons S(n) deriving Erase, Dup
-cons Erase                   deriving Erase
-cons Dup(a, b) . in          deriving Erase
-  cut Dup(c, d) = a . c, b . d
+cons Z deriving erase, dup
+cons S(n) deriving erase, dup
+cons erase                   deriving erase
+cons dup(a, b) . in          deriving erase
+  cut dup(c, d) = a . c, b . d
 
-cons Add(y, r) . x           deriving Erase, Dup
+cons Add(y, r) . x           deriving erase, dup
   cut Z = y . r
   cut S(x) = Add(S(y), r) . x
 
-cons Fib(res) . x deriving Erase, Dup
+cons Fib(res) . x deriving erase, dup
   cut Z = res . 1'c
   cut S(n) = Fib2(res) . n
-cons Fib2(res) . x deriving Erase, Dup
+cons Fib2(res) . x deriving erase, dup
   cut Z = res . 1'c
-  cut S(n) = Dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
-cons Add2(y, r) . x deriving Erase, Dup
+  cut S(n) = dup(v3, Fib(v)) . n, Fib(Add2(v, res)) . S(v3)
+cons Add2(y, r) . x deriving erase, dup
   cut Z = y . r
   cut S(x) = r . S(v), x . Add2(y, v)
 let res =
