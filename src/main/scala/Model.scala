@@ -1,10 +1,17 @@
 package de.szeiger.interact
 
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 
-class CheckedRule(val r: AST.Rule, val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) {
+sealed trait AnyCheckedRule {
+  def show: String
+}
+
+class CheckedRule(val r: AST.Rule, val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
   def show: String = s"${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}"
+}
+
+class CheckedDefRule(val d: AST.Def, val r: AST.DefRule, val connected: Seq[AST.DefExpr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
+  def show: String = s"${r.on.show} = ${r.reduced.map(_.show).mkString(", ")}"
 }
 
 class Symbol(val id: String) {
@@ -46,12 +53,12 @@ class Model(val statements: Seq[AST.Statement],
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true) {
 
-  private[this] val ruleCuts = mutable.Map.empty[(String, String), CheckedRule]
+  private[this] val ruleCuts = mutable.Map.empty[(String, String), AnyCheckedRule]
   val constrs = mutable.ArrayBuffer.empty[AST.Cons]
   val defs = mutable.ArrayBuffer.empty[AST.Def]
   val data = mutable.ArrayBuffer.empty[AST.Data]
 
-  def rules: Iterable[CheckedRule] = ruleCuts.values
+  def rules: Iterable[AnyCheckedRule] = ruleCuts.values
 
   def derive(consName: String, arity: Int, id: String): AST.Rule = {
     var nextId = 0
@@ -83,23 +90,43 @@ class Model(val statements: Seq[AST.Statement],
     AST.Rule(cut, reduced, true)
   }
 
+  def checkCutCell(e: AST.Expr)(in: => String): (String, Seq[String]) = e match {
+    case a: AST.Ap =>
+      val args = a.args.map {
+        case i: AST.Ident => i.s
+        case _ => sys.error(s"No nested patterns allowed in rule $in")
+      }
+      (a.target.s, args)
+    case a: AST.Ident =>
+      (a.s, Nil)
+  }
+
   def addRule(r: AST.Rule): Unit = {
-    def checkCutCell(e: AST.Expr): (String, Seq[String]) = e match {
-      case a: AST.Ap =>
-        val args = a.args.map {
-          case i: AST.Ident => i.s
-          case _ => sys.error(s"No nested patterns allowed in rule ${r.cut.show}")
-        }
-        (a.target.s, args)
-      case a: AST.Ident =>
-        (a.s, Nil)
-    }
-    val (n1, a1) = checkCutCell(r.cut.left)
-    val (n2, a2) = checkCutCell(r.cut.right)
+    val (n1, a1) = checkCutCell(r.cut.left)(r.cut.show)
+    val (n2, a2) = checkCutCell(r.cut.right)(r.cut.show)
     val impl = new CheckedRule(r, n1, a1, n2, a2)
     val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
     if(ruleCuts.contains(key)) sys.error(s"Rule ${r.cut.show} duplicates ${impl.name1} . ${impl.name2}")
     ruleCuts.put(key, impl)
+  }
+
+  def addDefRules(d: AST.Def): Unit = {
+    val dsym = globals(d.name)
+    val danames = cutArgs(dsym, d.args, d.ret)
+    val dret = d.ret.map(AST.Ident)
+    val cutLhs = AST.Ap(AST.Ident(d.name), danames.map(AST.Ident))
+    val (n1, a1) = checkCutCell(cutLhs)(d.show)
+    d.rules.foreach { r =>
+      val (osym, oas, ors) = defArgs(r.on)
+      val oanames = cutArgs(osym, oas, ors)
+      val cutRhs = AST.Ap(AST.Ident(osym.id), oanames.map(AST.Ident))
+      val (n2, a2) = checkCutCell(cutRhs)(AST.Cut(cutLhs, cutRhs).show)
+      val connected = r.reduced.init :+ connectLastStatement(r.reduced.last, dret)
+      val impl = new CheckedDefRule(d, r, connected, n1, a1, n2, a2)
+      val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
+      if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
+      ruleCuts.put(key, impl)
+    }
   }
 
   def checkLinearity(cuts: Seq[AST.Cut], free: Set[String], globals: Symbols)(in: => String): Unit = {
@@ -165,7 +192,6 @@ class Model(val statements: Seq[AST.Statement],
   }
 
   val globals = new Symbols
-  val unnest = new Unnest(globals)
 
   if(addEraseDup) {
     val erase = globals.getOrAdd("erase")
@@ -283,34 +309,7 @@ class Model(val statements: Seq[AST.Statement],
       AST.Assignment(extraRhs.head, e)
   }
 
-  defs.foreach { d =>
-    val dsym = globals(d.name)
-    val danames = cutArgs(dsym, d.args, d.ret)
-    val dret = d.ret.map(AST.Ident)
-    //println(s"***** def ${d.show}")
-    d.rules.foreach { r =>
-      val unnest = new Unnest(globals)
-      val (osym, oas, ors) = defArgs(r.on)
-      val oanames = cutArgs(osym, oas, ors)
-      //println(s"  $osym, $oas, $ors")
-      val cutLhs = AST.Ap(AST.Ident(d.name), danames.map(AST.Ident))
-      val cutRhs = AST.Ap(AST.Ident(osym.id), oanames.map(AST.Ident))
-      //println(s"  ${AST.Cut(cutLhs, cutRhs).show}")
-      //println(s"    original:")
-      //r.reduced.foreach(e => println(s"    - ${e.show}"))
-      val connected = r.reduced.init :+ connectLastStatement(r.reduced.last, dret)
-      //println(s"    connected:")
-      //connected.foreach(e => println(s"    - ${e.show}"))
-      val unnested = unnest(connected)
-      //println(s"    unnested:")
-      //unnested.foreach(e => println(s"    - ${e.show}"))
-      val cuts = unnested.map(defExprToCut)
-      //println(s"    cuts:")
-      //cuts.foreach(e => println(s"    - ${e.show}"))
-      addRule(AST.Rule(AST.Cut(cutLhs, cutRhs), cuts, false))
-    }
-  }
-
+  defs.foreach(addDefRules)
   constrs.foreach { c =>
     val der = c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons))
     der.foreach { i =>
@@ -323,11 +322,17 @@ class Model(val statements: Seq[AST.Statement],
   data.foreach { d =>
     d.free = checkDefs(d.defs)(d.show)
   }
-  rules.foreach { cr =>
-    val free = cr.args1 ++ cr.args2
-    val freeSet = free.toSet
-    if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
-    checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
+  rules.foreach {
+    case cr: CheckedRule =>
+      val free = cr.args1 ++ cr.args2
+      val freeSet = free.toSet
+      if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
+      checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
+    case cr: CheckedDefRule =>
+      val free = cr.args1 ++ cr.args2
+      val freeSet = free.toSet
+      if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
+      //checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
   }
 
   def createMTInterpreter(numThreads: Int, compile: Boolean = true, debugLog: Boolean = false,
@@ -356,88 +361,6 @@ class Model(val statements: Seq[AST.Statement],
 
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
-    data.foreach { d =>
-//      println(s"***** Adding data: $d")
-//      println("  Defs:")
-//      d.defs.foreach(e => println(s"    ${e.show}"))
-//      val unnested = unnest(d.defs)
-//      println("  Unnested:")
-//      unnested.foreach(e => println(s"    ${e.show}"))
-//      val cuts = unnested.map(defExprToCut)
-//      println("  Cuts:")
-//      cuts.foreach(e => println(s"    ${e.show}"))
-//      inter.scope.add(cuts, new Symbols(Some(globals)))
-      inter.scope.addDefExprs(d.defs, new Symbols(Some(globals)))
-//      inter.scope.log(System.out)
-    }
-  }
-}
-
-// Convert expressions to ANF
-// - all compound expressions are unnested
-// - only nullary non-constructor Idents can be nested
-// - nullary constructor Idents are converted to Ap
-// - all Ap assignments have the Ap on the RHS
-// - all direct assignments are untupled
-class Unnest(globals: Symbols) {
-  private var lastTmp = 0
-  private def mk(): AST.Ident = { lastTmp += 1; AST.Ident(s"$$u${lastTmp}") }
-
-  def apply(es: Seq[AST.DefExpr]): Seq[AST.DefExpr] = es.flatMap(apply)
-
-  def apply(e: AST.DefExpr): Seq[AST.DefExpr] = e match {
-    case AST.Assignment(l, r) =>
-      val (l1, ls) = applyExpr(l)
-      val (r1, rs) = applyExpr(r)
-      (l1, r1) match {
-        case (AST.Tuple(ls2), AST.Tuple(rs2)) if(ls2.nonEmpty) =>
-          assert(ls2.length == rs2.length)
-          val as = ls2.zip(rs2).map { case (l, r) => AST.Assignment(l, r) }
-          ls ++ rs ++ as
-        case (e1, e2: AST.Tuple) if !e1.isInstanceOf[AST.Tuple] =>
-          ls ++ rs :+ AST.Assignment(e2, e1)
-        case (l1: AST.Ap, l2: AST.Ap) =>
-          val a1 = globals(l1.target.s).returnArity
-          val a2 = globals(l2.target.s).returnArity
-          assert(a1 == a2)
-          if(a1 == 1) {
-            val id = mk()
-            ls ++ rs :+ AST.Assignment(id, l1) :+ AST.Assignment(id, l2)
-          } else {
-            val ids = for(_ <- 1 to a1) yield mk()
-            val tup = AST.Tuple(ids)
-            ls ++ rs :+ AST.Assignment(tup, l1) :+ AST.Assignment(tup, l2)
-          }
-        case (l1: AST.Ap, l2) => ls ++ rs :+ AST.Assignment(r1, l1)
-        case _ => ls ++ rs :+ AST.Assignment(l1, r1)
-      }
-    case (e: AST.Expr) =>
-      val (e2, ass) = applyExpr(e)
-      ass :+ e2
-  }
-
-  def applyExpr(e: AST.Expr): (AST.Expr, Seq[AST.Assignment]) = {
-    val buf = ArrayBuffer.empty[AST.Assignment]
-    def assign(e: AST.Ap): AST.Expr = {
-      val ts = globals(e.target.s)
-      val v: AST.Expr = if(ts.returnArity == 1) mk() else AST.Tuple((1 to ts.returnArity).map(_ => mk()))
-      buf += AST.Assignment(v, f(AST.Ap(e.target, e.args)))
-      v
-    }
-    def f(e: AST.Expr): AST.Expr = e match {
-      case AST.Tuple(Seq(e)) => f(e)
-      case AST.Tuple(es) => AST.Tuple(es.map(f))
-      case AST.Ap(t, args) =>
-        AST.Ap(t, args.map {
-          case e: AST.Ident =>
-            val s = globals.get(e.s)
-            if(s.exists(_.isCons)) assign(AST.Ap(e, Nil)) else e
-          case e: AST.Ap => assign(e)
-        })
-      case e: AST.Ident =>
-        val s = globals.get(e.s)
-        if(s.exists(_.isCons)) AST.Ap(e, Nil) else e
-    }
-    (f(e), buf.toSeq)
+    data.foreach { d => inter.scope.addDefExprs(d.defs, new Symbols(Some(globals))) }
   }
 }
