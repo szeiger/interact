@@ -12,10 +12,24 @@ def add(_, y): r
   | Z => y
   | S(x) => add(x, S(y))
 
+# Separate reductions
+#match add(Z, y) => y
+#match add(S(x), y) => add(x, S(y))
+
+#match erase(Z) => ()
+#match erase(S(x)) => erase(x)
+#match dup(Z) = (a, b) => a = Z, b = Z
+#match dup(S(x)) = (a, b) => (sa, sb) = dup(x), s = S(sa), b = S(sb)
+#match dup(dup(_) = (c, d)) = (a, b) => (c, d)
+#match S(x) = S(y) => x = y
+
 # Multiplication
 def mult(_, y): r
-  | Z => erase(y), Z
-  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
+#  | Z => erase(y), Z
+#  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
+
+match mult(Z, y) => erase(y), Z
+match mult(S(x), y) => (y1, y2) = dup(y), add(mult(x, y1), y2)
 
 # Example: Computations on church numerals
 let y = 5'c,

@@ -63,6 +63,7 @@ object AST {
     }
   }
   case class DefRule(on: DefExpr, reduced: Seq[DefExpr])
+  case class Match(on: DefExpr, reduced: Seq[DefExpr]) extends Statement
 
   object IdentOrAp {
     def unapply(e: Expr): Option[(String, Seq[Expr])] = e match {
@@ -79,12 +80,19 @@ object AST {
       case Tuple(args) => Some((null, args))
     }
   }
+  object IdentOrTuple {
+    def unapply(e: Expr): Option[Seq[Expr]] = e match {
+      case i: Ident => Some(Seq(i))
+      case Tuple(es) => Some(es)
+      case _ => None
+    }
+  }
 }
 
 object Lexical {
   import NoWhitespace._
 
-  val keywords = Set("cons", "rule", "let", "deriving", "cut", "def", "_")
+  val keywords = Set("cons", "rule", "let", "deriving", "cut", "def", "match", "_")
 
   def ident[_: P]: P[String] =
      P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!keywords.contains(_))
@@ -160,6 +168,9 @@ object Parser {
       case (e1, Some(e2)) => AST.Assignment(e1, e2)
     }
 
+  def matchStatement[_: P]: P[AST.Match] =
+    P(  "match" ~ defExpr ~ "=>" ~ defExpr.rep(1, sep = ",")  ).map(AST.Match.tupled)
+
   def rule[_: P]: P[AST.Rule] =
     P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map { case (c, e) => AST.Rule(c, e, false) }
 
@@ -167,7 +178,7 @@ object Parser {
     P(  kw("let") ~/ defExpr.rep(1, sep = ",") ).map(AST.Data)
 
   def unit[_: P]: P[Seq[AST.Statement]] =
-    P(  Start ~ (cons | rule | data | definition ).rep ~ End  )
+    P(  Start ~ (cons | rule | data | definition | matchStatement ).rep ~ End  )
 
   def parse(input: String): Seq[AST.Statement] =
     fastparse.parse(input, Parser.unit(_), verboseFailures = true).get.value
