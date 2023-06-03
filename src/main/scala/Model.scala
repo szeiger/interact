@@ -6,6 +6,10 @@ sealed trait AnyCheckedRule {
   def show: String
 }
 
+class DerivedRule(val deriveName: String, val otherName: String) extends AnyCheckedRule {
+  def show = s"$deriveName . $otherName = <derived>"
+}
+
 class CheckedRule(val r: AST.Rule, val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
   def show: String = s"${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}"
 }
@@ -61,36 +65,6 @@ class Model(val statements: Seq[AST.Statement],
 
   def rules: Iterable[AnyCheckedRule] = ruleCuts.values
 
-  def derive(consName: String, arity: Int, id: String): AST.Rule = {
-    var nextId = 0
-    def genId() = {
-      val s = AST.Ident(s"$$s${nextId}")
-      nextId += 1
-      s
-    }
-    val (cut, reduced) = id match {
-      case "erase" =>
-        val erase = AST.Ident("erase")
-        val ids = (0 until arity).map(_ => genId()).toArray
-        val cut = AST.Cut(erase, AST.Ap(AST.Ident(consName), ids))
-        val reduced = ids.map(i => AST.Cut(erase, i))
-        (cut, reduced.toSeq)
-      case "dup" =>
-        val dup = AST.Ident("dup")
-        val ids, aIds, bIds = (0 until arity).map(_ => genId()).toArray
-        val a, b = genId()
-        val cut = AST.Cut(AST.Ap(dup, Seq(a, b)), AST.Ap(AST.Ident(consName), ids))
-        val dupPorts = ids.zip(aIds).zip(bIds).map { case ((id, aId), bId) =>
-          AST.Cut(AST.Ap(dup, Seq(aId, bId)), id)
-        }
-        val recombA = AST.Cut(a, AST.Ap(AST.Ident(consName), aIds))
-        val recombB = AST.Cut(b, AST.Ap(AST.Ident(consName), bIds))
-        (cut, recombA :: recombB :: dupPorts.toList)
-      case s => sys.error(s"Don't know how to derive ${consName} . $id")
-    }
-    AST.Rule(cut, reduced, true)
-  }
-
   def checkCutCell(e: AST.Expr)(in: => String): (String, Seq[String]) = e match {
     case a: AST.Ap =>
       val args = a.args.map {
@@ -100,6 +74,12 @@ class Model(val statements: Seq[AST.Statement],
       (a.target.s, args)
     case a: AST.Ident =>
       (a.s, Nil)
+  }
+
+  def addDerivedRule(derivedName: String, otherName: String): Unit = {
+    val key = if(derivedName <= otherName) (derivedName, otherName) else (otherName, derivedName)
+    if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${derivedName} . ${otherName}")
+    ruleCuts.put(key, new DerivedRule(derivedName, otherName))
   }
 
   def addRule(r: AST.Rule): Unit = {
@@ -246,21 +226,9 @@ class Model(val statements: Seq[AST.Statement],
     dup.isDef = true
     dup.arity = 2
     dup.returnArity = 2
-    addRule(derive("erase", 0, "erase"))
-    addRule(derive("dup", 2, "erase"))
-    // cons dup(a, b) . in          deriving (erase)
-    //  cut dup(c, d) = a . c, b . d
-    addRule(AST.Rule(
-      AST.Cut(
-        AST.Ap(AST.Ident("dup"), Seq(AST.Ident("a"), AST.Ident("b"))),
-        AST.Ap(AST.Ident("dup"), Seq(AST.Ident("c"), AST.Ident("d")))
-      ),
-      Seq(
-        AST.Cut(AST.Ident("a"), AST.Ident("c")),
-        AST.Cut(AST.Ident("b"), AST.Ident("d")),
-      ),
-      true
-    ))
+    addDerivedRule("erase", "erase")
+    addDerivedRule("erase", "dup")
+    addDerivedRule("dup", "dup")
   }
 
   statements.foreach {
@@ -282,9 +250,9 @@ class Model(val statements: Seq[AST.Statement],
       s.isDef = true
       s.returnArity = d.ret.length
       defs += d
-      addRule(derive(d.name, s.arity, "erase"))
+      addDerivedRule("erase", d.name)
       if(d.name != "dup" && d.name != "erase")
-        addRule(derive(d.name, s.arity, "dup"))
+        addDerivedRule("dup", d.name)
     case m: AST.Match =>
       matchRules += m
   }
@@ -358,10 +326,11 @@ class Model(val statements: Seq[AST.Statement],
   constrs.foreach { c =>
     val der = c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons))
     der.foreach { i =>
-      addRule(derive(c.name, c.args.length, i))
+      if(i == "erase" || i == "dup") addDerivedRule(i, c.name)
+      else sys.error(s"Don't know how to derive rule for $i")
     }
     c.rules.foreach { r =>
-      addRule(AST.Rule(AST.Cut(AST.Ap(AST.Ident(c.name), c.args.map(AST.Ident)), r.rhs), r.reduced, false))
+      addRule(AST.Rule(AST.Cut(AST.Ap(AST.Ident(c.name), c.args.map(AST.Ident)), r.rhs), r.reduced))
     }
   }
   matchRules.foreach(addMatchRule)
@@ -379,6 +348,7 @@ class Model(val statements: Seq[AST.Statement],
       val freeSet = free.toSet
       if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
       //checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
+    case _: DerivedRule => ()
   }
 
   def createMTInterpreter(numThreads: Int, compile: Boolean = true, debugLog: Boolean = false,

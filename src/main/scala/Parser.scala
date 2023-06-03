@@ -50,7 +50,7 @@ object AST {
   case class Cut(left: Expr, right: Expr) extends ExprOrCut {
     def show = s"${left.show} . ${right.show}"
   }
-  case class Rule(cut: Cut, reduced: Seq[Cut], derived: Boolean) extends Statement
+  case class Rule(cut: Cut, reduced: Seq[Cut]) extends Statement
   case class Data(defs: Seq[DefExpr]) extends Statement {
     def show = defs.map(_.show).mkString(", ")
     var free: Seq[String] = _
@@ -172,7 +172,7 @@ object Parser {
     P(  "match" ~ defExpr ~ "=>" ~ defExpr.rep(1, sep = ",")  ).map(AST.Match.tupled)
 
   def rule[_: P]: P[AST.Rule] =
-    P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map { case (c, e) => AST.Rule(c, e, false) }
+    P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map(AST.Rule.tupled)
 
   def data[_: P]: P[AST.Data] =
     P(  kw("let") ~/ defExpr.rep(1, sep = ",") ).map(AST.Data)

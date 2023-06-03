@@ -70,6 +70,8 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
 
 object GenericRuleImpl {
   def apply[C](cr: AnyCheckedRule, globals: Symbols): GenericRuleImpl = cr match {
+    case dr: DerivedRule if dr.deriveName == "erase" => deriveErase(dr.otherName, globals)
+    case dr: DerivedRule if dr.deriveName == "dup" => deriveDup(dr.otherName, globals)
     case cr: CheckedRule => apply(cr, globals)
     case cr: CheckedDefRule => apply(cr, globals)
   }
@@ -120,6 +122,32 @@ object GenericRuleImpl {
     }
     sc.addDefExprs(cr.connected, syms)
     new GenericRuleImpl(globals(cr.name1), globals(cr.name2), cells.toArray, conns.toArray, fwp)
+  }
+
+  def deriveErase(name: String, globals: Symbols): GenericRuleImpl = {
+    val sym = globals(name)
+    val eraseSym = globals("erase")
+    val cells = Array.fill(sym.arity)(eraseSym)
+    val fwp = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
+    new GenericRuleImpl(eraseSym, sym, cells, Array.empty, fwp)
+  }
+
+  def deriveDup(name: String, globals: Symbols): GenericRuleImpl = {
+    val sym = globals(name)
+    val dupSym = globals("dup")
+    if(name == "dup")
+      new GenericRuleImpl(dupSym, sym, Array.empty, Array.empty, Array(checkedIntOfShorts(-3, -1), checkedIntOfShorts(-4, -1)))
+    else {
+      val cells = Array.fill(sym.arity)(dupSym) ++ Array.fill(2)(sym)
+      val conns = new Array[Int](sym.arity*2)
+      for(i <- 0 until sym.arity) {
+        conns(i*2) = checkedIntOfBytes(i, 0, sym.arity, i)
+        conns(i*2+1) = checkedIntOfBytes(i, 1, sym.arity+1, i)
+      }
+      val fwp1 = Array[Int](checkedIntOfShorts(sym.arity, -1), checkedIntOfShorts(sym.arity+1, -1))
+      val fwp2 = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
+      new GenericRuleImpl(dupSym, sym, cells, conns, fwp1 ++ fwp2)
+    }
   }
 }
 
