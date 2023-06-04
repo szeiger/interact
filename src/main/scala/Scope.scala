@@ -12,7 +12,7 @@ abstract class Scope[Cell] { self =>
 
   def clear(): Unit = freeWires.clear()
 
-  def addDefExprs(defs: Iterable[AST.DefExpr], syms: Symbols): Unit = {
+  def addExprs(defs: Iterable[AST.Expr], syms: Symbols): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
     @tailrec def connectAny(t1: Any, p1: Int, t2: Any, p2: Int): Unit = (t1, t2) match {
       case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, p2, t1, p1)
@@ -20,13 +20,9 @@ abstract class Scope[Cell] { self =>
       case (t1: Cell @unchecked, t2: TempWire) => connectCells(t1, p1, t2.c, t2.p)
       case (t1: Cell @unchecked, t2: Cell @unchecked) => connectCells(t1, p1, t2, p2)
     }
-    def addSyms(e: AST.Expr): Unit = e.allIdents.foreach { i =>
+    for(e <- defs; i <- e.allIdents) {
       val s = syms.getOrAdd(i.s)
       if(!s.isCons) s.refs += 1
-    }
-    defs.foreach {
-      case AST.Assignment(e1, e2) => addSyms(e1); addSyms(e2)
-      case e: AST.Expr => addSyms(e)
     }
     def cellRet(s: Symbol, c: Cell): Seq[(Any, Int)] = {
       if(s.isDef) (s.arity-s.returnArity).until(s.arity).map(p => (c, p))
@@ -66,7 +62,7 @@ abstract class Scope[Cell] { self =>
         c1.zip(c2).foreach { case ((t1, p1), (t2, p2)) => connectAny(t1, p1, t2, p2) }
       case e: AST.Ap =>
         val c = create(e)
-        assert(c.length == 0)
+        assert(c.isEmpty)
     }
   }
 }
@@ -96,16 +92,6 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     }
   }
 
-  object ListCons {
-    def unapply(c: Cell): Option[(Cell, Cell)] = (symbolName(c), getArity(c)) match {
-      case ("Cons", 2) =>
-        val (c1, p1) = getConnected(c, 0)
-        val (c2, p2) = getConnected(c, 1)
-        if(p1 < 0 && p2 < 0) Some((c1, c2)) else None
-      case _ => None
-    }
-  }
-
   def reachableCells: Iterator[Cell] = {
     val s = mutable.HashSet.empty[Cell]
     val q = mutable.ArrayBuffer.from(freeWires.flatMap(getAllConnected(_).map(_._1)))
@@ -117,59 +103,61 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     s.iterator
   }
 
-  def getCutLogs: Iterator[(Cell, String, String, Option[String])] = {
-    class Wire(val c1: Cell, val p1: Int, val c2: Cell, val p2: Int) {
-      override def hashCode(): Int = (c1, p1).hashCode() + (c2, p2).hashCode()
-      override def equals(obj: Any): Boolean = obj match {
-        case w: Wire =>
-          (c1 == w.c1 && p1 == w.p1 && c2 == w.c2 && p2 == w.p2) || (c1 == w.c2 && p1 == w.p2 && c2 == w.c1 && p2 == w.p1)
-        case _ => false
+  def log(out: PrintStream, prefix: String = "  ", markCut: (Cell, Cell) => Boolean = (_, _) => false): mutable.ArrayBuffer[Cell] = {
+    val cuts = mutable.ArrayBuffer.empty[Cell]
+    def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
+    val stack = mutable.Stack.from(freeWires.toIndexedSeq.sortBy(c => getSymbol(c).id).map(c => getConnected(c, -1)._1))
+    val shown = mutable.HashSet.empty[Cell]
+    var lastTmp = 0
+    def tmp(): String = { lastTmp += 1; s"$$s$lastTmp" }
+    val subst = mutable.HashMap.from(freeWires.iterator.map(c1 => ((c1, -1), getSymbol(c1).id)))
+    def nameOrSubst(c1: Cell, p1: Int, c2: Cell, p2: Int): String = subst.get(c2, p2) match {
+      case Some(s) => s
+      case None =>
+        val mark = if(p1 == -1 && p2 == -1 && markCut(c1, c2)) {
+          cuts.addOne(c1)
+          s"<${cuts.length-1}>"
+        } else ""
+        if(singleRet(getSymbol(c2)) == p2) mark + show(c2, false)
+        else {
+          if(!shown.contains(c2)) stack += c2
+          val t = tmp()
+          subst.put((c1, p1), t)
+          mark + t
+        }
+    }
+    def show(c1: Cell, withRet: Boolean): String = {
+      shown += c1
+      val sym = getSymbol(c1)
+      def list(poss: IndexedSeq[Int]) = poss.map { p1 => val (c2, p2) = getConnected(c1, p1); nameOrSubst(c1, p1, c2, p2) }
+      val call = c1 match {
+        case Church(v) => s"$v'c"
+        case _ =>
+          val aposs = if(sym.isDef) -1 +: (0 until sym.callArity-1) else 0 until sym.arity
+          val as0 = list(aposs)
+          if(sym.id == "Cons" && sym.arity == 2 && !sym.isDef) s"${as0(0)} :: ${as0(1)}"
+          else {
+            val as = if(as0.isEmpty) "" else as0.mkString("(", ", ", ")")
+            s"${sym.id}$as"
+          }
+      }
+      if(withRet) {
+        val rposs = if(sym.isDef) sym.callArity-1 until sym.callArity+sym.returnArity-1 else IndexedSeq(-1)
+        val rs0 = list(rposs)
+        rs0.size match {
+          case 0 => call
+          case 1 => s"${rs0.head} = $call"
+          case _ => rs0.mkString("(", ", ", s") = $call")
+        }
+      } else call
+    }
+    while(stack.nonEmpty) {
+      val c1 = stack.pop()
+      if(!shown.contains(c1)) {
+        val s = show(c1, true)
+        out.println(s"$prefix$s")
       }
     }
-    val wires = mutable.HashMap.empty[Wire, Wire]
-    def wire(c1: Cell, p1: Int): Wire = {
-      val (c2, p2) = getConnected(c1, p1)
-      val w1 = new Wire(c1, p1, c2, p2)
-      wires.getOrElseUpdate(w1, w1)
-    }
-    val cuts = mutable.HashSet.from(reachableCells.filter(c => getConnected(c, -1)._2 == -1)).map(c => wire(c, -1))
-    var nextTemp = -1
-    val helpers = mutable.Map.empty[Wire, String]
-    def explicit(w: Wire): String = helpers.getOrElseUpdate(w, {
-      nextTemp += 1
-      "$" + nextTemp
-    })
-    def targetOrReplacement(t: Cell, p: Int): String = {
-      val w = wire(t, p)
-      if(freeWires.contains(t)) symbolName(t)
-      else helpers.get(w) match {
-        case Some(s) => s
-        case None if p == -1 => show(t)
-        case None => explicit(w)
-      }
-    }
-    def show(c: Cell): String = c match {
-      case Church(i) => s"$i'c"
-      case ListCons(c1, c2) => s"${show(c1)} :: ${show(c2)}"
-      case c if getArity(c) == 0 => symbolName(c)
-      case c => getAllConnected(c).drop(1).map { case (t, p) => targetOrReplacement(t, p) }.mkString(s"${symbolName(c)}(", ", ", ")")
-    }
-    val strs = cuts.iterator.map { w =>
-      val c1 = w.c1
-      val c2 = w.c2
-      if(isFreeWire(c1)) (c1, symbolName(c1), show(c2), None)
-      else if(isFreeWire(c2)) (c1, symbolName(c2), show(c1), None)
-      else (c1, explicit(w), show(c1), Some(show(c2)))
-    }
-    val freeWireNames = freeWires.map(symbolName)
-    strs.zipWithIndex.toIndexedSeq.sortBy { case ((_, l, _, _), idx) =>
-      val f = freeWireNames.contains(l)
-      (!f, if(f) l else "", idx)
-    }.iterator.map(_._1)
-  }
-
-  def log(out: PrintStream): Unit = getCutLogs.foreach { case (_, l, r, o) =>
-    out.println(s"  $l . $r")
-    o.foreach(r2 => out.println(s"  $l . $r2"))
+    cuts
   }
 }

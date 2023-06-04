@@ -1,48 +1,43 @@
 import de.szeiger.interact._
+import de.szeiger.interact.st2.Cell
 
 import java.nio.file.Path
 import scala.annotation.tailrec
+import scala.collection.mutable
 
 object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Model(statements)
-  val inter = model.createST2Interpreter()
+  val inter = model.createST2Interpreter(compile = false)
+  model.setData(inter)
 
-  var step = 0
-  var cuts = inter.scope.getCutLogs.toIndexedSeq
+  var steps = 0
+  var cuts: mutable.ArrayBuffer[Cell] = _
 
   @tailrec
   def readLine(): Option[Int] = {
     print("> ")
     val in = Console.in.readLine()
     if(in == "q") None
-    else in.toIntOption.filter(i => i >= 0 && i < cuts.length && inter.getRuleImpl(cuts(i)._1.pref) != null) match {
+    else in.toIntOption.filter(i => i >= 0 && i < cuts.length) match {
       case None => readLine()
       case o => o
     }
   }
 
-  while(cuts.nonEmpty) {
-    println(s"At step $step:")
-    cuts.zipWithIndex.foreach { case ((w, l, r, o), idx) =>
-      val (i1, i2) = if(inter.getRuleImpl(w.pref) != null) (s"[$idx]", "   ") else ("   ", "   ")
-      o match {
-        case Some(r2) =>
-          val (s1, s2) = if(r.length < r2.length) (r, r2) else (r2, r)
-          println(s"  $i1  $s1")
-          println(s"  $i2  $s2")
-        case None =>
-          println(s"  $i1  $l . $r")
-      }
-    }
+  @tailrec def step(): Unit = {
+    println(s"At step $steps:")
+    cuts = inter.scope.log(System.out, markCut = (c1, _) => inter.getRuleImpl(c1.pref) != null)
+    if(cuts.isEmpty)
+      println(s"Irreducible after $steps reductions.")
+    steps += 1
     readLine() match {
-      case None => cuts = IndexedSeq.empty
+      case None => ()
       case Some(idx) =>
-        inter.reduce1(cuts(idx)._1.pref)
-        step += 1
-        cuts = inter.scope.getCutLogs.toIndexedSeq
-        if(cuts.isEmpty)
-          println(s"Irreducible after $step reductions.")
+        inter.reduce1(cuts(idx).pref)
+        step()
     }
   }
+
+  step()
 }

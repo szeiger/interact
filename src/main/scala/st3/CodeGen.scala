@@ -1,7 +1,7 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, Idx, Symbol}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 

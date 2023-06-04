@@ -10,7 +10,7 @@ class DerivedRule(val deriveName: String, val otherName: String) extends AnyChec
   def show = s"$deriveName . $otherName = <derived>"
 }
 
-class CheckedDefRule(creator: => String, val connected: Seq[AST.DefExpr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
+class CheckedDefRule(creator: => String, val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
   def show: String = creator
 }
 
@@ -171,10 +171,10 @@ class Model(val statements: Seq[AST.Statement],
 //    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1).mkString(", ")} in $in")
 //  }
 
-  // Check DefExpr and return free identifiers
-  def checkDefs(defs: Seq[AST.DefExpr])(in: => String): Seq[String] = {
+  // Check Expr and return free identifiers
+  def checkDefs(defs: Seq[AST.Expr])(in: => String): Seq[String] = {
     val locals = new Symbols(None)
-    def f(e: AST.DefExpr): Unit = e match {
+    def f(e: AST.Expr): Unit = e match {
       case AST.Assignment(l, r) => f(l); f(r)
       case AST.Tuple(es) => es.foreach(f)
       case AST.Wildcard => ()
@@ -251,23 +251,23 @@ class Model(val statements: Seq[AST.Statement],
     case AST.Wildcard => null
   }
 
-  private def defArgs(e: AST.DefExpr): (Symbol, Seq[String], Seq[String]) = e match {
+  private def defArgs(e: AST.Expr): (Symbol, Seq[String], Seq[String]) = e match {
     case AST.Assignment(lhs, rhs) =>
-      val AST.ExprSpec(lname, largs) = lhs
-      val AST.ExprSpec(rname, rargs) = rhs
+      val AST.SimpleExprSpec(lname, largs) = lhs
+      val AST.SimpleExprSpec(rname, rargs) = rhs
       assert((lname == null) != (rname == null))
       val (n, as, rs) = if(lname == null) (rname, rargs, largs) else (lname, largs, rargs)
       val sym = globals(n)
       assert(sym.isCons)
       (sym, simpleArgs(as), simpleArgs(rs))
-    case AST.ExprSpec(name, args) =>
+    case AST.SimpleExprSpec(name, args) =>
       assert(name != null)
       val sym = globals(name)
       assert(sym.isCons)
       (sym, simpleArgs(args), null)
   }
 
-  private def connectLastStatement(e: AST.DefExpr, extraRhs: Seq[AST.Ident]): AST.Assignment = e match {
+  private def connectLastStatement(e: AST.Expr, extraRhs: Seq[AST.Ident]): AST.Assignment = e match {
     case e: AST.Assignment => e
     case e: AST.Tuple =>
       assert(e.exprs.length == extraRhs.length)
@@ -329,7 +329,7 @@ class Model(val statements: Seq[AST.Statement],
 
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
-    data.foreach { d => inter.scope.addDefExprs(d.defs, new Symbols(Some(globals))) }
+    data.foreach { d => inter.scope.addExprs(d.defs, new Symbols(Some(globals))) }
   }
 }
 
@@ -343,12 +343,12 @@ class Unnest(globals: Symbols) {
   private var lastTmp = 0
   private def mk(): AST.Ident = { lastTmp += 1; AST.Ident(s"$$u${lastTmp}") }
 
-  def apply(es: Seq[AST.DefExpr]): Seq[AST.DefExpr] = es.flatMap(apply)
+  def apply(es: Seq[AST.Expr]): Seq[AST.Expr] = es.flatMap(apply)
 
-  def apply(e: AST.DefExpr): Seq[AST.DefExpr] = e match {
+  def apply(e: AST.Expr): Seq[AST.Expr] = e match {
     case AST.Assignment(l, r) =>
-      val (l1, ls) = applyExpr(l)
-      val (r1, rs) = applyExpr(r)
+      val (l1, ls) = applySimple(l)
+      val (r1, rs) = applySimple(r)
       (l1, r1) match {
         case (AST.Tuple(ls2), AST.Tuple(rs2)) if(ls2.nonEmpty) =>
           assert(ls2.length == rs2.length)
@@ -371,12 +371,12 @@ class Unnest(globals: Symbols) {
         case (l1: AST.Ap, l2) => ls ++ rs :+ AST.Assignment(r1, l1)
         case _ => ls ++ rs :+ AST.Assignment(l1, r1)
       }
-    case (e: AST.Expr) =>
-      val (e2, ass) = applyExpr(e)
+    case e =>
+      val (e2, ass) = applySimple(e)
       ass :+ e2
   }
 
-  def applyExpr(e: AST.Expr): (AST.Expr, Seq[AST.Assignment]) = {
+  private def applySimple(e: AST.Expr): (AST.Expr, Seq[AST.Assignment]) = {
     val buf = mutable.ArrayBuffer.empty[AST.Assignment]
     def assign(e: AST.Ap): AST.Expr = {
       val ts = globals(e.target.s)

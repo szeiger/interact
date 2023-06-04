@@ -18,10 +18,8 @@ object AST {
   case class Deriving(constructors: Seq[String]) {
     def show = constructors.mkString(", ")
   }
-  sealed trait DefExpr {
+  sealed trait Expr {
     def show: String
-  }
-  sealed trait Expr extends DefExpr {
     def allIdents: Iterator[Ident]
   }
   case class Ident(s: String) extends Expr {
@@ -32,8 +30,9 @@ object AST {
     def show = "_"
     def allIdents: Iterator[Ident] = Iterator.empty
   }
-  case class Assignment(lhs: Expr, rhs: Expr) extends DefExpr {
+  case class Assignment(lhs: Expr, rhs: Expr) extends Expr {
     def show = s"${lhs.show} = ${rhs.show}"
+    def allIdents = lhs.allIdents ++ rhs.allIdents
   }
   case class Tuple(exprs: Seq[Expr]) extends Expr {
     def show = exprs.map(_.show).mkString("(", ", ", ")")
@@ -43,7 +42,7 @@ object AST {
     def show = args.iterator.map(_.show).mkString(s"${target.show}(", ", ", ")")
     def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   }
-  case class Data(defs: Seq[DefExpr]) extends Statement {
+  case class Data(defs: Seq[Expr]) extends Statement {
     def show = defs.map(_.show).mkString(", ")
     var free: Seq[String] = _
   }
@@ -54,8 +53,8 @@ object AST {
       s"$name$a: $r"
     }
   }
-  case class DefRule(on: DefExpr, reduced: Seq[DefExpr])
-  case class Match(on: DefExpr, reduced: Seq[DefExpr]) extends Statement
+  case class DefRule(on: Expr, reduced: Seq[Expr])
+  case class Match(on: Expr, reduced: Seq[Expr]) extends Statement
 
   object IdentOrAp {
     def unapply(e: Expr): Option[(String, Seq[Expr])] = e match {
@@ -64,7 +63,7 @@ object AST {
       case _ => None
     }
   }
-  object ExprSpec {
+  object SimpleExprSpec {
     def unapply(e: Expr): Option[(String, Seq[Expr])] = e match {
       case Ident(s) => Some((s, Nil))
       case Ap(Ident(s), a) => Some((s, a))
@@ -98,7 +97,7 @@ object Parser {
   import ScriptWhitespace._
   import Lexical._
 
-  def identExpr[_: P]: P[AST.Ident] = ident.map(AST.Ident(_))
+  def identExpr[_: P]: P[AST.Ident] = ident.map(AST.Ident)
 
   def wildcard[_: P]: P[AST.Wildcard.type] = P("_").map(_ => AST.Wildcard)
 
@@ -115,13 +114,19 @@ object Parser {
   def simpleExpr[_: P]: P[AST.Expr] =
     P(  (app | identExpr | wildcard | church | tuple)  )
 
-  def expr[_: P]: P[AST.Expr] =
+  def consExpr[_: P]: P[AST.Expr] =
     P(  simpleExpr.rep(1, "::")  ).map {
       case Seq(e) => e
       case es => es.foldRight(null: AST.Expr) {
         case (e, null) => e
         case (e, z) => AST.Ap(AST.Ident("Cons"), Seq(e, z))
       }
+    }
+
+  def expr[_: P]: P[AST.Expr] =
+    P(  consExpr ~ ("=" ~ consExpr).?  ).map {
+      case (e1, None) => e1
+      case (e1, Some(e2)) => AST.Assignment(e1, e2)
     }
 
   def params[_: P](min: Int): P[Seq[String]] =
@@ -134,7 +139,7 @@ object Parser {
     P(  params(1) | ident.map(Seq(_))  )
 
   def deriving[_ : P]: P[AST.Deriving] =
-    P(  kw("deriving") ~/ "(" ~ ident.rep(0, sep=",") ~ ")" ).map(AST.Deriving(_))
+    P(  kw("deriving") ~/ "(" ~ ident.rep(0, sep=",") ~ ")" ).map(AST.Deriving)
 
   def cons[_: P]: P[AST.Cons] =
     P(  kw("cons") ~/ ident ~ consParamsOpt ~ (":" ~ ident).? ~ deriving.?  ).map(AST.Cons.tupled)
@@ -143,19 +148,13 @@ object Parser {
     P(  kw("def") ~/ ident ~ params(1) ~ (":" ~ defReturn).?.map(_.getOrElse(Nil)) ~ defRule.rep  ).map(AST.Def.tupled)
 
   def defRule[_: P]: P[AST.DefRule] =
-    P(  "|" ~ defExpr ~ "=>" ~ defExpr.rep(1, sep = ",")  ).map(AST.DefRule.tupled)
-
-  def defExpr[_: P]: P[AST.DefExpr] =
-    P(  expr ~ ("=" ~ expr).?  ).map {
-      case (e1, None) => e1
-      case (e1, Some(e2)) => AST.Assignment(e1, e2)
-    }
+    P(  "|" ~ expr ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.DefRule.tupled)
 
   def matchStatement[_: P]: P[AST.Match] =
-    P(  "match" ~ defExpr ~ "=>" ~ defExpr.rep(1, sep = ",")  ).map(AST.Match.tupled)
+    P(  "match" ~ expr ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.Match.tupled)
 
   def data[_: P]: P[AST.Data] =
-    P(  kw("let") ~/ defExpr.rep(1, sep = ",") ).map(AST.Data)
+    P(  kw("let") ~/ expr.rep(1, sep = ",") ).map(AST.Data)
 
   def unit[_: P]: P[Seq[AST.Statement]] =
     P(  Start ~ (cons | data | definition | matchStatement ).rep ~ End  )

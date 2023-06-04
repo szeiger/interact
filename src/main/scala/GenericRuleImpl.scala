@@ -95,7 +95,7 @@ object GenericRuleImpl {
         }
       }
     }
-    sc.addDefExprs(cr.connected, syms)
+    sc.addExprs(cr.connected, syms)
     new GenericRuleImpl(globals(cr.name1), globals(cr.name2), cells.toArray, conns.toArray, fwp)
   }
 
