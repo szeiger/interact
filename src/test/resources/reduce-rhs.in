@@ -2,6 +2,8 @@ cons A(x)
 cons B
 cons C(x)
 cons D
-rule A(x) . B = C(x) . D, A(D) . C(D)
-rule C(x) . D = x . D
+
+match A(x) = B => C(x) = D, A(D) = C(D)
+match C(x) = D => x = D
+
 let A(res) = B

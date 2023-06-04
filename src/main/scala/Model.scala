@@ -10,10 +10,6 @@ class DerivedRule(val deriveName: String, val otherName: String) extends AnyChec
   def show = s"$deriveName . $otherName = <derived>"
 }
 
-class CheckedRule(val r: AST.Rule, val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
-  def show: String = s"${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}"
-}
-
 class CheckedDefRule(creator: => String, val connected: Seq[AST.DefExpr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
   def show: String = creator
 }
@@ -82,15 +78,6 @@ class Model(val statements: Seq[AST.Statement],
     ruleCuts.put(key, new DerivedRule(derivedName, otherName))
   }
 
-  def addRule(r: AST.Rule): Unit = {
-    val (n1, a1) = checkCutCell(r.cut.left)(r.cut.show)
-    val (n2, a2) = checkCutCell(r.cut.right)(r.cut.show)
-    val impl = new CheckedRule(r, n1, a1, n2, a2)
-    val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
-    if(ruleCuts.contains(key)) sys.error(s"Rule ${r.cut.show} duplicates ${impl.name1} . ${impl.name2}")
-    ruleCuts.put(key, impl)
-  }
-
   def addDefRules(d: AST.Def): Unit = {
     val dsym = globals(d.name)
     val danames = cutArgs(dsym, d.args, d.ret)
@@ -101,7 +88,7 @@ class Model(val statements: Seq[AST.Statement],
       val (osym, oas, ors) = defArgs(r.on)
       val oanames = cutArgs(osym, oas, ors)
       val cutRhs = AST.Ap(AST.Ident(osym.id), oanames.map(AST.Ident))
-      val (n2, a2) = checkCutCell(cutRhs)(AST.Cut(cutLhs, cutRhs).show)
+      val (n2, a2) = checkCutCell(cutRhs)(s"$cutLhs . $cutRhs")
       val connected = r.reduced.init :+ connectLastStatement(r.reduced.last, dret)
       val impl = new CheckedDefRule(s"${r.on.show} = ${r.reduced.map(_.show).mkString(", ")}", connected, n1, a1, n2, a2)
       val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
@@ -152,37 +139,37 @@ class Model(val statements: Seq[AST.Statement],
     ruleCuts.put(key, impl)
   }
 
-  def checkLinearity(cuts: Seq[AST.Cut], free: Set[String], globals: Symbols)(in: => String): Unit = {
-    final class Usages(var count: Int = 0)
-    val usages = mutable.HashMap.from(free.iterator.map(i => (i, new Usages)))
-    val toScan = mutable.Queue.empty[(AST.Cut, AST.Expr)]
-    def scan(c: AST.Cut, e: AST.Expr): Unit = e match {
-      case AST.IdentOrAp(target, args) =>
-        globals.get(target) match {
-          case Some(g) =>
-            if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in $in")
-            if(args.length != g.arity) sys.error(s"Wrong arity ${args.length} != ${g.arity} when using $g in $in")
-          case None =>
-            if(e.isInstanceOf[AST.Ap])
-              sys.error(s"Illegal use of non-constructor symbol $target as constructor in $in")
-            usages.getOrElseUpdate(target, new Usages).count += 1
-        }
-        args.foreach(a => toScan.enqueue((c, a)))
-    }
-    cuts.foreach { c =>
-      scan(c, c.left)
-      scan(c, c.right)
-    }
-    while(!toScan.isEmpty) {
-      val (c, e) = toScan.dequeue()
-      scan(c, e)
-    }
-    val badFree = free.iterator.map(i => (i, usages(i))).filter(_._2.count != 1).toSeq
-    if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1).mkString(", ")} in $in")
-    free.foreach(usages.remove)
-    val badLocal = usages.filter(_._2.count != 2).toSeq
-    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1).mkString(", ")} in $in")
-  }
+//  def checkLinearity(cuts: Seq[AST.Cut], free: Set[String], globals: Symbols)(in: => String): Unit = {
+//    final class Usages(var count: Int = 0)
+//    val usages = mutable.HashMap.from(free.iterator.map(i => (i, new Usages)))
+//    val toScan = mutable.Queue.empty[(AST.Cut, AST.Expr)]
+//    def scan(c: AST.Cut, e: AST.Expr): Unit = e match {
+//      case AST.IdentOrAp(target, args) =>
+//        globals.get(target) match {
+//          case Some(g) =>
+//            if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in $in")
+//            if(args.length != g.arity) sys.error(s"Wrong arity ${args.length} != ${g.arity} when using $g in $in")
+//          case None =>
+//            if(e.isInstanceOf[AST.Ap])
+//              sys.error(s"Illegal use of non-constructor symbol $target as constructor in $in")
+//            usages.getOrElseUpdate(target, new Usages).count += 1
+//        }
+//        args.foreach(a => toScan.enqueue((c, a)))
+//    }
+//    cuts.foreach { c =>
+//      scan(c, c.left)
+//      scan(c, c.right)
+//    }
+//    while(!toScan.isEmpty) {
+//      val (c, e) = toScan.dequeue()
+//      scan(c, e)
+//    }
+//    val badFree = free.iterator.map(i => (i, usages(i))).filter(_._2.count != 1).toSeq
+//    if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1).mkString(", ")} in $in")
+//    free.foreach(usages.remove)
+//    val badLocal = usages.filter(_._2.count != 2).toSeq
+//    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1).mkString(", ")} in $in")
+//  }
 
   // Check DefExpr and return free identifiers
   def checkDefs(defs: Seq[AST.DefExpr])(in: => String): Seq[String] = {
@@ -239,7 +226,6 @@ class Model(val statements: Seq[AST.Statement],
       s.arity = c.args.length
       s.isCons = true
       constrs += c
-    case r: AST.Rule => addRule(r)
     case d: AST.Data => data.addOne(d)
     case d: AST.Def =>
       if(globals.get(d.name).isDefined) sys.error(s"Duplicate cons/def: ${d.name}")
@@ -281,32 +267,6 @@ class Model(val statements: Seq[AST.Statement],
       (sym, simpleArgs(args), null)
   }
 
-  private def defExprToCut(e: AST.DefExpr): AST.Cut = {
-    def create(t: AST.Ident, args: Seq[AST.Expr]): AST.Cut =
-      AST.Cut(args.head, AST.Ap(t, args.tail))
-    def toCutOrder(s: Symbol, args: Seq[AST.Expr]): Seq[AST.Expr] = {
-      assert(s.isCons)
-      if(s.isDef) {
-        val (a1, a2) = args.splitAt(s.returnArity)
-        a2 ++ a1
-      } else args
-    }
-    e match {
-      case AST.Assignment(l, AST.Ap(t, args)) =>
-        val ret = l match {
-          case AST.Tuple(ret) => ret
-          case ret: AST.Ident => Seq(ret)
-        }
-        create(t, toCutOrder(globals(t.s), ret ++ args))
-      case AST.Assignment(l: AST.Ident, r: AST.Ident) => AST.Cut(l, r)
-      case AST.Ap(t, args) =>
-        val s = globals(t.s)
-        assert(s.isDef)
-        assert(s.returnArity == 0)
-        create(t, args)
-    }
-  }
-
   private def connectLastStatement(e: AST.DefExpr, extraRhs: Seq[AST.Ident]): AST.Assignment = e match {
     case e: AST.Assignment => e
     case e: AST.Tuple =>
@@ -329,20 +289,12 @@ class Model(val statements: Seq[AST.Statement],
       if(i == "erase" || i == "dup") addDerivedRule(i, c.name)
       else sys.error(s"Don't know how to derive rule for $i")
     }
-    c.rules.foreach { r =>
-      addRule(AST.Rule(AST.Cut(AST.Ap(AST.Ident(c.name), c.args.map(AST.Ident)), r.rhs), r.reduced))
-    }
   }
   matchRules.foreach(addMatchRule)
   data.foreach { d =>
     d.free = checkDefs(d.defs)(d.show)
   }
   rules.foreach {
-    case cr: CheckedRule =>
-      val free = cr.args1 ++ cr.args2
-      val freeSet = free.toSet
-      if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
-      checkLinearity(cr.r.reduced, freeSet, globals)(cr.show)
     case cr: CheckedDefRule =>
       val free = cr.args1 ++ cr.args2
       val freeSet = free.toSet

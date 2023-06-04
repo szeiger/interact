@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 
 object AST {
   sealed trait Statement
-  case class Cons(name: String, args: Seq[String], ret: Option[String], der: Option[Deriving], rules: Seq[ConsRule]) extends Statement {
+  case class Cons(name: String, args: Seq[String], ret: Option[String], der: Option[Deriving]) extends Statement {
     def show: String = {
       val a = if(args.isEmpty) "" else args.mkString("(", ", ", ")")
       val r = if(ret.isEmpty) "" else s" . ${ret.get}"
@@ -18,14 +18,10 @@ object AST {
   case class Deriving(constructors: Seq[String]) {
     def show = constructors.mkString(", ")
   }
-  case class ConsRule(rhs: Expr, reduced: Seq[Cut])
-  sealed trait ExprOrCut {
-    def show: String
-  }
   sealed trait DefExpr {
     def show: String
   }
-  sealed trait Expr extends ExprOrCut with DefExpr {
+  sealed trait Expr extends DefExpr {
     def allIdents: Iterator[Ident]
   }
   case class Ident(s: String) extends Expr {
@@ -47,10 +43,6 @@ object AST {
     def show = args.iterator.map(_.show).mkString(s"${target.show}(", ", ", ")")
     def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   }
-  case class Cut(left: Expr, right: Expr) extends ExprOrCut {
-    def show = s"${left.show} . ${right.show}"
-  }
-  case class Rule(cut: Cut, reduced: Seq[Cut]) extends Statement
   case class Data(defs: Seq[DefExpr]) extends Statement {
     def show = defs.map(_.show).mkString(", ")
     var free: Seq[String] = _
@@ -92,7 +84,7 @@ object AST {
 object Lexical {
   import NoWhitespace._
 
-  val keywords = Set("cons", "rule", "let", "deriving", "cut", "def", "match", "_")
+  val keywords = Set("cons", "let", "deriving", "def", "match", "_")
 
   def ident[_: P]: P[String] =
      P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!keywords.contains(_))
@@ -132,12 +124,6 @@ object Parser {
       }
     }
 
-  def cut[_: P]: P[AST.Cut] =
-    P(expr ~ "." ~ expr).map(AST.Cut.tupled)
-
-  def cutList[_: P]: P[Seq[AST.Cut]] =
-    P(  cut.rep(min = 1, sep = ",") | P("()").map(_ => Nil)  )
-
   def params[_: P](min: Int): P[Seq[String]] =
     P(  ("(" ~ (ident | wildcard.map(_ => null) ).rep(min = min, sep = ",") ~ ")")  )
 
@@ -150,11 +136,8 @@ object Parser {
   def deriving[_ : P]: P[AST.Deriving] =
     P(  kw("deriving") ~/ "(" ~ ident.rep(0, sep=",") ~ ")" ).map(AST.Deriving(_))
 
-  def consRule[_: P]: P[AST.ConsRule] =
-    P(  kw("cut") ~/ expr ~ "=" ~ cutList  ).map(AST.ConsRule.tupled)
-
   def cons[_: P]: P[AST.Cons] =
-    P(  kw("cons") ~/ ident ~ consParamsOpt ~ ("." ~ ident).? ~ deriving.? ~ consRule.rep  ).map(AST.Cons.tupled)
+    P(  kw("cons") ~/ ident ~ consParamsOpt ~ (":" ~ ident).? ~ deriving.?  ).map(AST.Cons.tupled)
 
   def definition[_: P]: P[AST.Def] =
     P(  kw("def") ~/ ident ~ params(1) ~ (":" ~ defReturn).?.map(_.getOrElse(Nil)) ~ defRule.rep  ).map(AST.Def.tupled)
@@ -171,14 +154,11 @@ object Parser {
   def matchStatement[_: P]: P[AST.Match] =
     P(  "match" ~ defExpr ~ "=>" ~ defExpr.rep(1, sep = ",")  ).map(AST.Match.tupled)
 
-  def rule[_: P]: P[AST.Rule] =
-    P(  kw("rule") ~/ cut ~ "=" ~ cutList  ).map(AST.Rule.tupled)
-
   def data[_: P]: P[AST.Data] =
     P(  kw("let") ~/ defExpr.rep(1, sep = ",") ).map(AST.Data)
 
   def unit[_: P]: P[Seq[AST.Statement]] =
-    P(  Start ~ (cons | rule | data | definition | matchStatement ).rep ~ End  )
+    P(  Start ~ (cons | data | definition | matchStatement ).rep ~ End  )
 
   def parse(input: String): Seq[AST.Statement] =
     fastparse.parse(input, Parser.unit(_), verboseFailures = true).get.value

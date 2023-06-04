@@ -26,7 +26,7 @@ let example_3_times_2 = mult(3'c, 2'c)
 
 # Lists
 cons Nil
-cons Cons(head, tail) . l
+cons Cons(head, tail): l
 
 def length(list): r
   | Nil => Z

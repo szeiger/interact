@@ -72,32 +72,7 @@ object GenericRuleImpl {
   def apply[C](cr: AnyCheckedRule, globals: Symbols): GenericRuleImpl = cr match {
     case dr: DerivedRule if dr.deriveName == "erase" => deriveErase(dr.otherName, globals)
     case dr: DerivedRule if dr.deriveName == "dup" => deriveDup(dr.otherName, globals)
-    case cr: CheckedRule => apply(cr, globals)
     case cr: CheckedDefRule => apply(cr, globals)
-  }
-
-  def apply[C](cr: CheckedRule, globals: Symbols): GenericRuleImpl = {
-    //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
-    val syms = new Symbols(Some(globals))
-    val cells = mutable.ArrayBuffer.empty[Symbol]
-    val conns = mutable.HashSet.empty[Int]
-    val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (syms.getOrAdd(n), -i-1) }.toMap
-    assert(freeLookup.size == cr.args1.length + cr.args2.length)
-    val fwp = new Array[Int](freeLookup.size)
-    val sc = new Scope[Int] {
-      override def createCell(sym: Symbol): Int = if(sym.isCons) { cells += sym; cells.length-1 } else freeLookup(sym)
-      override def connectCells(c1: Int, p1: Int, c2: Int, p2: Int): Unit = {
-        if(c1 >= 0 && c2 >= 0) {
-          if(!conns.contains(checkedIntOfBytes(c2, p2, c1, p1)))
-            conns.add(checkedIntOfBytes(c1, p1, c2, p2))
-        } else {
-          if(c1 < 0) fwp(-1-c1) = checkedIntOfShorts(c2, p2)
-          if(c2 < 0) fwp(-1-c2) = checkedIntOfShorts(c1, p1)
-        }
-      }
-    }
-    sc.add(cr.r.reduced, syms)
-    new GenericRuleImpl(globals(cr.name1), globals(cr.name2), cells.toArray, conns.toArray, fwp)
   }
 
   def apply[C](cr: CheckedDefRule, globals: Symbols): GenericRuleImpl = {

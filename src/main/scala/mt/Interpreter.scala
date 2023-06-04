@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, AnyCheckedRule, BaseInterpreter, CheckedRule, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{Analyzer, AnyCheckedRule, BaseInterpreter, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.util.Arrays

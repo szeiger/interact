@@ -1,7 +1,7 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, AnyCheckedRule, BaseInterpreter, CheckedRule, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{Analyzer, AnyCheckedRule, BaseInterpreter, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays

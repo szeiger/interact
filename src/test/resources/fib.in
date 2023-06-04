@@ -7,7 +7,7 @@ def add(_, y): r
 
 def add2(_, y): r
   | Z    => y
-  | S(x) => S(add(x, y))
+  | S(x) => S(add2(x, y))
 
 def fib(_): r
   | Z    => 1'c

@@ -69,39 +69,6 @@ abstract class Scope[Cell] { self =>
         assert(c.length == 0)
     }
   }
-
-  def add(cuts: Iterable[AST.Cut], syms: Symbols): Unit = {
-    class TempWire { var c: Cell = _; var p: Int = 0 }
-    @tailrec def connectAny(t1: Any, p1: Int, t2: Any): Unit = (t1, t2) match {
-      case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, -1, t1)
-      case (t1: Cell @unchecked, t2: TempWire) if t2.c == null => t2.c = t1; t2.p = p1
-      case (t1: Cell @unchecked, t2: TempWire) => connectCells(t1, p1, t2.c, t2.p)
-      case (t1: Cell @unchecked, t2: Cell @unchecked) => connectCells(t1, p1, t2, -1)
-    }
-    def addSyms(e: AST.Expr): Unit = e.allIdents.foreach { i =>
-      val s = syms.getOrAdd(i.s)
-      if(!s.isCons) s.refs += 1
-    }
-    cuts.foreach { case AST.Cut(e1, e2) => addSyms(e1); addSyms(e2) }
-    val bind = mutable.HashMap.empty[Symbol, TempWire]
-    def create(e: AST.Expr): Any = e match {
-      case i: AST.Ident =>
-        val s = syms.getOrAdd(i.s)
-        s.refs match {
-          case 0 => createCell(s)
-          case 1 => val c = createCell(s); freeWires.addOne(c); c
-          case 2 => bind.getOrElseUpdate(s, new TempWire)
-          case _ => sys.error(s"Non-linear use of ${i.show} in data")
-        }
-      case AST.Ap(i, args) =>
-        val s = syms.getOrAdd(i.s)
-        assert(s.isCons)
-        val c = createCell(s)
-        args.zipWithIndex.foreach { case (a, p) => connectAny(c, p, create(a)) }
-        c
-    }
-    cuts.foreach(e => connectAny(create(e.left), -1, create(e.right)))
-  }
 }
 
 abstract class Analyzer[Cell] extends Scope[Cell] { self =>
