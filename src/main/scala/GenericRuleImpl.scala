@@ -72,10 +72,10 @@ object GenericRuleImpl {
   def apply[C](cr: AnyCheckedRule, globals: Symbols): GenericRuleImpl = cr match {
     case dr: DerivedRule if dr.deriveName == "erase" => deriveErase(dr.otherName, globals)
     case dr: DerivedRule if dr.deriveName == "dup" => deriveDup(dr.otherName, globals)
-    case cr: CheckedDefRule => apply(cr, globals)
+    case cr: CheckedMatchRule => apply(cr, globals)
   }
 
-  def apply[C](cr: CheckedDefRule, globals: Symbols): GenericRuleImpl = {
+  def apply[C](cr: CheckedMatchRule, globals: Symbols): GenericRuleImpl = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val cells = mutable.ArrayBuffer.empty[Symbol]

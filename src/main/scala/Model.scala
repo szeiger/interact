@@ -10,7 +10,7 @@ class DerivedRule(val deriveName: String, val otherName: String) extends AnyChec
   def show = s"$deriveName . $otherName = <derived>"
 }
 
-class CheckedDefRule(creator: => String, val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
+class CheckedMatchRule(creator: => String, val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
   def show: String = creator
 }
 
@@ -49,6 +49,11 @@ trait BaseInterpreter {
   def reduce(): Int
 }
 
+case class ConsAp(target: AST.Ident, tsym: Symbol, args: Seq[AST.Expr]) extends AST.Expr {
+  def show = args.map(_.show).mkString(s"<${target.show}>(", ", ", ")")
+  def allIdents: Iterator[AST.Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
+}
+
 class Model(val statements: Seq[AST.Statement],
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true) {
@@ -61,17 +66,6 @@ class Model(val statements: Seq[AST.Statement],
 
   def rules: Iterable[AnyCheckedRule] = ruleCuts.values
 
-  def checkCutCell(e: AST.Expr)(in: => String): (String, Seq[String]) = e match {
-    case a: AST.Ap =>
-      val args = a.args.map {
-        case i: AST.Ident => i.s
-        case _ => sys.error(s"No nested patterns allowed in rule $in")
-      }
-      (a.target.s, args)
-    case a: AST.Ident =>
-      (a.s, Nil)
-  }
-
   def addDerivedRule(derivedName: String, otherName: String): Unit = {
     val key = if(derivedName <= otherName) (derivedName, otherName) else (otherName, derivedName)
     if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${derivedName} . ${otherName}")
@@ -79,64 +73,38 @@ class Model(val statements: Seq[AST.Statement],
   }
 
   def addDefRules(d: AST.Def): Unit = {
-    val dsym = globals(d.name)
-    val danames = cutArgs(dsym, d.args, d.ret)
-    val dret = d.ret.map(AST.Ident)
-    val cutLhs = AST.Ap(AST.Ident(d.name), danames.map(AST.Ident))
-    val (n1, a1) = checkCutCell(cutLhs)(d.show)
+    val dret = AST.Tuple(d.ret.map(AST.Ident))
+    val dargst = d.args.tail.map(AST.Ident)
+    val di = AST.Ident(d.name)
     d.rules.foreach { r =>
-      val (osym, oas, ors) = defArgs(r.on)
-      val oanames = cutArgs(osym, oas, ors)
-      val cutRhs = AST.Ap(AST.Ident(osym.id), oanames.map(AST.Ident))
-      val (n2, a2) = checkCutCell(cutRhs)(s"$cutLhs . $cutRhs")
-      val connected = r.reduced.init :+ connectLastStatement(r.reduced.last, dret)
-      val impl = new CheckedDefRule(s"${r.on.show} = ${r.reduced.map(_.show).mkString(", ")}", connected, n1, a1, n2, a2)
-      val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
-      if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
-      ruleCuts.put(key, impl)
+      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, r.on +: dargst), dret), r.reduced),
+        s"${r.on.show} = ${r.reduced.map(_.show).mkString(", ")}")
     }
   }
 
-  def addMatchRule(m: AST.Match): Unit = {
-    def ensureIdent(e: AST.Expr): AST.Ident = e.asInstanceOf[AST.Ident]
-    val (lsym, lhs1, rhs1, completeRhs) = m.on match {
-      case a @ AST.Ap(t, args) =>
-        val s = globals(t.s)
-        assert(s.isCons)
-        assert(args.length == s.callArity)
-        val rhs = AST.Tuple((1 to s.returnArity).map(i => AST.Ident(s"$$ret$i")))
-        (s, a, rhs, rhs)
-      case AST.Assignment(l: AST.Ap, r) =>
-        val s = globals(l.target.s)
-        assert(s.isCons)
-        (s, l, r, Nil)
+  def addMatchRule(m: AST.Match, creator: => String): Unit = {
+    val on2 = m.on match {
+      // complete lhs assignment for raw match rules (already completed for def rules):
+      case e: AST.Ap =>
+        val s = globals(e.target.s)
+        if(s.isDef){
+          assert(e.args.length == s.callArity)
+          AST.Assignment(e, AST.Tuple((1 to s.returnArity).map(i => AST.Ident(s"$$ret$i"))))
+        } else e
+      case e => e
     }
-    val (lhsArgs, lhsRetArgs, rhs2) = if(lsym.isDef) {
-      val AST.IdentOrTuple(es) = rhs1
-      ((lhs1.args.tail ++ es).map(ensureIdent), es.map(ensureIdent), lhs1.args.head)
-    } else (lhs1.args.map(ensureIdent), Nil, rhs1)
-    val (rsym, rhsArgs) = rhs2 match {
-      case AST.Ident(id) =>
-        val s = globals(id)
-        assert(s.isCons)
-        assert(s.arity == 0)
-        (s, Nil)
-      case AST.Ap(AST.Ident(id), args) =>
-        val s = globals(id)
-        assert(s.isCons)
-        assert(args.length == s.callArity)
-        if(s.isDef) {
-          assert(args.head == AST.Wildcard)
-          (s, args.tail.map(ensureIdent))
-        } else {
-          (s, args.map(ensureIdent))
-        }
+    val unnest = new Normalize(globals)
+    val inlined = unnest.toInline(unnest(Seq(on2)).map(unnest.toConsOrder))
+    inlined match {
+      case Seq(AST.Assignment(ConsAp(lt, ls, largs: Seq[AST.Ident]), ConsAp(rt, rs, rargs: Seq[AST.Ident]))) =>
+        val compl = if(ls.isDef) largs.takeRight(ls.returnArity) else Nil
+        val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, compl)
+        val impl = new CheckedMatchRule(creator, connected, ls.id, largs.map(_.s), rs.id, rargs.map(_.s))
+        val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
+        if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
+        ruleCuts.put(key, impl)
+      case _ => sys.error(s"Invalid rule: ${m.show}")
     }
-    val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, lhsRetArgs)
-    val impl = new CheckedDefRule(s"${m.on.show} = ${m.reduced.map(_.show).mkString(", ")}", connected, lsym.id, lhsArgs.map(_.s), rsym.id, rhsArgs.map(_.s))
-    val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
-    if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
-    ruleCuts.put(key, impl)
   }
 
 //  def checkLinearity(cuts: Seq[AST.Cut], free: Set[String], globals: Symbols)(in: => String): Unit = {
@@ -243,30 +211,6 @@ class Model(val statements: Seq[AST.Statement],
       matchRules += m
   }
 
-  private def cutArgs[T](sym: Symbol, args: Seq[T], ret: Seq[T]): Seq[T] =
-    if(sym.isDef) args.tail ++ ret else args
-
-  private def simpleArgs(es: Seq[AST.Expr]): Seq[String] = es.map {
-    case AST.Ident(s) => s
-    case AST.Wildcard => null
-  }
-
-  private def defArgs(e: AST.Expr): (Symbol, Seq[String], Seq[String]) = e match {
-    case AST.Assignment(lhs, rhs) =>
-      val AST.SimpleExprSpec(lname, largs) = lhs
-      val AST.SimpleExprSpec(rname, rargs) = rhs
-      assert((lname == null) != (rname == null))
-      val (n, as, rs) = if(lname == null) (rname, rargs, largs) else (lname, largs, rargs)
-      val sym = globals(n)
-      assert(sym.isCons)
-      (sym, simpleArgs(as), simpleArgs(rs))
-    case AST.SimpleExprSpec(name, args) =>
-      assert(name != null)
-      val sym = globals(name)
-      assert(sym.isCons)
-      (sym, simpleArgs(args), null)
-  }
-
   private def connectLastStatement(e: AST.Expr, extraRhs: Seq[AST.Ident]): AST.Assignment = e match {
     case e: AST.Assignment => e
     case e: AST.Tuple =>
@@ -290,12 +234,12 @@ class Model(val statements: Seq[AST.Statement],
       else sys.error(s"Don't know how to derive rule for $i")
     }
   }
-  matchRules.foreach(addMatchRule)
+  matchRules.foreach(m => addMatchRule(m, s"${m.on.show} = ${m.reduced.map(_.show).mkString(", ")}"))
   data.foreach { d =>
     d.free = checkDefs(d.defs)(d.show)
   }
   rules.foreach {
-    case cr: CheckedDefRule =>
+    case cr: CheckedMatchRule =>
       val free = cr.args1 ++ cr.args2
       val freeSet = free.toSet
       if(freeSet.size != free.size) sys.error(s"Duplicate free symbol in ${cr.show}")
@@ -333,71 +277,102 @@ class Model(val statements: Seq[AST.Statement],
   }
 }
 
-// Convert expressions to ANF
-// - all compound expressions are unnested
-// - only nullary non-constructor Idents can be nested
-// - nullary constructor Idents are converted to Ap
+// Normalize expressions:
+// - all compound expressions are unnested (ANF)
+// - constructor Idents are converted to Ap
+// - only non-constructor Idents can be nested
 // - all Ap assignments have the Ap on the RHS
 // - all direct assignments are untupled
-class Unnest(globals: Symbols) {
+// - wildcards in assignments are resolved
+// - only the last expr can be a non-assignment
+class Normalize(globals: Symbols) {
   private var lastTmp = 0
   private def mk(): AST.Ident = { lastTmp += 1; AST.Ident(s"$$u${lastTmp}") }
 
-  def apply(es: Seq[AST.Expr]): Seq[AST.Expr] = es.flatMap(apply)
-
-  def apply(e: AST.Expr): Seq[AST.Expr] = e match {
-    case AST.Assignment(l, r) =>
-      val (l1, ls) = applySimple(l)
-      val (r1, rs) = applySimple(r)
-      (l1, r1) match {
-        case (AST.Tuple(ls2), AST.Tuple(rs2)) if(ls2.nonEmpty) =>
-          assert(ls2.length == rs2.length)
-          val as = ls2.zip(rs2).map { case (l, r) => AST.Assignment(l, r) }
-          ls ++ rs ++ as
-        case (e1, e2: AST.Tuple) if !e1.isInstanceOf[AST.Tuple] =>
-          ls ++ rs :+ AST.Assignment(e2, e1)
-        case (l1: AST.Ap, l2: AST.Ap) =>
-          val a1 = globals(l1.target.s).returnArity
-          val a2 = globals(l2.target.s).returnArity
-          assert(a1 == a2)
-          if(a1 == 1) {
-            val id = mk()
-            ls ++ rs :+ AST.Assignment(id, l1) :+ AST.Assignment(id, l2)
-          } else {
-            val ids = for(_ <- 1 to a1) yield mk()
-            val tup = AST.Tuple(ids)
-            ls ++ rs :+ AST.Assignment(tup, l1) :+ AST.Assignment(tup, l2)
-          }
-        case (l1: AST.Ap, l2) => ls ++ rs :+ AST.Assignment(r1, l1)
-        case _ => ls ++ rs :+ AST.Assignment(l1, r1)
-      }
-    case e =>
-      val (e2, ass) = applySimple(e)
-      ass :+ e2
+  def apply(exprs: Seq[AST.Expr]): Seq[AST.Expr] = {
+    val assigned = mutable.HashSet.empty[AST.Ident]
+    val buf = mutable.ArrayBuffer.empty[AST.Expr]
+    def expandWildcards(e: AST.Expr, wild: AST.Ident): AST.Expr = e match {
+      case AST.Assignment(ls, rs) =>
+        val wild2 = mk()
+        val ass2 = AST.Assignment(expandWildcards(ls, wild2), expandWildcards(rs, wild2))
+        if(assigned.contains(wild2)) { reorder(unnest(ass2, false)); wild2 }
+        else ass2
+      case AST.Tuple(es) => AST.Tuple(es.map(expandWildcards(_, wild)))
+      case AST.Ap(t, args) => AST.Ap(t, args.map(expandWildcards(_, wild)))
+      case AST.Wildcard =>
+        if(assigned.contains(wild)) sys.error(s"Duplicate wildcard in assignment")
+        assigned += wild
+        wild
+      case e: AST.Ident => e
+    }
+    def unnest(e: AST.Expr, nested: Boolean): AST.Expr = e match {
+      case AST.Assignment(ls, rs) =>
+        if(nested) sys.error("Unexpected nested assignment without wilcard")
+        else AST.Assignment(unnest(ls, false), unnest(rs, false))
+      case AST.Tuple(es) => AST.Tuple(es.map(unnest(_, true)))
+      case AST.IdentOrAp(s, args) =>
+        val symO = globals.get(s)
+        if(symO.exists(_.isCons) || args.nonEmpty) {
+          val ap = AST.Ap(AST.Ident(s), args.map(unnest(_, true)))
+          if(nested) {
+            val v = mk()
+            reorder(AST.Assignment(v, ap))
+            v
+          } else ap
+        } else AST.Ident(s)
+    }
+    def reorder(e: AST.Expr): Unit = e match {
+      case AST.Assignment(ls: AST.Ap, rs: AST.Ap) =>
+        val sym1 = globals(ls.target.s)
+        val sym2 = globals(rs.target.s)
+        if(sym1.returnArity != sym2.returnArity) sys.error(s"Invalid assignments with different arities: $e")
+        if(sym1.returnArity == 1) {
+          val v = mk()
+          buf += AST.Assignment(v, ls)
+          buf += AST.Assignment(v, rs)
+        } else {
+          val vs = (0 until sym1.returnArity).map(_ => mk())
+          buf += AST.Assignment(AST.Tuple(vs), ls)
+          buf += AST.Assignment(AST.Tuple(vs), rs)
+        }
+      case AST.Assignment(ls: AST.Ap, rs) => reorder(AST.Assignment(rs, ls))
+      case AST.Assignment(AST.Tuple(ls), AST.Tuple(rs)) =>
+        ls.zip(rs).foreach { case (l, r) => reorder(AST.Assignment(l, r)) }
+      case e => buf += e
+    }
+    exprs.foreach { e =>
+      val wild = mk()
+      reorder(unnest(expandWildcards(e, wild), false))
+      if(assigned.contains(wild)) sys.error("Unexpected wildcard outside of assignment")
+    }
+    buf.toSeq
   }
 
-  private def applySimple(e: AST.Expr): (AST.Expr, Seq[AST.Assignment]) = {
-    val buf = mutable.ArrayBuffer.empty[AST.Assignment]
-    def assign(e: AST.Ap): AST.Expr = {
-      val ts = globals(e.target.s)
-      val v: AST.Expr = if(ts.returnArity == 1) mk() else AST.Tuple((1 to ts.returnArity).map(_ => mk()))
-      buf += AST.Assignment(v, f(AST.Ap(e.target, e.args)))
-      v
+  // reorder assignments as if every def was a cons
+  def toConsOrder(e: AST.Expr): AST.Expr = e match {
+    case AST.Assignment(id  @ AST.IdentOrTuple(es), AST.Ap(t, args)) =>
+      val s = globals(t.s)
+      if(!s.isDef) AST.Assignment(id, ConsAp(t, s, args)) else AST.Assignment(args.head, ConsAp(t, s, args.tail ++ es))
+    case AST.Ap(t, args) =>
+      val s = globals(t.s)
+      if(!s.isDef) ConsAp(t, s, args) else AST.Assignment(args.head, ConsAp(t, s, args.tail))
+    case e => e
+  }
+
+  // convert from cons-order ANF back to inlined expressions
+  def toInline(es: Seq[AST.Expr]): Seq[AST.Expr] = {
+    if(es.isEmpty) es
+    else {
+      val vars = mutable.HashMap.from(es.init.map { case AST.Assignment(l, r) => (l, r) })
+      def f(e: AST.Expr): AST.Expr = e match {
+        case e: AST.Ident => vars.remove(e).map(f).getOrElse(e)
+        case e: AST.Tuple => vars.remove(e).map(f).getOrElse(e)
+        case ConsAp(target, tsym, args) => ConsAp(target, tsym, args.map(f))
+        case AST.Assignment(l, r) => AST.Assignment(f(r), f(l))
+      }
+      val e2 = f(es.last)
+      (vars.iterator.map { case (l, r) => AST.Assignment(l, r) } ++ Iterator.single(e2)).toSeq
     }
-    def f(e: AST.Expr): AST.Expr = e match {
-      case AST.Tuple(Seq(e)) => f(e)
-      case AST.Tuple(es) => AST.Tuple(es.map(f))
-      case AST.Ap(t, args) =>
-        AST.Ap(t, args.map {
-          case e: AST.Ident =>
-            val s = globals.get(e.s)
-            if(s.exists(_.isCons)) assign(AST.Ap(e, Nil)) else e
-          case e: AST.Ap => assign(e)
-        })
-      case e: AST.Ident =>
-        val s = globals.get(e.s)
-        if(s.exists(_.isCons)) AST.Ap(e, Nil) else e
-    }
-    (f(e), buf.toSeq)
   }
 }

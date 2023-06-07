@@ -18,7 +18,7 @@ object AST {
   case class Deriving(constructors: Seq[String]) {
     def show = constructors.mkString(", ")
   }
-  sealed trait Expr {
+  trait Expr {
     def show: String
     def allIdents: Iterator[Ident]
   }
@@ -54,7 +54,9 @@ object AST {
     }
   }
   case class DefRule(on: Expr, reduced: Seq[Expr])
-  case class Match(on: Expr, reduced: Seq[Expr]) extends Statement
+  case class Match(on: Expr, reduced: Seq[Expr]) extends Statement {
+    def show = s"${on.show} => ${reduced.map(_.show).mkString(", ")}"
+  }
 
   object IdentOrAp {
     def unapply(e: Expr): Option[(String, Seq[Expr])] = e match {
