@@ -20,11 +20,22 @@ class Symbol(val id: String) {
   var isDef = false
   var returnArity = 1
   def callArity: Int = arity + 1 - returnArity
+  var matchContinuationPort: Int = -2
   override def toString: String = id
 }
 
 class Symbols(parent: Option[Symbols] = None) {
   private val syms = mutable.HashMap.empty[String, Symbol]
+  def newCons(id: String, isDef: Boolean = false, arity: Int = 0, returnArity: Int = 1): Symbol = {
+    assert(get(id).isEmpty)
+    val sym = new Symbol(id)
+    sym.isCons = true
+    sym.isDef = isDef
+    sym.arity = arity
+    sym.returnArity = returnArity
+    syms.put(id, sym)
+    sym
+  }
   def getOrAdd(id: String): Symbol = {
     val so = parent match {
       case Some(p) => p.syms.get(id)
@@ -66,13 +77,13 @@ class Model(val statements: Seq[AST.Statement],
 
   def rules: Iterable[AnyCheckedRule] = ruleCuts.values
 
-  def addDerivedRule(derivedName: String, otherName: String): Unit = {
+  private def addDerivedRule(derivedName: String, otherName: String): Unit = {
     val key = if(derivedName <= otherName) (derivedName, otherName) else (otherName, derivedName)
     if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${derivedName} . ${otherName}")
     ruleCuts.put(key, new DerivedRule(derivedName, otherName))
   }
 
-  def addDefRules(d: AST.Def): Unit = {
+  private def addDefRules(d: AST.Def): Unit = {
     val dret = AST.Tuple(d.ret.map(AST.Ident))
     val dargst = d.args.tail.map(AST.Ident)
     val di = AST.Ident(d.name)
@@ -82,12 +93,54 @@ class Model(val statements: Seq[AST.Statement],
     }
   }
 
-  def addMatchRule(m: AST.Match, creator: => String): Unit = {
+  private def singleNonIdentIdx(es: Seq[AST.Expr]): Int = {
+    val i1 = es.indexWhere(e => !e.isInstanceOf[AST.Ident])
+    if(i1 == -1) -1
+    else {
+      val i2 = es.lastIndexWhere(e => !e.isInstanceOf[AST.Ident])
+      if(i2 == i1) i1 else -2
+    }
+  }
+
+  private def createCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
+    val curryId = s"${ls.id}_curry_${rs.id}" //TODO use $ and encode names in bytecode
+    globals.get(curryId) match {
+      case Some(sym) =>
+        assert(sym.isCons)
+        if(sym.matchContinuationPort != idx) sys.error("Port mismatch in curried ${ls.id} -> ${rs.id} match in $creator")
+        sym
+      case None =>
+        val largs = (0 until ls.callArity).map(i => s"$$l$i")
+        val rargs = (0 until rs.callArity).map(i => s"$$r$i")
+        val rcurryArgs = rargs.zipWithIndex.filter(_._2 != idx).map(_._1)
+        val sym = globals.newCons(curryId, arity = ls.callArity + rs.callArity - 1, returnArity = ls.returnArity)
+        sym.matchContinuationPort = idx
+        //println(s"**** left: $ls, $largs")
+        //println(s"**** right: $rs, $rargs")
+        val curryArgs = largs ++ rcurryArgs
+        val curryCons = AST.Cons(curryId, curryArgs, None, None)
+        //println(s"**** curryCons: ${curryCons.show}")
+        constrs += curryCons
+        val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), curryArgs.map(AST.Ident)), AST.Ident(rargs(idx)))
+        //println(curryArgs)
+        //println(fwd.show)
+        addImpl(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
+        sym
+    }
+  }
+
+  private def addImpl(impl: CheckedMatchRule): Unit = {
+    val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
+    if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
+    ruleCuts.put(key, impl)
+  }
+
+  private def addMatchRule(m: AST.Match, creator: => String): Unit = {
     val on2 = m.on match {
       // complete lhs assignment for raw match rules (already completed for def rules):
       case e: AST.Ap =>
         val s = globals(e.target.s)
-        if(s.isDef){
+        if(s.isDef) {
           assert(e.args.length == s.callArity)
           AST.Assignment(e, AST.Tuple((1 to s.returnArity).map(i => AST.Ident(s"$$ret$i"))))
         } else e
@@ -95,15 +148,26 @@ class Model(val statements: Seq[AST.Statement],
     }
     val unnest = new Normalize(globals)
     val inlined = unnest.toInline(unnest(Seq(on2)).map(unnest.toConsOrder))
+    //inlined.foreach(e => println(e.show))
     inlined match {
-      case Seq(AST.Assignment(ConsAp(lt, ls, largs: Seq[AST.Ident]), ConsAp(rt, rs, rargs: Seq[AST.Ident]))) =>
+      case Seq(AST.Assignment(ConsAp(_, ls, largs: Seq[AST.Ident]), ConsAp(_, rs, rargs))) =>
         val compl = if(ls.isDef) largs.takeRight(ls.returnArity) else Nil
         val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, compl)
-        val impl = new CheckedMatchRule(creator, connected, ls.id, largs.map(_.s), rs.id, rargs.map(_.s))
-        val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
-        if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
-        ruleCuts.put(key, impl)
+        addMatchRule(ls, largs, rs, rargs, connected, creator)
       case _ => sys.error(s"Invalid rule: ${m.show}")
+    }
+  }
+
+  private def addMatchRule(ls: Symbol, largs: Seq[AST.Ident], rs: Symbol, rargs: Seq[AST.Expr], reduced: Seq[AST.Expr], creator: => String): Unit = {
+    singleNonIdentIdx(rargs) match {
+      case -2 => sys.error(s"Only one nested match allowed in $creator")
+      case -1 =>
+        addImpl(new CheckedMatchRule(creator, reduced, ls.id, largs.map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s)))
+      case idx =>
+        val currySym = createCurriedDef(ls, rs, idx, creator)
+        val ConsAp(_, crs, crargs) = rargs(idx)
+        val clargs = largs ++ rargs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
+        addMatchRule(currySym, clargs, crs, crargs, reduced, creator)
     }
   }
 
@@ -140,7 +204,7 @@ class Model(val statements: Seq[AST.Statement],
 //  }
 
   // Check Expr and return free identifiers
-  def checkDefs(defs: Seq[AST.Expr])(in: => String): Seq[String] = {
+  private def checkDefs(defs: Seq[AST.Expr])(in: => String): Seq[String] = {
     val locals = new Symbols(None)
     def f(e: AST.Expr): Unit = e match {
       case AST.Assignment(l, r) => f(l); f(r)
@@ -172,15 +236,8 @@ class Model(val statements: Seq[AST.Statement],
   val globals = new Symbols
 
   if(addEraseDup) {
-    val erase = globals.getOrAdd("erase")
-    erase.isCons = true
-    erase.isDef = true
-    erase.returnArity = 0
-    val dup = globals.getOrAdd("dup")
-    dup.isCons = true
-    dup.isDef = true
-    dup.arity = 2
-    dup.returnArity = 2
+    globals.newCons("erase", isDef = true, returnArity = 0)
+    globals.newCons("dup", isDef = true, arity = 2, returnArity = 2)
     addDerivedRule("erase", "erase")
     addDerivedRule("erase", "dup")
     addDerivedRule("dup", "dup")
@@ -190,19 +247,13 @@ class Model(val statements: Seq[AST.Statement],
     case c: AST.Cons =>
       if(globals.get(c.name).isDefined) sys.error(s"Duplicate cons/def: ${c.name}")
       c.args.foreach(a => assert(a != null, s"No wildcard parameters allowed in cons: ${c.name}"))
-      val s = globals.getOrAdd(c.name)
-      s.arity = c.args.length
-      s.isCons = true
+      globals.newCons(c.name, arity = c.args.length)
       constrs += c
     case d: AST.Data => data.addOne(d)
     case d: AST.Def =>
       if(globals.get(d.name).isDefined) sys.error(s"Duplicate cons/def: ${d.name}")
       d.args.tail.foreach(s => assert(s != null, s"In def ${d.name}: Only the principal argument can be a wildcard"))
-      val s = globals.getOrAdd(d.name)
-      s.arity = d.args.length + d.ret.length - 1
-      s.isCons = true
-      s.isDef = true
-      s.returnArity = d.ret.length
+      globals.newCons(d.name, isDef = true, arity = d.args.length + d.ret.length - 1, returnArity = d.ret.length)
       defs += d
       addDerivedRule("erase", d.name)
       if(d.name != "dup" && d.name != "erase")
@@ -211,7 +262,7 @@ class Model(val statements: Seq[AST.Statement],
       matchRules += m
   }
 
-  private def connectLastStatement(e: AST.Expr, extraRhs: Seq[AST.Ident]): AST.Assignment = e match {
+  private def connectLastStatement(e: AST.Expr, extraRhs: Seq[AST.Ident]): AST.Expr = e match {
     case e: AST.Assignment => e
     case e: AST.Tuple =>
       assert(e.exprs.length == extraRhs.length)
@@ -219,8 +270,11 @@ class Model(val statements: Seq[AST.Statement],
     case e: AST.Ap =>
       val sym = globals(e.target.s)
       assert(sym.isCons)
-      assert(sym.returnArity == extraRhs.length)
-      AST.Assignment(if(extraRhs.length == 1) extraRhs.head else AST.Tuple(extraRhs), e)
+      if(sym.returnArity == 0) e
+      else {
+        assert(sym.returnArity == extraRhs.length)
+        AST.Assignment(if(extraRhs.length == 1) extraRhs.head else AST.Tuple(extraRhs), e)
+      }
     case e: AST.Ident =>
       assert(extraRhs.length == 1)
       AST.Assignment(extraRhs.head, e)
