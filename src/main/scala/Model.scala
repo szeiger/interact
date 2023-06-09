@@ -2,15 +2,17 @@ package de.szeiger.interact
 
 import scala.collection.mutable
 
-sealed trait AnyCheckedRule {
+sealed trait CheckedRule {
   def show: String
+  def name1: String
+  def name2: String
 }
 
-class DerivedRule(val deriveName: String, val otherName: String) extends AnyCheckedRule {
-  def show = s"$deriveName . $otherName = <derived>"
+class DerivedRule(val name1: String, val name2: String) extends CheckedRule {
+  def show = s"$name1 . $name2 = <derived>"
 }
 
-class CheckedMatchRule(creator: => String, val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends AnyCheckedRule {
+class CheckedMatchRule(creator: => String, val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends CheckedRule {
   def show: String = creator
 }
 
@@ -69,18 +71,24 @@ class Model(val statements: Seq[AST.Statement],
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true) {
 
-  private[this] val ruleCuts = mutable.Map.empty[(String, String), AnyCheckedRule]
-  val constrs = mutable.ArrayBuffer.empty[AST.Cons]
-  val defs = mutable.ArrayBuffer.empty[AST.Def]
-  val data = mutable.ArrayBuffer.empty[AST.Data]
-  private[this] val matchRules = mutable.ArrayBuffer.empty[AST.Match]
+  private[this] val checkedRules = mutable.Map.empty[(String, String), CheckedRule]
 
-  def rules: Iterable[AnyCheckedRule] = ruleCuts.values
+  def rules: Iterable[CheckedRule] = checkedRules.values
+  def constrs: Iterable[AST.Cons] = prepare.constrs
+  def defs: Iterable[AST.Def] = prepare.defs
 
-  private def addDerivedRule(derivedName: String, otherName: String): Unit = {
-    val key = if(derivedName <= otherName) (derivedName, otherName) else (otherName, derivedName)
-    if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${derivedName} . ${otherName}")
-    ruleCuts.put(key, new DerivedRule(derivedName, otherName))
+  private def addDerivedRules(c: AST.Cons): Unit = {
+    val der = c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons))
+    der.foreach { i =>
+      if(i == "erase" || i == "dup") addChecked(new DerivedRule(i, c.name))
+      else sys.error(s"Don't know how to derive rule for $i")
+    }
+  }
+
+  private def addDerivedRules(d: AST.Def): Unit = {
+    addChecked(new DerivedRule("erase", d.name))
+    if(d.name != "dup" && d.name != "erase")
+      addChecked(new DerivedRule("dup", d.name))
   }
 
   private def addDefRules(d: AST.Def): Unit = {
@@ -93,6 +101,24 @@ class Model(val statements: Seq[AST.Statement],
     }
   }
 
+  private def connectLastStatement(e: AST.Expr, extraRhs: Seq[AST.Ident]): AST.Expr = e match {
+    case e: AST.Assignment => e
+    case e: AST.Tuple =>
+      assert(e.exprs.length == extraRhs.length)
+      AST.Assignment(AST.Tuple(extraRhs), e)
+    case e: AST.Ap =>
+      val sym = globals(e.target.s)
+      assert(sym.isCons)
+      if(sym.returnArity == 0) e
+      else {
+        assert(sym.returnArity == extraRhs.length)
+        AST.Assignment(if(extraRhs.length == 1) extraRhs.head else AST.Tuple(extraRhs), e)
+      }
+    case e: AST.Ident =>
+      assert(extraRhs.length == 1)
+      AST.Assignment(extraRhs.head, e)
+  }
+
   private def singleNonIdentIdx(es: Seq[AST.Expr]): Int = {
     val i1 = es.indexWhere(e => !e.isInstanceOf[AST.Ident])
     if(i1 == -1) -1
@@ -103,7 +129,7 @@ class Model(val statements: Seq[AST.Statement],
   }
 
   private def createCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
-    val curryId = s"${ls.id}_curry_${rs.id}" //TODO use $ and encode names in bytecode
+    val curryId = s"${ls.id}$$c$$${rs.id}"
     globals.get(curryId) match {
       case Some(sym) =>
         assert(sym.isCons)
@@ -118,21 +144,21 @@ class Model(val statements: Seq[AST.Statement],
         //println(s"**** left: $ls, $largs")
         //println(s"**** right: $rs, $rargs")
         val curryArgs = largs ++ rcurryArgs
-        val curryCons = AST.Cons(curryId, curryArgs, None, None)
+        val curryCons = AST.Cons(curryId, curryArgs, false, None, None)
         //println(s"**** curryCons: ${curryCons.show}")
-        constrs += curryCons
+        addDerivedRules(curryCons)
         val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), curryArgs.map(AST.Ident)), AST.Ident(rargs(idx)))
         //println(curryArgs)
         //println(fwd.show)
-        addImpl(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
+        addChecked(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
         sym
     }
   }
 
-  private def addImpl(impl: CheckedMatchRule): Unit = {
+  private def addChecked(impl: CheckedRule): Unit = {
     val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
-    if(ruleCuts.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
-    ruleCuts.put(key, impl)
+    if(checkedRules.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
+    checkedRules.put(key, impl)
   }
 
   private def addMatchRule(m: AST.Match, creator: => String): Unit = {
@@ -162,7 +188,7 @@ class Model(val statements: Seq[AST.Statement],
     singleNonIdentIdx(rargs) match {
       case -2 => sys.error(s"Only one nested match allowed in $creator")
       case -1 =>
-        addImpl(new CheckedMatchRule(creator, reduced, ls.id, largs.map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s)))
+        addChecked(new CheckedMatchRule(creator, reduced, ls.id, largs.map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s)))
       case idx =>
         val currySym = createCurriedDef(ls, rs, idx, creator)
         val ConsAp(_, crs, crargs) = rargs(idx)
@@ -203,95 +229,26 @@ class Model(val statements: Seq[AST.Statement],
 //    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1).mkString(", ")} in $in")
 //  }
 
-  // Check Expr and return free identifiers
-  private def checkDefs(defs: Seq[AST.Expr])(in: => String): Seq[String] = {
-    val locals = new Symbols(None)
-    def f(e: AST.Expr): Unit = e match {
-      case AST.Assignment(l, r) => f(l); f(r)
-      case AST.Tuple(es) => es.foreach(f)
-      case AST.Wildcard => ()
-      case e @ AST.Ident(s) =>
-        val symO = globals.get(s)
-        if(symO.exists(_.isCons)) f(AST.Ap(e, Nil))
-        else if(symO.isDefined) sys.error(s"Unexpected global non-constructor symbol $s in $in")
-        else {
-          val sym = locals.getOrAdd(s)
-          sym.refs += 1
-        }
-      case AST.Ap(AST.Ident(s), args) =>
-        val symO = globals.get(s)
-        if(!symO.exists(_.isCons))
-          sys.error(s"Illegal use of non-constructor symbol $s as constructor in $in")
-        val a = symO.get.callArity
-        if(a != args.length)
-          sys.error(s"Wrong number of arguments for $s in $in: got ${args.length}, expected $a")
-        args.foreach(f)
-    }
-    defs.foreach(f)
-    val badLocal = locals.symbols.filter(_.refs > 2).toSeq
-    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_.id).mkString(", ")} in $in")
-    locals.symbols.filter(_.refs == 1).map(_.id).toSeq
-  }
-
   val globals = new Symbols
+  val prepare = new Prepare(globals)
 
   if(addEraseDup) {
     globals.newCons("erase", isDef = true, returnArity = 0)
     globals.newCons("dup", isDef = true, arity = 2, returnArity = 2)
-    addDerivedRule("erase", "erase")
-    addDerivedRule("erase", "dup")
-    addDerivedRule("dup", "dup")
+    addChecked(new DerivedRule("erase", "erase"))
+    addChecked(new DerivedRule("erase", "dup"))
+    addChecked(new DerivedRule("dup", "dup"))
   }
+  prepare.add(statements)
 
-  statements.foreach {
-    case c: AST.Cons =>
-      if(globals.get(c.name).isDefined) sys.error(s"Duplicate cons/def: ${c.name}")
-      c.args.foreach(a => assert(a != null, s"No wildcard parameters allowed in cons: ${c.name}"))
-      globals.newCons(c.name, arity = c.args.length)
-      constrs += c
-    case d: AST.Data => data.addOne(d)
-    case d: AST.Def =>
-      if(globals.get(d.name).isDefined) sys.error(s"Duplicate cons/def: ${d.name}")
-      d.args.tail.foreach(s => assert(s != null, s"In def ${d.name}: Only the principal argument can be a wildcard"))
-      globals.newCons(d.name, isDef = true, arity = d.args.length + d.ret.length - 1, returnArity = d.ret.length)
-      defs += d
-      addDerivedRule("erase", d.name)
-      if(d.name != "dup" && d.name != "erase")
-        addDerivedRule("dup", d.name)
-    case m: AST.Match =>
-      matchRules += m
+  // Create rules
+  prepare.defs.foreach { d =>
+    addDefRules(d)
+    addDerivedRules(d)
   }
+  prepare.constrs.foreach(addDerivedRules)
+  prepare.matchRules.foreach(m => addMatchRule(m, s"${m.on.show} = ${m.reduced.map(_.show).mkString(", ")}"))
 
-  private def connectLastStatement(e: AST.Expr, extraRhs: Seq[AST.Ident]): AST.Expr = e match {
-    case e: AST.Assignment => e
-    case e: AST.Tuple =>
-      assert(e.exprs.length == extraRhs.length)
-      AST.Assignment(AST.Tuple(extraRhs), e)
-    case e: AST.Ap =>
-      val sym = globals(e.target.s)
-      assert(sym.isCons)
-      if(sym.returnArity == 0) e
-      else {
-        assert(sym.returnArity == extraRhs.length)
-        AST.Assignment(if(extraRhs.length == 1) extraRhs.head else AST.Tuple(extraRhs), e)
-      }
-    case e: AST.Ident =>
-      assert(extraRhs.length == 1)
-      AST.Assignment(extraRhs.head, e)
-  }
-
-  defs.foreach(addDefRules)
-  constrs.foreach { c =>
-    val der = c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons))
-    der.foreach { i =>
-      if(i == "erase" || i == "dup") addDerivedRule(i, c.name)
-      else sys.error(s"Don't know how to derive rule for $i")
-    }
-  }
-  matchRules.foreach(m => addMatchRule(m, s"${m.on.show} = ${m.reduced.map(_.show).mkString(", ")}"))
-  data.foreach { d =>
-    d.free = checkDefs(d.defs)(d.show)
-  }
   rules.foreach {
     case cr: CheckedMatchRule =>
       val free = cr.args1 ++ cr.args2
@@ -327,7 +284,64 @@ class Model(val statements: Seq[AST.Statement],
 
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
-    data.foreach { d => inter.scope.addExprs(d.defs, new Symbols(Some(globals))) }
+    prepare.data.foreach { d => inter.scope.addExprs(d.defs, new Symbols(Some(globals))) }
+  }
+}
+
+class Prepare(globals: Symbols) {
+  val constrs = mutable.ArrayBuffer.empty[AST.Cons]
+  val defs = mutable.ArrayBuffer.empty[AST.Def]
+  val data = mutable.ArrayBuffer.empty[AST.Data]
+  val matchRules = mutable.ArrayBuffer.empty[AST.Match]
+
+  def add(statements: Seq[AST.Statement]): Unit = {
+    // Enter constructor symbols and collect different statement types
+    statements.foreach {
+      case c: AST.Cons =>
+        if(globals.get(c.name).isDefined) sys.error(s"Duplicate cons/def: ${c.name}")
+        c.args.foreach(a => assert(a != null, s"No wildcard parameters allowed in cons: ${c.name}"))
+        globals.newCons(c.name, arity = c.args.length)
+        constrs += c
+      case d: AST.Def =>
+        if(globals.get(d.name).isDefined) sys.error(s"Duplicate cons/def: ${d.name}")
+        d.args.tail.foreach(s => assert(s != null, s"In def ${d.name}: Only the principal argument can be a wildcard"))
+        globals.newCons(d.name, isDef = true, arity = d.args.length + d.ret.length - 1, returnArity = d.ret.length)
+        defs += d
+      case d: AST.Data => data.addOne(d)
+      case m: AST.Match => matchRules += m
+    }
+    // Find free wires
+    data.foreach { d => d.free = checkDefs(d.defs)(d.show) }
+  }
+
+  // Check Expr and return free identifiers
+  private def checkDefs(defs: Seq[AST.Expr])(in: => String): Seq[String] = {
+    val locals = new Symbols(None)
+    def f(e: AST.Expr): Unit = e match {
+      case AST.Assignment(l, r) => f(l); f(r)
+      case AST.Tuple(es) => es.foreach(f)
+      case AST.Wildcard => ()
+      case e @ AST.Ident(s) =>
+        val symO = globals.get(s)
+        if(symO.exists(_.isCons)) f(AST.Ap(e, Nil))
+        else if(symO.isDefined) sys.error(s"Unexpected global non-constructor symbol $s in $in")
+        else {
+          val sym = locals.getOrAdd(s)
+          sym.refs += 1
+        }
+      case AST.Ap(AST.Ident(s), args) =>
+        val symO = globals.get(s)
+        if(!symO.exists(_.isCons))
+          sys.error(s"Illegal use of non-constructor symbol $s as constructor in $in")
+        val a = symO.get.callArity
+        if(a != args.length)
+          sys.error(s"Wrong number of arguments for $s in $in: got ${args.length}, expected $a")
+        args.foreach(f)
+    }
+    defs.foreach(f)
+    val badLocal = locals.symbols.filter(_.refs > 2).toSeq
+    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_.id).mkString(", ")} in $in")
+    locals.symbols.filter(_.refs == 1).map(_.id).toSeq
   }
 }
 

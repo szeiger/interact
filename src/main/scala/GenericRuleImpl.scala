@@ -69,9 +69,9 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
 }
 
 object GenericRuleImpl {
-  def apply[C](cr: AnyCheckedRule, globals: Symbols): GenericRuleImpl = cr match {
-    case dr: DerivedRule if dr.deriveName == "erase" => deriveErase(dr.otherName, globals)
-    case dr: DerivedRule if dr.deriveName == "dup" => deriveDup(dr.otherName, globals)
+  def apply[C](cr: CheckedRule, globals: Symbols): GenericRuleImpl = cr match {
+    case dr: DerivedRule if dr.name1 == "erase" => deriveErase(dr.name2, globals)
+    case dr: DerivedRule if dr.name1 == "dup" => deriveDup(dr.name2, globals)
     case cr: CheckedMatchRule => apply(cr, globals)
   }
 

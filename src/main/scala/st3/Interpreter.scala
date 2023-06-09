@@ -1,7 +1,7 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, AnyCheckedRule, BaseInterpreter, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{Analyzer, CheckedRule, BaseInterpreter, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays
@@ -189,7 +189,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def cellAllocationCount: Int = protoCells.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[AnyCheckedRule], compile: Boolean,
+final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
   debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
   final val scope: Analyzer[Cell] = new Analyzer[Cell] {
     def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0)

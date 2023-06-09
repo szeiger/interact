@@ -10,11 +10,30 @@ import java.io.{OutputStreamWriter, PrintWriter}
 abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, genPackage: String, logGenerated: Boolean) {
   protected val riT = tp.c(s"$interpreterPackage/RuleImpl")
 
+  private def encodeName(s: String): String = {
+    val b = new StringBuilder()
+    s.foreach {
+      case '|' => b.append("$bar")
+      case '^' => b.append("$up")
+      case '&' => b.append("$amp")
+      case '<' => b.append("$less")
+      case '>' => b.append("$greater")
+      case ':' => b.append("$colon")
+      case '+' => b.append("$plus")
+      case '-' => b.append("$minus")
+      case '*' => b.append("$times")
+      case '/' => b.append("$div")
+      case '%' => b.append("$percent")
+      case c => b.append(c)
+    }
+    b.result()
+  }
+
   def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
-    val name1 = g.sym1.id
-    val name2 = g.sym2.id
-    val implClassName = s"$genPackage/Rule$$$name1$$$name2"
-    val factClassName = s"$genPackage/RuleFactory$$$name1$$$name2"
+    val name1 = encodeName(g.sym1.id)
+    val name2 = encodeName(g.sym2.id)
+    val implClassName = s"$genPackage/Rule_$name1$$_$name2"
+    val factClassName = s"$genPackage/RuleFactory_$name1$$_$name2"
     val syms = (Iterator.single(g.sym1) ++ g.cells.iterator).distinct.toArray
     val sids = syms.iterator.zipWithIndex.toMap
     val (ric, sidFields) = createRuleClassBase(implClassName, riT, sids)

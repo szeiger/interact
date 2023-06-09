@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 
 object AST {
   sealed trait Statement
-  case class Cons(name: String, args: Seq[String], ret: Option[String], der: Option[Deriving]) extends Statement {
+  case class Cons(name: String, args: Seq[String], operator: Boolean, ret: Option[String], der: Option[Deriving]) extends Statement {
     def show: String = {
       val a = if(args.isEmpty) "" else args.mkString("(", ", ", ")")
       val r = if(ret.isEmpty) "" else s" . ${ret.get}"
@@ -46,7 +46,7 @@ object AST {
     def show = defs.map(_.show).mkString(", ")
     var free: Seq[String] = _
   }
-  case class Def(name: String, args: Seq[String], ret: Seq[String], rules: Seq[DefRule]) extends Statement {
+  case class Def(name: String, args: Seq[String], operator: Boolean, ret: Seq[String], rules: Seq[DefRule]) extends Statement {
     def show: String = {
       val a = if(args.isEmpty) "" else args.map(s => if(s == null) "_" else s).mkString("(", ", ", ")")
       val r = if(ret.isEmpty) "" else if(ret.length == 1) ret.head else ret.mkString("(", ", ", ")")
@@ -86,6 +86,15 @@ object Lexical {
   import NoWhitespace._
 
   val keywords = Set("cons", "let", "deriving", "def", "match", "_")
+  private val operatorStart = IndexedSeq(Set('*', '/', '%'), Set('+', '-'), Set(':'), Set('<', '>'), Set('&'), Set('^'), Set('|'))
+  private val operatorCont = operatorStart.iterator.flatten.toSet
+  private val notAnOperator = Set(":", "=", "=>", "|")
+  val MaxPrecedence = operatorStart.length-1
+
+  def precedenceOf(s: String): Int =
+    if(notAnOperator.contains(s) || !s.forall(operatorCont.contains)) -1
+    else { val c = s.charAt(0); operatorStart.indexWhere(_.contains(c)) }
+  def isRightAssoc(s: String): Boolean = s.endsWith(":")
 
   def ident[_: P]: P[String] =
      P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!keywords.contains(_))
@@ -93,6 +102,12 @@ object Lexical {
   def letter[_: P] = P( CharIn("a-z") | CharIn("A-Z") )
   def digit[_: P] = P( CharIn("0-9") )
   def churchLit[_: P] = P(  digit.rep(1).! ~ "'c"  ).map(_.toInt)
+
+  def operator[_: P](precedence: Int): P[String] =
+    P(  CharPred(operatorStart(precedence).contains) ~ CharPred(operatorCont.contains).rep  ).!.filter(s => !notAnOperator.contains(s))
+
+  def anyOperator[_: P]: P[String] =
+    P(  CharPred(operatorCont.contains).rep(1)  ).!.filter(s => !notAnOperator.contains(s))
 }
 
 object Parser {
@@ -116,26 +131,33 @@ object Parser {
   def simpleExpr[_: P]: P[AST.Expr] =
     P(  (app | identExpr | wildcard | church | tuple)  )
 
-  def consExpr[_: P]: P[AST.Expr] =
-    P(  simpleExpr.rep(1, "::")  ).map {
-      case Seq(e) => e
-      case es => es.foldRight(null: AST.Expr) {
-        case (e, null) => e
-        case (e, z) => AST.Ap(AST.Ident("Cons"), Seq(e, z))
-      }
+  def operatorEx[_: P](precedence: Int): P[AST.Expr] = {
+    def next = if(precedence == 0) simpleExpr else operatorEx(precedence - 1)
+    P(  next ~ (operator(precedence) ~ next).rep  ).map {
+      case (e, Seq()) => e
+      case (e, ts) =>
+        val right = ts.count(_._1.endsWith(":"))
+        if(right == 0)
+          ts.foldLeft(e) { case (z, (o, a)) => AST.Ap(AST.Ident(o), Seq(z, a)) }
+        else if(right == ts.length) {
+          val e2 = ts.last._2
+          val ts2 = ts.map(_._1).zip(e +: ts.map(_._2).init)
+          ts2.foldRight(e2) { case ((o, a), z) => AST.Ap(AST.Ident(o), Seq(a, z)) }
+        } else sys.error("Chained binary operators must have the same associativity")
     }
+  }
 
   def expr[_: P]: P[AST.Expr] =
-    P(  consExpr ~ ("=" ~ consExpr).?  ).map {
+    P(  operatorEx(MaxPrecedence) ~ ("=" ~ operatorEx(MaxPrecedence)).?  ).map {
       case (e1, None) => e1
       case (e1, Some(e2)) => AST.Assignment(e1, e2)
     }
 
   def params[_: P](min: Int): P[Seq[String]] =
-    P(  ("(" ~ (ident | wildcard.map(_ => null) ).rep(min = min, sep = ",") ~ ")")  )
+    P(  ("(" ~ param.rep(min = min, sep = ",") ~ ")")  )
 
-  def consParamsOpt[_: P]: P[Seq[String]] =
-    P(  params(0).?  ).map(_.getOrElse(Nil))
+  def param[_: P]: P[String] =
+    P(  (ident | wildcard.map(_ => null) )  )
 
   def defReturn[_: P]: P[Seq[String]] =
     P(  params(1) | ident.map(Seq(_))  )
@@ -144,10 +166,19 @@ object Parser {
     P(  kw("deriving") ~/ "(" ~ ident.rep(0, sep=",") ~ ")" ).map(AST.Deriving)
 
   def cons[_: P]: P[AST.Cons] =
-    P(  kw("cons") ~/ ident ~ consParamsOpt ~ (":" ~ ident).? ~ deriving.?  ).map(AST.Cons.tupled)
+    P(  kw("cons") ~/ (operatorDef | namedCons) ~ (":" ~ ident).? ~ deriving.?  ).map(AST.Cons.tupled)
+
+  def namedCons[_: P]: P[(String, Seq[String], Boolean)] =
+    P(  ident ~ params(0).?.map(_.getOrElse(Nil))  ).map { case (n, as) => (n, as, false) }
+
+  def operatorDef[_: P]: P[(String, Seq[String], Boolean)] =
+    P(  param ~ anyOperator ~ param  ).map { case (a1, o, a2) => (o, Seq(a1, a2), true) }
 
   def definition[_: P]: P[AST.Def] =
-    P(  kw("def") ~/ ident ~ params(1) ~ (":" ~ defReturn).?.map(_.getOrElse(Nil)) ~ defRule.rep  ).map(AST.Def.tupled)
+    P(  kw("def") ~/ (operatorDef | namedDefinition) ~ (":" ~ defReturn).?.map(_.getOrElse(Nil)) ~ defRule.rep  ).map(AST.Def.tupled)
+
+  def namedDefinition[_: P]: P[(String, Seq[String], Boolean)] =
+    P(  ident ~ params(1)  ).map { case (n, as) => (n, as, false) }
 
   def defRule[_: P]: P[AST.DefRule] =
     P(  "|" ~ expr ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.DefRule.tupled)

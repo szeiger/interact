@@ -1,13 +1,13 @@
 cons Z
 cons S(n)
 
-def add(_, y): r
-  | Z => y
-  | S(x) => add(x, S(y))
+def _ + y : r
+  | Z    => y
+  | S(x) => x + S(y)
 
-def mult(_, y): r
-  | Z => erase(y), Z
+def _ * y : r
+  | Z    => erase(y), Z
   | S(x) => (a, b) = dup(y),
-            r = add(b, mult(x, a))
+            r = b + x * a
 
-let res = mult(1000'c, 1000'c)
+let res = 1000'c * 1000'c

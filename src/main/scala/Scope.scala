@@ -129,21 +129,28 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     def show(c1: Cell, withRet: Boolean): String = {
       shown += c1
       val sym = getSymbol(c1)
-      def list(poss: IndexedSeq[Int]) = poss.map { p1 => val (c2, p2) = getConnected(c1, p1); nameOrSubst(c1, p1, c2, p2) }
+      def list(poss: IndexedSeq[Int]) = poss.map { p1 => val (c2, p2) = getConnected(c1, p1); (getSymbol(c2), nameOrSubst(c1, p1, c2, p2)) }
+      def needsParens(thisSym: Symbol, thisPre: Int, nestedSym: Symbol): Boolean = {
+        val nestedPre = Lexical.precedenceOf(nestedSym.id)
+        nestedPre > thisPre || (nestedPre >= 0 && (Lexical.isRightAssoc(thisSym.id) != Lexical.isRightAssoc(nestedSym.id)))
+      }
       val call = c1 match {
         case Church(v) => s"$v'c"
         case _ =>
           val aposs = if(sym.isDef) -1 +: (0 until sym.callArity-1) else 0 until sym.arity
           val as0 = list(aposs)
-          if(sym.id == "Cons" && sym.arity == 2 && !sym.isDef) s"${as0(0)} :: ${as0(1)}"
-          else {
-            val as = if(as0.isEmpty) "" else as0.mkString("(", ", ", ")")
+          val pr1 = Lexical.precedenceOf(sym.id)
+          if(pr1 >= 0 && sym.arity == 2) {
+            val as1 = as0.map { case (asym, s) => if(needsParens(sym, pr1, asym)) s"($s)" else s }
+            s"${as1(0)} ${sym.id} ${as1(1)}"
+          } else {
+            val as = if(as0.isEmpty) "" else as0.iterator.map(_._2).mkString("(", ", ", ")")
             s"${sym.id}$as"
           }
       }
       if(withRet) {
         val rposs = if(sym.isDef) sym.callArity-1 until sym.callArity+sym.returnArity-1 else IndexedSeq(-1)
-        val rs0 = list(rposs)
+        val rs0 = list(rposs).map(_._1)
         rs0.size match {
           case 0 => call
           case 1 => s"${rs0.head} = $call"

@@ -60,32 +60,49 @@ let two = S(S(Z)),
 
 The body of a `let` statement contains assignments and nested function / constructor applications separated by commas. Tuples can be used to group individual values, but they cannot be nested. Variables that are used exactly once are defined as free wires. Additional temporary variables can be introduced, but they must be used exactly twice. The order of statements and the direction of assignments is irrelevant.
 
+### Operators
+
+Both, constructors and functions, can be written as symbolic binary operators. An operator consists of an arbitrary combination of the symbols `*/%+-:<>&^|`. Precedence is based on the first character (the same as in Scala), oeprators ending with `:` are right-associative, all others left-associative (again, like in Scala). All operators in a chain of same-precedence operations must have the same associativity. Operator definitions are written in infix syntax:
+
+```
+cons Nil
+cons head :: tail
+
+def _ + y : r
+```
+
+Their usage in data uses the same infix notation:
+
+```
+let example_3_plus_2 = S(S(S(Z))) + S(S(Z))
+```
+
 ### Rules
 
 Reduction rules for functions can be specified together with the definition using a pattern matching syntax which always matches exclusively on the first argument:
 
 ```
-def add(_, y): r
+def _ + y : r
   | Z    => y
-  | S(x) => r = add(x, S(y))
+  | S(x) => r = x + S(y)
 ```
 
 The right-hand side is similar to a `let` body. All function/constructor arguments and return values (except the princpipal port on each side of the match) must be used exactly once in the reduction.
 
 ```
-def mult(_, y): r
+def _ * y : r
   | Z    => erase(y),
             Z
   | S(x) => (y1, y2) = dup(y),
-            add(mult(x, y1), y2) = r
+            x * y1 + y2 = r
 ```
 
 If the last expression is missing an assignment, it is implicitly assigned to the return value of the function:
 
 ```
-def add(_, y): r
+def _ + y : r
   | Z    => y
-  | S(x) => add(x, S(y))
+  | S(x) => x + S(y)
 ```
 
 The standard `dup` and `erase` functions are pre-defined, and combinators with all user-defined constructors and functions are derived automatically. The pre-defined functions are equivalent to this syntax:
@@ -95,7 +112,7 @@ def erase(_): ()
 def dup(_): (a, b)
 ```
 
-When matching on another function instead of a constructor, a `_` wildcard must be used to mark the first argument (i.e. the principal port) as the designated return value of an assignment expression. For example: 
+When matching on another function instead of a constructor, a `_` wildcard must be used to mark the first argument (i.e. the principal port) as the designated return value of an assignment expression. The wildcard always expands to the return value of the nearest enclosing assignment. For example: 
 
 ```
 def dup(_): (a, b)
@@ -104,7 +121,7 @@ def dup(_): (a, b)
 
 ### Detached Rules
 
-A rule can be defined independently of a function definition using a `match` statement. The expression on the left-hand side is interpreted as a pattern which must correspond to two cells connected via their principal ports. For example:
+A rule can be defined independently of a function definition using a `match` statement. These rules can also defined for `cons`-style constructors (which do not have a special rule syntax like `def`). The expression on the left-hand side is interpreted as a pattern which must correspond to two cells connected via their principal ports. For example:
 
 ```
 match add(Z, y) => y
@@ -115,9 +132,38 @@ A combination of two constructors can be matched with an assignment, e.g.:
 
 ```
 match S(x) = S(y) => x = y
+
+match dup(dup(_) = (c, d)) = (a, b) => (c, d)
 ```
 
-It is currently not possible to use nested assignments with wildcards (which are required to match a combination of two functions).
+Currying works the same as in rules attached to a `def` statement.
+
+### Currying
+
+It is possible to use nested patterns to define curried functions. For example:
+
+```
+def fib(_): r
+  | Z       => 1'c
+  | S(Z)    => 1'c
+  | S(S(n)) => (n1, n2) = dup(n),
+               fib(S(n1)) + fib(n2)
+```
+
+This expands to a definition similar to this one (modulo the generated name of the curried function):
+
+```
+def fib(_): r
+  | Z    => 1'c
+  | S(n) => fib2(n)
+
+def fib2(_): r
+  | Z    => 1'c
+  | S(n) => (n1, n2) = dup(n),
+            fib(S(n1)) + fib(n2)
+```
+
+Note that it is not necessary to define all rules together with the function to make use of currying. It also works with `match` statements. The only restrictions are that all nested matches must be done on the same port of the enclosing match and the nested matches must not conflict with another match at the outer layer (e.g. you cannot match on both `f(S(x))` and `f(S(S(x)))`). 
 
 ### Church numerals
 
@@ -138,25 +184,4 @@ This assumes that you have suitable definitions of `Z` and `S` like:
 ```
 cons Z
 cons S(n)
-```
-
-### Lists
-
-There is syntactic support for parsing and printing lists, e.g.:
-
-```
-let list_1_2_3 = 1'c :: 2'c :: 3'c :: Nil
-```
-
-The snippet expands to:
-
-```
-let list_1_2_3 = Cons(1'c, Cons(2'c, Cons(3'c, Nil)))
-```
-
-This assumes that you have a suitable definitions of `Cons` and `Nil` like:
-
-```
-cons Nil
-cons Cons(head, tail) . l
 ```

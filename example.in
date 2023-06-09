@@ -8,41 +8,41 @@ cons S(n)
 #   | dup(_) = (c, d) => (c, d)
 
 # Addition
-def add(_, y): r
-  | Z => y
-  | S(x) => add(x, S(y))
+def _ + y : r
+  | Z    => y
+  | S(x) => x + S(y)
 
 # Multiplication
-def mult(_, y): r
-  | Z => erase(y), Z
-  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
+def _ * y : r
+  | Z    => erase(y), Z
+  | S(x) => (y1, y2) = dup(y), x * y1 + y2
 
 # Example: Computations on church numerals
 let y = 5'c,
     x = 3'c,
-    example_3_plus_5 = add(x, y)
+    example_3_plus_5 = x + y
 
-let example_3_times_2 = mult(3'c, 2'c)
+let example_3_times_2 = 3'c * 2'c
 
 # Lists
 cons Nil
-cons Cons(head, tail): l
+cons head :: tail : l
 
 def length(list): r
   | Nil => Z
-  | Cons(x, xs) => erase(x) , S(length(xs))
+  | x :: xs => erase(x) , S(length(xs))
 
 def map(list, fi, fo): r
   | Nil => erase(fi), erase(fo), Nil
-  | Cons(x, xs) => (x, fi2) = dup(fi),
-                   (fo1, fo2) = dup(fo),
-                   Cons(fo1, map(xs, fi2, fo2))
+  | x :: xs => (x, fi2) = dup(fi),
+               (fo1, fo2) = dup(fo),
+               fo1 :: map(xs, fi2, fo2)
 
 # Example: List operations
-let l0 = Cons(1'c, Cons(2'c, Cons(3'c, Nil))),
+let l0 = 1'c :: 2'c :: 3'c :: Nil,
     (l0a, l0b) = dup(l0),
     l0_length = length(l0a),
-    fout = add(fin, 2'c),
+    fout = fin + 2'c,
     l0_mapped = map(l0b, fin, fout)
 
 # Explicit lambdas
@@ -52,11 +52,11 @@ def apply(l, in): out
 
 # Example: List mapping with lambdas
 def map2(l, f): r
-  | Nil => erase(f), Nil
-  | Cons(x, xs) => (f1, f2) = dup(f),
-                   Cons(apply(f1, x), map2(xs, f2))
+  | Nil     => erase(f), Nil
+  | x :: xs => (f1, f2) = dup(f),
+               apply(f1, x) :: map2(xs, f2)
 
 let l0 = 1'c :: 2'c :: 3'c :: Nil,
-    fout = add(fin, 2'c),
+    fout = fin + 2'c,
     f = Lambda(fin, fout),
     l0_mapped_lambda = map2(l0, f)

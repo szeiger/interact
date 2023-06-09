@@ -1,27 +1,14 @@
 cons Z
 cons S(n)
 
-def add(_, y): r
+def _ + y : r
   | Z    => y
-  | S(x) => add(x, S(y))
-
-def add2(_, y): r
-  | Z    => y
-  | S(x) => S(add2(x, y))
-
-#def fib(_): r
-#  | Z    => 1'c
-#  | S(n) => fib2(n)
-#
-#def fib2(_): r
-#  | Z    => 1'c
-#  | S(n) => (n1, n2) = dup(n),
-#            add2(fib(S(n1)), fib(n2))
+  | S(x) => S(x + y)
 
 def fib(_): r
   | Z       => 1'c
   | S(Z)    => 1'c
   | S(S(n)) => (n1, n2) = dup(n),
-               add2(fib(S(n1)), fib(n2))
+               fib(S(n1)) + fib(n2)
 
 let res = fib(10'c)
