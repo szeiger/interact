@@ -53,7 +53,7 @@ object AST {
       s"$name$a: $r"
     }
   }
-  case class DefRule(on: Expr, reduced: Seq[Expr])
+  case class DefRule(on: Seq[Expr], reduced: Seq[Expr])
   case class Match(on: Expr, reduced: Seq[Expr]) extends Statement {
     def show = s"${on.show} => ${reduced.map(_.show).mkString(", ")}"
   }
@@ -181,7 +181,7 @@ object Parser {
     P(  ident ~ params(1)  ).map { case (n, as) => (n, as, false) }
 
   def defRule[_: P]: P[AST.DefRule] =
-    P(  "|" ~ expr ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.DefRule.tupled)
+    P(  "|" ~ expr.rep(1, ",") ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.DefRule.tupled)
 
   def matchStatement[_: P]: P[AST.Match] =
     P(  "match" ~ expr ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.Match.tupled)

@@ -150,7 +150,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
       }
       if(withRet) {
         val rposs = if(sym.isDef) sym.callArity-1 until sym.callArity+sym.returnArity-1 else IndexedSeq(-1)
-        val rs0 = list(rposs).map(_._1)
+        val rs0 = list(rposs).map(_._2)
         rs0.size match {
           case 0 => call
           case 1 => s"${rs0.head} = $call"

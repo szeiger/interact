@@ -119,6 +119,13 @@ def dup(_): (a, b)
   | dup(_) = (c, d) => (c, d)
 ```
 
+When matching on a function with no return value (i.e. similar to `erase`), an assignment to an empty tuple can be used to correctly expand the wildcard:
+
+```
+def erase2(_)
+  | erase2(_) = () => ()
+```
+
 ### Detached Rules
 
 A rule can be defined independently of a function definition using a `match` statement. These rules can also defined for `cons`-style constructors (which do not have a special rule syntax like `def`). The expression on the left-hand side is interpreted as a pattern which must correspond to two cells connected via their principal ports. For example:
@@ -140,7 +147,7 @@ Currying works the same as in rules attached to a `def` statement.
 
 ### Currying
 
-It is possible to use nested patterns to define curried functions. For example:
+It is possible to use both nested patterns and additional matches on auxiliary ports to define curried functions. For example:
 
 ```
 def fib(_): r
@@ -163,7 +170,15 @@ def fib2(_): r
             fib(S(n1)) + fib(n2)
 ```
 
-Note that it is not necessary to define all rules together with the function to make use of currying. It also works with `match` statements. The only restrictions are that all nested matches must be done on the same port of the enclosing match and the nested matches must not conflict with another match at the outer layer (e.g. you cannot match on both `f(S(x))` and `f(S(S(x)))`). 
+Matching on auxiliary ports is done by specifying a comma-separated list in a `def` rule. In this example `b` is matched by `S(y)` in the second rule after successfully matching `a` with `S(x)`:
+
+```
+def foo(a, b): r
+  | Z           => erase(b), Z
+  | S(x), S(y)  => x + y
+```
+
+Note that it is not necessary to define all rules together with the function to make use of currying. It also works with `match` statements. The only restrictions are that all additional matches must be done on the same port of the original match and nested matches must not conflict with another match at the outer layer (e.g. you cannot match on both `f(S(x))` and `f(S(S(x)))`). 
 
 ### Church numerals
 

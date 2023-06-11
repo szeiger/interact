@@ -93,11 +93,10 @@ class Model(val statements: Seq[AST.Statement],
 
   private def addDefRules(d: AST.Def): Unit = {
     val dret = AST.Tuple(d.ret.map(AST.Ident))
-    val dargst = d.args.tail.map(AST.Ident)
     val di = AST.Ident(d.name)
     d.rules.foreach { r =>
-      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, r.on +: dargst), dret), r.reduced),
-        s"${r.on.show} = ${r.reduced.map(_.show).mkString(", ")}")
+      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, r.on ++ d.args.drop(r.on.length).map(AST.Ident)), dret), r.reduced),
+        s"${r.on.map(_.show).mkString(", ")} = ${r.reduced.map(_.show).mkString(", ")}")
     }
   }
 
@@ -128,8 +127,8 @@ class Model(val statements: Seq[AST.Statement],
     }
   }
 
-  private def createCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
-    val curryId = s"${ls.id}$$c$$${rs.id}"
+  private def createNestedCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
+    val curryId = s"${ls.id}$$nc$$${rs.id}"
     globals.get(curryId) match {
       case Some(sym) =>
         assert(sym.isCons)
@@ -139,7 +138,7 @@ class Model(val statements: Seq[AST.Statement],
         val largs = (0 until ls.callArity).map(i => s"$$l$i")
         val rargs = (0 until rs.callArity).map(i => s"$$r$i")
         val rcurryArgs = rargs.zipWithIndex.filter(_._2 != idx).map(_._1)
-        val sym = globals.newCons(curryId, arity = ls.callArity + rs.callArity - 1, returnArity = ls.returnArity)
+        val sym = globals.newCons(curryId, arity = ls.arity + rs.arity - 1)
         sym.matchContinuationPort = idx
         //println(s"**** left: $ls, $largs")
         //println(s"**** right: $rs, $rargs")
@@ -148,6 +147,31 @@ class Model(val statements: Seq[AST.Statement],
         //println(s"**** curryCons: ${curryCons.show}")
         addDerivedRules(curryCons)
         val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), curryArgs.map(AST.Ident)), AST.Ident(rargs(idx)))
+        //println(curryArgs)
+        //println(fwd.show)
+        addChecked(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
+        sym
+    }
+  }
+
+  private def createAuxCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
+    val curryId = s"${ls.id}$$ac$$${rs.id}"
+    globals.get(curryId) match {
+      case Some(sym) =>
+        assert(sym.isCons)
+        if(sym.matchContinuationPort != idx) sys.error("Port mismatch in curried ${ls.id} -> ${rs.id} match in $creator")
+        sym
+      case None =>
+        val largs = (0 until ls.callArity).map(i => s"$$l$i")
+        val rargs = (0 until rs.callArity).map(i => s"$$r$i")
+        val lcurryArgs = largs.zipWithIndex.filter(_._2 != idx).map(_._1)
+        val sym = globals.newCons(curryId, arity = ls.arity + rs.arity - 1)
+        sym.matchContinuationPort = idx
+        val curryArgs = rargs ++ lcurryArgs
+        val curryCons = AST.Cons(curryId, curryArgs, false, None, None)
+        //println(s"**** curryCons: ${curryCons.show}")
+        addDerivedRules(curryCons)
+        val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), curryArgs.map(AST.Ident)), AST.Ident(largs(idx)))
         //println(curryArgs)
         //println(fwd.show)
         addChecked(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
@@ -176,24 +200,35 @@ class Model(val statements: Seq[AST.Statement],
     val inlined = unnest.toInline(unnest(Seq(on2)).map(unnest.toConsOrder))
     //inlined.foreach(e => println(e.show))
     inlined match {
-      case Seq(AST.Assignment(ConsAp(_, ls, largs: Seq[AST.Ident]), ConsAp(_, rs, rargs))) =>
+      case Seq(AST.Assignment(ConsAp(_, ls, largs: Seq[AST.Expr]), ConsAp(_, rs, rargs))) =>
         val compl = if(ls.isDef) largs.takeRight(ls.returnArity) else Nil
-        val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, compl)
+        val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, compl.asInstanceOf[Seq[AST.Ident]])
         addMatchRule(ls, largs, rs, rargs, connected, creator)
       case _ => sys.error(s"Invalid rule: ${m.show}")
     }
   }
 
-  private def addMatchRule(ls: Symbol, largs: Seq[AST.Ident], rs: Symbol, rargs: Seq[AST.Expr], reduced: Seq[AST.Expr], creator: => String): Unit = {
-    singleNonIdentIdx(rargs) match {
-      case -2 => sys.error(s"Only one nested match allowed in $creator")
+  private def addMatchRule(ls: Symbol, largs: Seq[AST.Expr], rs: Symbol, rargs: Seq[AST.Expr], reduced: Seq[AST.Expr], creator: => String): Unit = {
+    largs.indexWhere(e => !e.isInstanceOf[AST.Ident]) match {
       case -1 =>
-        addChecked(new CheckedMatchRule(creator, reduced, ls.id, largs.map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s)))
+        singleNonIdentIdx(rargs) match {
+          case -2 => sys.error(s"Only one nested match allowed in $creator")
+          case -1 =>
+            addChecked(new CheckedMatchRule(creator, reduced, ls.id, largs.asInstanceOf[Seq[AST.Ident]].map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s)))
+          case idx =>
+            val currySym = createNestedCurriedDef(ls, rs, idx, creator)
+            val ConsAp(_, crs, crargs) = rargs(idx)
+            val clargs = largs ++ rargs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
+            addMatchRule(currySym, clargs, crs, crargs, reduced, creator)
+        }
       case idx =>
-        val currySym = createCurriedDef(ls, rs, idx, creator)
-        val ConsAp(_, crs, crargs) = rargs(idx)
-        val clargs = largs ++ rargs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
-        addMatchRule(currySym, clargs, crs, crargs, reduced, creator)
+        val currySym = createAuxCurriedDef(ls, rs, idx, creator)
+        val ConsAp(_, cls, clargs) = largs(idx)
+        //println(s"    largs(idx): ${largs(idx)}")
+        val crargs = rargs ++ largs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
+        //println(s"    clargs: ${clargs.mkString(", ")}")
+        //println(s"    crargs: ${crargs.mkString(", ")}")
+        addMatchRule(currySym, crargs, cls, clargs, reduced, creator)
     }
   }
 

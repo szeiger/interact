@@ -42,13 +42,12 @@ def map(list, fi, fo): r
 let l0 = 1'c :: 2'c :: 3'c :: Nil,
     (l0a, l0b) = dup(l0),
     l0_length = length(l0a),
-    fout = fin + 2'c,
-    l0_mapped = map(l0b, fin, fout)
+    l0_mapped = map(l0b, x, x + 2'c)
 
 # Explicit lambdas
-cons Lambda(in, out)
+cons in |> out
 def apply(l, in): out
-  | Lambda(i, o) => in = i, o
+  | i |> o => in = i, o
 
 # Example: List mapping with lambdas
 def map2(l, f): r
@@ -57,6 +56,4 @@ def map2(l, f): r
                apply(f1, x) :: map2(xs, f2)
 
 let l0 = 1'c :: 2'c :: 3'c :: Nil,
-    fout = fin + 2'c,
-    f = Lambda(fin, fout),
-    l0_mapped_lambda = map2(l0, f)
+    l0_mapped_lambda = map2(l0, x |> x + 2'c)
