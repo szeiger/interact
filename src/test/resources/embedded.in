@@ -1,0 +1,31 @@
+cons Int[int]
+cons String[ref]
+cons Dummy[ref]
+
+# Automatic move of payload
+def _ + y : r
+  | Int[i] => intAdd[i](y)
+
+#match Int[i] + y => intAdd[i](y)
+
+# Explicit computation on payloads
+def intAdd[int a](_): r
+  | Int[b] => [de.szeiger.interact.Intrinsics.add(a, b, c)], Int[c]
+
+def strlen(_): r
+  | String[s] => [de.szeiger.interact.Intrinsics.strlen(s, i)], Int[i]
+
+let simple = Int[42],
+    x = Int[5], y = Int[3], sum = x + y,
+    str = String["foo"],
+    len = strlen(String["12345"]),
+    dummy = Dummy[d], [de.szeiger.interact.ManagedDummy.create("d", d)],
+    dummy2 = Dummy[d2], [de.szeiger.interact.ManagedDummy.create("d2", d2)],
+    (dummy2a, dummy2b) = dup(dummy2),
+    erase(dummy2a)
+
+# Currying
+def _ * _ : r
+  | Int[a], Int[b] => [de.szeiger.interact.Intrinsics.mult(a, b, c)], Int[c]
+
+let mult = Int[3] * Int[2]

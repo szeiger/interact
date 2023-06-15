@@ -7,10 +7,52 @@ import scala.collection.mutable
 abstract class Scope[Cell] { self =>
   val freeWires = mutable.HashSet.empty[Cell]
 
-  def createCell(sym: Symbol): Cell
+  def createCell(sym: Symbol, payload: Option[AST.EmbeddedExpr]): Cell
   def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit
 
   def clear(): Unit = freeWires.clear()
+
+  def addData(data: AST.Data, globals: Symbols): Unit = {
+    val createEmb = mutable.ArrayBuffer.empty[(Symbol, AST.EmbeddedExpr, Cell)]
+    val catchEmb: Scope[Cell] = new Scope[Cell] {
+      override def createCell(sym: Symbol, payload: Option[AST.EmbeddedExpr]): Cell = {
+        val c = self.createCell(sym, None)
+        payload.foreach(emb => createEmb += ((sym, emb, c)))
+        c
+      }
+      override def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = self.connectCells(c1, p1, c2, p2)
+    }
+    catchEmb.addExprs(data.defs, new Symbols(Some(globals)))
+    freeWires ++= catchEmb.freeWires
+    val foundEmbIds = mutable.HashMap.empty[String, Cell]
+    createEmb.foreach { case (sym, e, c) =>
+      e match {
+        case AST.EmbeddedInt(v) =>
+          assert(sym.payloadType == PayloadType.INT)
+          c.asInstanceOf[IntBox].setValue(v)
+        case AST.EmbeddedString(v) =>
+          assert(sym.payloadType == PayloadType.REF)
+          c.asInstanceOf[RefBox].setValue(v)
+        case AST.EmbeddedIdent(id) =>
+          if(foundEmbIds.put(id, c).isDefined)
+            sys.error(s"Invalid payload expression ${e.show} in ${data.show}: Duplicate use of variable")
+        case _ => sys.error(s"Invalid payload expression ${e.show} in data ${data.show}")
+      }
+    }
+    val embComp = data.embDefs.map { ee =>
+      EmbeddedComputation.apply(ee)(data.show) { as =>
+        if((as.distinct.length != as.length) || as.exists(a => !foundEmbIds.contains(a)))
+          sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
+        as.map(foundEmbIds.remove(_).get)
+      }
+    }
+    if(foundEmbIds.nonEmpty) sys.error(s"Non-linear variable use of ${foundEmbIds.mkString(", ")} in data ${data.show}")
+    embComp.foreach { e =>
+      val mh = e.getMethod(getClass.getClassLoader)
+      mh.invokeWithArguments(e.argIndices: _*)
+    }
+
+  }
 
   def addExprs(defs: Iterable[AST.Expr], syms: Symbols): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
@@ -33,21 +75,18 @@ abstract class Scope[Cell] { self =>
       case i: AST.Ident =>
         val s = syms.getOrAdd(i.s)
         s.refs match {
-          case 0 => cellRet(s, createCell(s))
-          case 1 => val c = createCell(s); freeWires.addOne(c); cellRet(s, c)
+          case 0 => cellRet(s, createCell(s, None))
+          case 1 => val c = createCell(s, None); freeWires.addOne(c); cellRet(s, c)
           case 2 => Seq((bind.getOrElseUpdate(s, new TempWire), -1))
           case _ => sys.error(s"Non-linear use of ${i.show} in data")
         }
       case AST.Tuple(es) => es.flatMap(create)
-      case AST.Ap(i, args) =>
-        val s = syms.getOrAdd(i.s)
+      case AST.Ap(i, emb, args) =>
+        val s = syms(i.s)
         assert(s.isCons)
-        val c = createCell(s)
+        val c = createCell(s, emb)
         args.zipWithIndex.foreach { case (a, p0) =>
-          val p =
-            if(!s.isDef) p0
-            else if(p0 == 0) -1
-            else p0-1
+          val p = if(!s.isDef) p0 else p0-1
           val ca = create(a)
           assert(ca.length == 1)
           connectAny(c, p, ca.head._1, ca.head._2)
@@ -71,6 +110,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
   def getSymbol(c: Cell): Symbol
   def getConnected(c: Cell, port: Int): (Cell, Int)
   def isFreeWire(c: Cell): Boolean
+  def getPayload(c: Cell): Any
 
   def symbolName(c: Cell): String = getSymbol(c).id
   def getArity(c: Cell): Int = getSymbol(c).arity
@@ -104,6 +144,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
   }
 
   def log(out: PrintStream, prefix: String = "  ", markCut: (Cell, Cell) => Boolean = (_, _) => false): mutable.ArrayBuffer[Cell] = {
+    import Colors._
     val cuts = mutable.ArrayBuffer.empty[Cell]
     def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
     val stack = mutable.Stack.from(freeWires.toIndexedSeq.sortBy(c => getSymbol(c).id).map(c => getConnected(c, -1)._1))
@@ -116,7 +157,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
       case None =>
         val mark = if(p1 == -1 && p2 == -1 && markCut(c1, c2)) {
           cuts.addOne(c1)
-          s"<${cuts.length-1}>"
+          s"${cBlue}<${cuts.length-1}>${cNormal}"
         } else ""
         if(singleRet(getSymbol(c2)) == p2) mark + show(c2, false)
         else {
@@ -140,12 +181,21 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
           val aposs = if(sym.isDef) -1 +: (0 until sym.callArity-1) else 0 until sym.arity
           val as0 = list(aposs)
           val pr1 = Lexical.precedenceOf(sym.id)
+          val nameAndValue = sym.payloadType match {
+            case PayloadType.VOID => s"$cYellow${sym.id}$cNormal"
+            case _ =>
+              val s = getPayload(c1) match {
+                case s: String => s"\"$s\""
+                case o => String.valueOf(o)
+              }
+              s"$cYellow${sym.id}$cNormal[$s]"
+          }
           if(pr1 >= 0 && sym.arity == 2) {
             val as1 = as0.map { case (asym, s) => if(needsParens(sym, pr1, asym)) s"($s)" else s }
-            s"${as1(0)} ${sym.id} ${as1(1)}"
+            s"${as1(0)} $nameAndValue ${as1(1)}"
           } else {
             val as = if(as0.isEmpty) "" else as0.iterator.map(_._2).mkString("(", ", ", ")")
-            s"${sym.id}$as"
+            s"$nameAndValue$as"
           }
       }
       if(withRet) {
@@ -167,4 +217,22 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     }
     cuts
   }
+}
+
+object PayloadType {
+  final val VOID = 0
+  final val INT  = 1
+  final val REF  = 2
+  final val PAYLOAD_TYPES_COUNT = 3
+}
+
+object Colors {
+  val useColors: Boolean = System.getProperty("interact.colors", "true").toBoolean
+
+  val (cNormal, cBlack, cRed, cGreen, cYellow, cBlue, cMagenta, cCyan) =
+    if(useColors) ("\u001B[0m", "\u001B[30m", "\u001B[31m", "\u001B[32m", "\u001B[33m", "\u001B[34m", "\u001B[35m", "\u001B[36m")
+    else ("", "", "", "", "", "", "", "")
+  val (bRed, bGreen, bYellow, bBlue, bMagenta, bCyan) =
+    if(useColors) ("\u001B[41m", "\u001B[42m", "\u001B[43m", "\u001B[44m", "\u001B[45m", "\u001B[46m")
+    else ("", "", "", "", "", "")
 }

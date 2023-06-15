@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, CheckedRule, BaseInterpreter, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.util.Arrays
@@ -207,12 +207,13 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int, compile: Boolean,
   debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
   final val scope: Analyzer[Cell] = new Analyzer[Cell] {
-    def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0)
+    def createCell(sym: Symbol, emb: Option[AST.EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
+    def getPayload(c: Cell): Any = ??? //TODO embedded
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }

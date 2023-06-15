@@ -1,9 +1,10 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, CheckedRule, BaseInterpreter, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, GenericRuleImpl, IntBox, RefBox, PayloadAssigner, PayloadType, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
+import java.lang.invoke.MethodHandle
 import java.util.Arrays
 import scala.annotation.{switch, tailrec}
 import scala.collection.mutable
@@ -19,13 +20,34 @@ abstract class Cell(final var symId: Int, _pcell: Cell, _pport: Int) {
   def setCell(p: Int, c2: Cell, p2: Int): Unit
   def getCell(p: Int): Cell
   def getPort(p: Int): Int
+  def getGenericPayload: Any
+  def setGenericPayload(v: Any): Unit
 
   final def allPorts: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (getCell(i), getPort(i)))
-  override def toString = s"Cell($symId, $arity, ${allPorts.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
+  override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${allPorts.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
 }
 
-class Cell0(_symId: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
-  def this(_symId: Int) = this(_symId, null, 0)
+trait IntCell extends IntBox {
+  private[this] final var payload: Int = 0
+  def setValue(i: Int) = payload = i
+  def getValue: Int = payload
+  def setGenericPayload(v: Any): Unit = payload = v.asInstanceOf[Int]
+  def getGenericPayload: Any = payload
+}
+trait RefCell extends RefBox {
+  private[this] final var payload: AnyRef = null
+  def setValue(o: AnyRef) = payload = o
+  def getValue: AnyRef = payload
+  def setGenericPayload(v: Any): Unit = payload = v.asInstanceOf[AnyRef]
+  def getGenericPayload: Any = payload
+}
+trait VoidCell {
+  def getValue: Unit = ()
+  def setGenericPayload(v: Any): Unit = ()
+  def getGenericPayload: Any = ()
+}
+
+abstract class Cell0(_symId: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
   final def arity: Int = 0
   final def auxCell(p: Int): Cell = null
   final def auxPort(p: Int): Int = 0
@@ -34,9 +56,17 @@ class Cell0(_symId: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell,
   final def getCell(p: Int): Cell = pcell
   final def getPort(p: Int): Int = pport
 }
+class Cell0V(_symId: Int, _pcell: Cell, _pport: Int) extends Cell0(_symId, _pcell, _pport) with VoidCell {
+  def this(_symId: Int) = this(_symId, null, 0)
+}
+class Cell0I(_symId: Int, _pcell: Cell, _pport: Int) extends Cell0(_symId, _pcell, _pport) with IntCell {
+  def this(_symId: Int) = this(_symId, null, 0)
+}
+class Cell0L(_symId: Int, _pcell: Cell, _pport: Int) extends Cell0(_symId, _pcell, _pport) with RefCell {
+  def this(_symId: Int) = this(_symId, null, 0)
+}
 
-class Cell1(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell(_symId, _pcell, _pport) {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+abstract class Cell1(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell(_symId, _pcell, _pport) {
   final var acell0: Cell = _acell0
   final var aport0: Int = _aport0
   final def arity: Int = 1
@@ -47,9 +77,17 @@ class Cell1(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int)
   final def getCell(p: Int): Cell = if(p == 0) acell0 else pcell
   final def getPort(p: Int): Int = if(p == 0) aport0 else pport
 }
+class Cell1V(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _pcell, _pport, _acell0, _aport0) with VoidCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+}
+class Cell1I(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _pcell, _pport, _acell0, _aport0) with IntCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+}
+class Cell1L(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _pcell, _pport, _acell0, _aport0) with RefCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+}
 
-class Cell2(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell(_symId, _pcell, _pport) {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+abstract class Cell2(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell(_symId, _pcell, _pport) {
   final var acell0: Cell = _acell0
   final var aport0: Int = _aport0
   final var acell1: Cell = _acell1
@@ -74,8 +112,17 @@ class Cell2(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int,
     case _ => pport
   }
 }
+class Cell2V(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _pcell, _pport, _acell0, _aport0, _acell1, _aport1) with VoidCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+}
+class Cell2I(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _pcell, _pport, _acell0, _aport0, _acell1, _aport1) with IntCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+}
+class Cell2L(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _pcell, _pport, _acell0, _aport0, _acell1, _aport1) with RefCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+}
 
-class CellN(_symId: Int, val arity: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
+abstract class CellN(_symId: Int, val arity: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
   def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
   private[this] final val auxCells = new Array[Cell](arity)
   private[this] final val auxPorts = new Array[Int](arity)
@@ -87,17 +134,49 @@ class CellN(_symId: Int, val arity: Int, _pcell: Cell, _pport: Int) extends Cell
   final def getCell(p: Int): Cell = if(p < 0) pcell else auxCells(p)
   final def getPort(p: Int): Int = if(p < 0) pport else auxPorts(p)
 }
-
-object Cells {
-  @inline def mk(symId: Int, arity: Int): Cell = arity match {
-    case 0 => new Cell0(symId)
-    case 1 => new Cell1(symId)
-    case 2 => new Cell2(symId)
-    case _ => new CellN(symId, arity)
-  }
+class CellNV(_symId: Int, _arity: Int, _pcell: Cell, _pport: Int) extends CellN(_symId, _arity, _pcell, _pport) with VoidCell {
+  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
+}
+class CellNI(_symId: Int, _arity: Int, _pcell: Cell, _pport: Int) extends CellN(_symId, _arity, _pcell, _pport) with IntCell {
+  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
+}
+class CellNL(_symId: Int, _arity: Int, _pcell: Cell, _pport: Int) extends CellN(_symId, _arity, _pcell, _pport) with RefCell {
+  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
 }
 
-class WireCell(final val sym: Symbol, _symId: Int) extends Cell0(_symId) {
+object Cells {
+  def mk(symId: Int, arity: Int, payloadKind: Int): Cell = (payloadKind: @switch) match {
+    case VOID0 => new Cell0V(symId)
+    case VOID1 => new Cell1V(symId)
+    case VOID2 => new Cell2V(symId)
+    case VOIDN => new CellNV(symId, arity)
+    case INT0  => new Cell0I(symId)
+    case INT1  => new Cell1I(symId)
+    case INT2  => new Cell2I(symId)
+    case INTN  => new CellNI(symId, arity)
+    case REF0  => new Cell0L(symId)
+    case REF1  => new Cell1L(symId)
+    case REF2  => new Cell2L(symId)
+    case REFN  => new CellNL(symId, arity)
+  }
+
+  final val VOID0 = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
+  final val VOID1 = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
+  final val VOID2 = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
+  final val VOIDN = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
+  final val INT0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
+  final val INT1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
+  final val INT2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
+  final val INTN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
+  final val REF0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
+  final val REF1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
+  final val REF2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
+  final val REFN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
+
+  def cellKind(arity: Int, payloadType: Int): Int = payloadType + math.min(arity, 3) * PayloadType.PAYLOAD_TYPES_COUNT
+}
+
+class WireCell(final val sym: Symbol, _symId: Int) extends Cell0V(_symId) {
   override def toString = s"WireCell($sym, $symId, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
 }
 
@@ -107,7 +186,8 @@ abstract class RuleImpl {
   def cellAllocationCount: Int
 }
 
-final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Int]) extends RuleImpl {
+final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Int],
+    assigners: Array[PayloadAssigner], embeddedComps: Array[MethodHandle], embeddedArgss: Array[Array[Int]]) extends RuleImpl {
   override def toString = rule.toString
 
   private[this] def delay(nanos: Int): Unit = {
@@ -125,9 +205,36 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     while(i < protoCells.length) {
       val pc = protoCells(i)
       val sid = short0(pc)
-      val ari = short1(pc)
-      cells(i) = Cells.mk(sid, ari)
+      val ari = byte2(pc)
+      val kind = byte3(pc)
+      cells(i) = Cells.mk(sid, ari, kind)
       i += 1
+    }
+
+    i = 0
+    while(i < assigners.length) {
+      val ass = assigners(i)
+      ass(c1, c2, cells(ass.cellIdx))
+      i += 1
+    }
+    if(embeddedComps != null) {
+      var j = 0
+      while(j < embeddedComps.length) {
+        val embeddedComp = embeddedComps(j)
+        val embeddedArgs = embeddedArgss(j)
+        val args = new Array[Any](embeddedArgs.length)
+        i = 0
+        while(i < embeddedArgs.length) {
+          args(i) = embeddedArgs(i) match {
+            case -1 => c1.getGenericPayload
+            case -2 => c2.getGenericPayload
+            case n => cells(n)
+          }
+          i += 1
+        }
+        embeddedComp.invokeWithArguments(args: _*)
+        j += 1
+      }
     }
 
     i = 0
@@ -192,7 +299,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
   debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
   final val scope: Analyzer[Cell] = new Analyzer[Cell] {
-    def createCell(sym: Symbol): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0)
+    def createCell(sym: Symbol, emb: Option[AST.EmbeddedExpr]): Cell =
+      if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity, Cells.cellKind(sym.arity, sym.payloadType)) else new WireCell(sym, 0)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
       c1.setCell(p1, c2, p2)
       c2.setCell(p2, c1, p1)
@@ -201,6 +309,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
+    def getPayload(c: Cell): Any = c.getGenericPayload
     def getConnected(c: Cell, port: Int): (Cell, Int) = (c.getCell(port), c.getPort(port))
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
@@ -230,7 +339,11 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
           maxC.max(g.maxCells)
           maxA.max(g.arity1)
           maxA.max(g.arity2)
-          new InterpretedRuleImpl(getSymbolId(g.sym1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked, g.connectionsPacked)
+          val pcs = g.cells.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType)))
+          val embMhs = g.embeddedComps.map(_.getMethod(getClass.getClassLoader))
+          val embArgs = g.embeddedComps.map(_.argIndices)
+          new InterpretedRuleImpl(getSymbolId(g.sym1), pcs, g.freeWiresPacked, g.connectionsPacked, g.assigners,
+            if(embMhs.isEmpty) null else embMhs.toArray, if(embArgs.isEmpty) null else embArgs.toArray)
         }
       ri.rule = g
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri

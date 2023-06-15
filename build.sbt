@@ -9,7 +9,7 @@ fork in Test := true
 Global / resolvers += "scala-integration" at
   "https://scala-ci.typesafe.com/artifactory/scala-integration/"
 
-Global / scalaVersion := "2.13.11-bin-28eef15"
+Global / scalaVersion := "2.13.11"
 
 lazy val main = (project in file("."))
   .settings(

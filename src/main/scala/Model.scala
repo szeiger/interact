@@ -12,8 +12,14 @@ class DerivedRule(val name1: String, val name2: String) extends CheckedRule {
   def show = s"$name1 . $name2 = <derived>"
 }
 
-class CheckedMatchRule(creator: => String, val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String]) extends CheckedRule {
-  def show: String = creator
+class CheckedMatchRule(val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String],
+    val emb1: Option[AST.EmbeddedIdent], val emb2: Option[AST.EmbeddedIdent], val embRed: Seq[AST.EmbeddedExpr]) extends CheckedRule {
+  def show: String = {
+    def on(n: String, e: Option[AST.EmbeddedIdent], as: Seq[String]): String =
+      s"$n${e.map(s => s"[${s.show}]").getOrElse("")}(${as.mkString(", ")})"
+    val red = connected.map(_.show) ++ embRed.map(_.show)
+    s"match ${on(name1, emb1, args1)} = ${on(name2, emb2, args2)} => ${red.mkString(", ")}"
+  }
 }
 
 class Symbol(val id: String) {
@@ -23,35 +29,34 @@ class Symbol(val id: String) {
   var returnArity = 1
   def callArity: Int = arity + 1 - returnArity
   var matchContinuationPort: Int = -2
+  var payloadType: Int = PayloadType.VOID
+  def hasPayload = payloadType != PayloadType.VOID
   override def toString: String = id
 }
 
 class Symbols(parent: Option[Symbols] = None) {
   private val syms = mutable.HashMap.empty[String, Symbol]
-  def newCons(id: String, isDef: Boolean = false, arity: Int = 0, returnArity: Int = 1): Symbol = {
+  def newCons(id: String, isDef: Boolean = false, arity: Int = 0, returnArity: Int = 1, payloadType: Int = PayloadType.VOID): Symbol = {
     assert(get(id).isEmpty)
     val sym = new Symbol(id)
     sym.isCons = true
     sym.isDef = isDef
     sym.arity = arity
     sym.returnArity = returnArity
+    sym.payloadType = payloadType
     syms.put(id, sym)
     sym
   }
-  def getOrAdd(id: String): Symbol = {
-    val so = parent match {
+  def getOrAdd(id: String): Symbol =
+    (parent match {
       case Some(p) => p.syms.get(id)
       case None => None
-    }
-    so.getOrElse(syms.getOrElseUpdate(id, new Symbol(id)))
-  }
-  def get(id: String): Option[Symbol] = {
-    val so = parent match {
+    }).getOrElse(syms.getOrElseUpdate(id, new Symbol(id)))
+  def get(id: String): Option[Symbol] =
+    (parent match {
       case Some(p) => p.syms.get(id)
       case None => None
-    }
-    so.orElse(syms.get(id))
-  }
+    }).orElse(syms.get(id))
   def apply(id: String): Symbol =
     get(id).getOrElse(sys.error(s"No symbol found for $id"))
   def symbols: Iterator[Symbol] = syms.valuesIterator ++ parent.map(_.symbols).getOrElse(Iterator.empty)
@@ -62,8 +67,8 @@ trait BaseInterpreter {
   def reduce(): Int
 }
 
-case class ConsAp(target: AST.Ident, tsym: Symbol, args: Seq[AST.Expr]) extends AST.Expr {
-  def show = args.map(_.show).mkString(s"<${target.show}>(", ", ", ")")
+case class ConsAp(target: AST.Ident, tsym: Symbol, embeddedIdent: Option[AST.EmbeddedExpr], args: Seq[AST.Expr]) extends AST.Expr {
+  def show = args.iterator.map(_.show).mkString(s"<${target.show}>${embeddedIdent.map(s => s"[$s]").getOrElse("")}(", ", ", ")")
   def allIdents: Iterator[AST.Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
 }
 
@@ -77,10 +82,12 @@ class Model(val statements: Seq[AST.Statement],
   def constrs: Iterable[AST.Cons] = prepare.constrs
   def defs: Iterable[AST.Def] = prepare.defs
 
-  private def addDerivedRules(c: AST.Cons): Unit = {
-    val der = c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons))
-    der.foreach { i =>
-      if(i == "erase" || i == "dup") addChecked(new DerivedRule(i, c.name))
+  private def addDerivedRules(c: AST.Cons): Unit =
+    addDerivedRules(c.der.map(_.constructors).getOrElse(defaultDerive).filter(n => globals.get(n).exists(_.isCons)), c.name)
+
+  private def addDerivedRules(names1: Seq[String], name2: String): Unit = {
+    names1.foreach { i =>
+      if(i == "erase" || i == "dup") addChecked(new DerivedRule(i, name2))
       else sys.error(s"Don't know how to derive rule for $i")
     }
   }
@@ -95,7 +102,7 @@ class Model(val statements: Seq[AST.Statement],
     val dret = AST.Tuple(d.ret.map(AST.Ident))
     val di = AST.Ident(d.name)
     d.rules.foreach { r =>
-      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, r.on ++ d.args.drop(r.on.length).map(AST.Ident)), dret), r.reduced),
+      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, d.embeddedId, r.on ++ d.args.drop(r.on.length).map(AST.Ident)), dret), r.embRed, r.reduced),
         s"${r.on.map(_.show).mkString(", ")} = ${r.reduced.map(_.show).mkString(", ")}")
     }
   }
@@ -127,54 +134,27 @@ class Model(val statements: Seq[AST.Statement],
     }
   }
 
-  private def createNestedCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
-    val curryId = s"${ls.id}$$nc$$${rs.id}"
+  private def createCurriedDef(ls: Symbol, rs: Symbol, idx: Int, rhs: Boolean): Symbol = {
+    val curryId = s"${ls.id}$$${if(rhs) "ac" else "nc"}$$${rs.id}"
     globals.get(curryId) match {
       case Some(sym) =>
-        assert(sym.isCons)
         if(sym.matchContinuationPort != idx) sys.error("Port mismatch in curried ${ls.id} -> ${rs.id} match in $creator")
         sym
       case None =>
+        if(ls.hasPayload && rs.hasPayload)
+          sys.error("Implementation limitation: Curried definitions cannot have payload on both sides")
+        val curriedPtp = math.max(ls.payloadType, rs.payloadType)
+        val emb1 = if(ls.hasPayload) Some(AST.EmbeddedIdent("$l")) else None
+        val emb2 = if(rs.hasPayload) Some(AST.EmbeddedIdent("$r")) else None
+        val sym = globals.newCons(curryId, arity = ls.arity + rs.arity - 1, payloadType = curriedPtp)
         val largs = (0 until ls.callArity).map(i => s"$$l$i")
         val rargs = (0 until rs.callArity).map(i => s"$$r$i")
-        val rcurryArgs = rargs.zipWithIndex.filter(_._2 != idx).map(_._1)
-        val sym = globals.newCons(curryId, arity = ls.arity + rs.arity - 1)
         sym.matchContinuationPort = idx
-        //println(s"**** left: $ls, $largs")
-        //println(s"**** right: $rs, $rargs")
-        val curryArgs = largs ++ rcurryArgs
-        val curryCons = AST.Cons(curryId, curryArgs, false, None, None)
-        //println(s"**** curryCons: ${curryCons.show}")
-        addDerivedRules(curryCons)
-        val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), curryArgs.map(AST.Ident)), AST.Ident(rargs(idx)))
-        //println(curryArgs)
-        //println(fwd.show)
-        addChecked(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
-        sym
-    }
-  }
-
-  private def createAuxCurriedDef(ls: Symbol, rs: Symbol, idx: Int, creator: => String): Symbol = {
-    val curryId = s"${ls.id}$$ac$$${rs.id}"
-    globals.get(curryId) match {
-      case Some(sym) =>
-        assert(sym.isCons)
-        if(sym.matchContinuationPort != idx) sys.error("Port mismatch in curried ${ls.id} -> ${rs.id} match in $creator")
-        sym
-      case None =>
-        val largs = (0 until ls.callArity).map(i => s"$$l$i")
-        val rargs = (0 until rs.callArity).map(i => s"$$r$i")
-        val lcurryArgs = largs.zipWithIndex.filter(_._2 != idx).map(_._1)
-        val sym = globals.newCons(curryId, arity = ls.arity + rs.arity - 1)
-        sym.matchContinuationPort = idx
-        val curryArgs = rargs ++ lcurryArgs
-        val curryCons = AST.Cons(curryId, curryArgs, false, None, None)
-        //println(s"**** curryCons: ${curryCons.show}")
-        addDerivedRules(curryCons)
-        val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), curryArgs.map(AST.Ident)), AST.Ident(largs(idx)))
-        //println(curryArgs)
-        //println(fwd.show)
-        addChecked(new CheckedMatchRule(creator, Seq(fwd), ls.id, largs, rs.id, rargs))
+        val (keepArgs, splitArgs) = if(rhs) (rargs, largs) else (largs, rargs)
+        val curryArgs = keepArgs ++ splitArgs.zipWithIndex.filter(_._2 != idx).map(_._1)
+        addDerivedRules(defaultDerive, curryId)
+        val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), emb1.orElse(emb2), curryArgs.map(AST.Ident)), AST.Ident(splitArgs(idx)))
+        addChecked(new CheckedMatchRule(Seq(fwd), ls.id, largs, rs.id, rargs, emb1, emb2, Nil))
         sym
     }
   }
@@ -200,69 +180,37 @@ class Model(val statements: Seq[AST.Statement],
     val inlined = unnest.toInline(unnest(Seq(on2)).map(unnest.toConsOrder))
     //inlined.foreach(e => println(e.show))
     inlined match {
-      case Seq(AST.Assignment(ConsAp(_, ls, largs: Seq[AST.Expr]), ConsAp(_, rs, rargs))) =>
+      case Seq(AST.Assignment(ConsAp(_, ls, lemb, largs: Seq[AST.Expr]), ConsAp(_, rs, remb, rargs))) =>
         val compl = if(ls.isDef) largs.takeRight(ls.returnArity) else Nil
         val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, compl.asInstanceOf[Seq[AST.Ident]])
-        addMatchRule(ls, largs, rs, rargs, connected, creator)
+        addMatchRule(ls, lemb, largs, rs, remb, rargs, m.embRed, connected, creator)
       case _ => sys.error(s"Invalid rule: ${m.show}")
     }
   }
 
-  private def addMatchRule(ls: Symbol, largs: Seq[AST.Expr], rs: Symbol, rargs: Seq[AST.Expr], reduced: Seq[AST.Expr], creator: => String): Unit = {
+  private def addMatchRule(ls: Symbol, lemb: Option[AST.EmbeddedExpr], largs: Seq[AST.Expr], rs: Symbol, remb: Option[AST.EmbeddedExpr], rargs: Seq[AST.Expr], embRed: Seq[AST.EmbeddedExpr], reduced: Seq[AST.Expr], creator: => String): Unit = {
+    //println(s"addMatchRule($ls${lemb.map(e => s"[${e.show}]").getOrElse("")}(${largs.map(_.show).mkString(", ")}) = $rs${remb.map(e => s"[${e.show}]").getOrElse("")}(${rargs.map(_.show).mkString(", ")}) => ${embRed.map(e => s"[${e.show}]").mkString(", ")}, ${reduced.map(_.show).mkString(", ")})")
     largs.indexWhere(e => !e.isInstanceOf[AST.Ident]) match {
       case -1 =>
         singleNonIdentIdx(rargs) match {
           case -2 => sys.error(s"Only one nested match allowed in $creator")
           case -1 =>
-            addChecked(new CheckedMatchRule(creator, reduced, ls.id, largs.asInstanceOf[Seq[AST.Ident]].map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s)))
+            addChecked(new CheckedMatchRule(reduced, ls.id,
+              largs.asInstanceOf[Seq[AST.Ident]].map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s),
+              lemb.map(_.asInstanceOf[AST.EmbeddedIdent]), remb.map(_.asInstanceOf[AST.EmbeddedIdent]), embRed))
           case idx =>
-            val currySym = createNestedCurriedDef(ls, rs, idx, creator)
-            val ConsAp(_, crs, crargs) = rargs(idx)
+            val currySym = createCurriedDef(ls, rs, idx, false)
+            val ConsAp(_, crs, cemb, crargs) = rargs(idx)
             val clargs = largs ++ rargs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
-            addMatchRule(currySym, clargs, crs, crargs, reduced, creator)
+            addMatchRule(currySym, lemb.orElse(remb), clargs, crs, cemb, crargs, embRed, reduced, creator)
         }
       case idx =>
-        val currySym = createAuxCurriedDef(ls, rs, idx, creator)
-        val ConsAp(_, cls, clargs) = largs(idx)
-        //println(s"    largs(idx): ${largs(idx)}")
+        val currySym = createCurriedDef(ls, rs, idx, true)
+        val ConsAp(_, cls, cemb, clargs) = largs(idx)
         val crargs = rargs ++ largs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
-        //println(s"    clargs: ${clargs.mkString(", ")}")
-        //println(s"    crargs: ${crargs.mkString(", ")}")
-        addMatchRule(currySym, crargs, cls, clargs, reduced, creator)
+        addMatchRule(currySym, lemb.orElse(remb), crargs, cls, cemb, clargs, embRed, reduced, creator)
     }
   }
-
-//  def checkLinearity(cuts: Seq[AST.Cut], free: Set[String], globals: Symbols)(in: => String): Unit = {
-//    final class Usages(var count: Int = 0)
-//    val usages = mutable.HashMap.from(free.iterator.map(i => (i, new Usages)))
-//    val toScan = mutable.Queue.empty[(AST.Cut, AST.Expr)]
-//    def scan(c: AST.Cut, e: AST.Expr): Unit = e match {
-//      case AST.IdentOrAp(target, args) =>
-//        globals.get(target) match {
-//          case Some(g) =>
-//            if(!g.isCons) sys.error(s"Unexpected global non-constructor symbol $g in $in")
-//            if(args.length != g.arity) sys.error(s"Wrong arity ${args.length} != ${g.arity} when using $g in $in")
-//          case None =>
-//            if(e.isInstanceOf[AST.Ap])
-//              sys.error(s"Illegal use of non-constructor symbol $target as constructor in $in")
-//            usages.getOrElseUpdate(target, new Usages).count += 1
-//        }
-//        args.foreach(a => toScan.enqueue((c, a)))
-//    }
-//    cuts.foreach { c =>
-//      scan(c, c.left)
-//      scan(c, c.right)
-//    }
-//    while(!toScan.isEmpty) {
-//      val (c, e) = toScan.dequeue()
-//      scan(c, e)
-//    }
-//    val badFree = free.iterator.map(i => (i, usages(i))).filter(_._2.count != 1).toSeq
-//    if(badFree.nonEmpty) sys.error(s"Non-linear use of free ${badFree.map(_._1).mkString(", ")} in $in")
-//    free.foreach(usages.remove)
-//    val badLocal = usages.filter(_._2.count != 2).toSeq
-//    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_._1).mkString(", ")} in $in")
-//  }
 
   val globals = new Symbols
   val prepare = new Prepare(globals)
@@ -319,7 +267,7 @@ class Model(val statements: Seq[AST.Statement],
 
   def setData(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
-    prepare.data.foreach { d => inter.scope.addExprs(d.defs, new Symbols(Some(globals))) }
+    prepare.data.foreach(inter.scope.addData(_, globals))
   }
 }
 
@@ -335,22 +283,22 @@ class Prepare(globals: Symbols) {
       case c: AST.Cons =>
         if(globals.get(c.name).isDefined) sys.error(s"Duplicate cons/def: ${c.name}")
         c.args.foreach(a => assert(a != null, s"No wildcard parameters allowed in cons: ${c.name}"))
-        globals.newCons(c.name, arity = c.args.length)
+        globals.newCons(c.name, arity = c.args.length, payloadType = c.embedded.map(_.payloadType).getOrElse(PayloadType.VOID))
         constrs += c
       case d: AST.Def =>
         if(globals.get(d.name).isDefined) sys.error(s"Duplicate cons/def: ${d.name}")
-        d.args.tail.foreach(s => assert(s != null, s"In def ${d.name}: Only the principal argument can be a wildcard"))
-        globals.newCons(d.name, isDef = true, arity = d.args.length + d.ret.length - 1, returnArity = d.ret.length)
+        //d.args.tail.foreach(s => assert(s != null, s"In def ${d.name}: Only the principal argument can be a wildcard"))
+        globals.newCons(d.name, isDef = true, arity = d.args.length + d.ret.length - 1, returnArity = d.ret.length, payloadType = d.embedded.map(_.payloadType).getOrElse(PayloadType.VOID))
         defs += d
       case d: AST.Data => data.addOne(d)
       case m: AST.Match => matchRules += m
     }
     // Find free wires
-    data.foreach { d => d.free = checkDefs(d.defs)(d.show) }
+    data.foreach(checkData)
   }
 
-  // Check Expr and return free identifiers
-  private def checkDefs(defs: Seq[AST.Expr])(in: => String): Seq[String] = {
+  // Check expressions and detect free wires
+  private def checkData(data: AST.Data): Unit = {
     val locals = new Symbols(None)
     def f(e: AST.Expr): Unit = e match {
       case AST.Assignment(l, r) => f(l); f(r)
@@ -358,25 +306,25 @@ class Prepare(globals: Symbols) {
       case AST.Wildcard => ()
       case e @ AST.Ident(s) =>
         val symO = globals.get(s)
-        if(symO.exists(_.isCons)) f(AST.Ap(e, Nil))
-        else if(symO.isDefined) sys.error(s"Unexpected global non-constructor symbol $s in $in")
+        if(symO.exists(_.isCons)) f(AST.Ap(e, None, Nil))
+        else if(symO.isDefined) sys.error(s"Unexpected global non-constructor symbol $s in ${data.show}")
         else {
           val sym = locals.getOrAdd(s)
           sym.refs += 1
         }
-      case AST.Ap(AST.Ident(s), args) =>
+      case AST.Ap(AST.Ident(s), _, args) =>
         val symO = globals.get(s)
         if(!symO.exists(_.isCons))
-          sys.error(s"Illegal use of non-constructor symbol $s as constructor in $in")
+          sys.error(s"Illegal use of non-constructor symbol $s as constructor in ${data.show}")
         val a = symO.get.callArity
         if(a != args.length)
-          sys.error(s"Wrong number of arguments for $s in $in: got ${args.length}, expected $a")
+          sys.error(s"Wrong number of arguments for $s in ${data.show}: got ${args.length}, expected $a")
         args.foreach(f)
     }
-    defs.foreach(f)
+    data.defs.foreach(f)
     val badLocal = locals.symbols.filter(_.refs > 2).toSeq
-    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_.id).mkString(", ")} in $in")
-    locals.symbols.filter(_.refs == 1).map(_.id).toSeq
+    if(badLocal.nonEmpty) sys.error(s"Non-linear use of local ${badLocal.map(_.id).mkString(", ")} in ${data.show}")
+    data.free = locals.symbols.filter(_.refs == 1).map(_.id).toSeq
   }
 }
 
@@ -402,7 +350,7 @@ class Normalize(globals: Symbols) {
         if(assigned.contains(wild2)) { reorder(unnest(ass2, false)); wild2 }
         else ass2
       case AST.Tuple(es) => AST.Tuple(es.map(expandWildcards(_, wild)))
-      case AST.Ap(t, args) => AST.Ap(t, args.map(expandWildcards(_, wild)))
+      case AST.Ap(t, emb, args) => AST.Ap(t, emb, args.map(expandWildcards(_, wild)))
       case AST.Wildcard =>
         if(assigned.contains(wild)) sys.error(s"Duplicate wildcard in assignment")
         assigned += wild
@@ -414,10 +362,10 @@ class Normalize(globals: Symbols) {
         if(nested) sys.error("Unexpected nested assignment without wilcard")
         else AST.Assignment(unnest(ls, false), unnest(rs, false))
       case AST.Tuple(es) => AST.Tuple(es.map(unnest(_, true)))
-      case AST.IdentOrAp(s, args) =>
+      case AST.IdentOrAp(s, emb, args) =>
         val symO = globals.get(s)
         if(symO.exists(_.isCons) || args.nonEmpty) {
-          val ap = AST.Ap(AST.Ident(s), args.map(unnest(_, true)))
+          val ap = AST.Ap(AST.Ident(s), emb, args.map(unnest(_, true)))
           if(nested) {
             val v = mk()
             reorder(AST.Assignment(v, ap))
@@ -454,12 +402,12 @@ class Normalize(globals: Symbols) {
 
   // reorder assignments as if every def was a cons
   def toConsOrder(e: AST.Expr): AST.Expr = e match {
-    case AST.Assignment(id  @ AST.IdentOrTuple(es), AST.Ap(t, args)) =>
+    case AST.Assignment(id  @ AST.IdentOrTuple(es), AST.Ap(t, emb, args)) =>
       val s = globals(t.s)
-      if(!s.isDef) AST.Assignment(id, ConsAp(t, s, args)) else AST.Assignment(args.head, ConsAp(t, s, args.tail ++ es))
-    case AST.Ap(t, args) =>
+      if(!s.isDef) AST.Assignment(id, ConsAp(t, s, emb, args)) else AST.Assignment(args.head, ConsAp(t, s, emb, args.tail ++ es))
+    case AST.Ap(t, emb, args) =>
       val s = globals(t.s)
-      if(!s.isDef) ConsAp(t, s, args) else AST.Assignment(args.head, ConsAp(t, s, args.tail))
+      if(!s.isDef) ConsAp(t, s, emb, args) else AST.Assignment(args.head, ConsAp(t, s, emb, args.tail))
     case e => e
   }
 
@@ -471,7 +419,7 @@ class Normalize(globals: Symbols) {
       def f(e: AST.Expr): AST.Expr = e match {
         case e: AST.Ident => vars.remove(e).map(f).getOrElse(e)
         case e: AST.Tuple => vars.remove(e).map(f).getOrElse(e)
-        case ConsAp(target, tsym, args) => ConsAp(target, tsym, args.map(f))
+        case ConsAp(target, tsym, emb, args) => ConsAp(target, tsym, emb, args.map(f))
         case AST.Assignment(l, r) => AST.Assignment(f(r), f(l))
       }
       val e2 = f(es.last)

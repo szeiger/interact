@@ -7,7 +7,8 @@ import java.nio.file.{Files, Path}
 
 object AST {
   sealed trait Statement
-  case class Cons(name: String, args: Seq[String], operator: Boolean, ret: Option[String], der: Option[Deriving]) extends Statement {
+  case class Cons(name: String, args: Seq[String], operator: Boolean, embedded: Option[EmbeddedSpec], ret: Option[String], der: Option[Deriving]) extends Statement {
+    def payloadType = embedded.map(_.payloadType).getOrElse(PayloadType.VOID)
     def show: String = {
       val a = if(args.isEmpty) "" else args.mkString("(", ", ", ")")
       val r = if(ret.isEmpty) "" else s" . ${ret.get}"
@@ -15,10 +16,29 @@ object AST {
       s"$name$a$r$d"
     }
   }
+  sealed trait AnyExpr
+  sealed trait EmbeddedExpr extends AnyExpr {
+    def show: String
+  }
+  case class EmbeddedIdent(s: String) extends EmbeddedExpr {
+    def show = s
+  }
+  case class EmbeddedInt(i: Int) extends EmbeddedExpr {
+    def show = i.toString
+  }
+  case class EmbeddedString(s: String) extends EmbeddedExpr {
+    def show = s"\"$s\""
+  }
+  case class EmbeddedAp(methodQN: Seq[String], args: Seq[EmbeddedExpr]) extends EmbeddedExpr {
+    def show = args.mkString(s"${methodQN.mkString(".")}(", ", ", ")")
+    def className = methodQN.init.mkString(".")
+    def methodName = methodQN.last
+  }
+  case class EmbeddedSpec(payloadType: Int, id: Option[String])
   case class Deriving(constructors: Seq[String]) {
     def show = constructors.mkString(", ")
   }
-  trait Expr {
+  trait Expr extends AnyExpr {
     def show: String
     def allIdents: Iterator[Ident]
   }
@@ -38,37 +58,39 @@ object AST {
     def show = exprs.map(_.show).mkString("(", ", ", ")")
     def allIdents: Iterator[Ident] = exprs.iterator.flatMap(_.allIdents)
   }
-  case class Ap(target: Ident, args: Seq[Expr]) extends Expr {
-    def show = args.iterator.map(_.show).mkString(s"${target.show}(", ", ", ")")
+  case class Ap(target: Ident, embedded: Option[EmbeddedExpr], args: Seq[Expr]) extends Expr {
+    def show = args.iterator.map(_.show).mkString(s"${target.show}${embedded.map(s => s"[${s.show}]").getOrElse("")}(", ", ", ")")
     def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   }
-  case class Data(defs: Seq[Expr]) extends Statement {
+  case class Data(defs: Seq[Expr], embDefs: Seq[EmbeddedExpr]) extends Statement {
     def show = defs.map(_.show).mkString(", ")
     var free: Seq[String] = _
   }
-  case class Def(name: String, args: Seq[String], operator: Boolean, ret: Seq[String], rules: Seq[DefRule]) extends Statement {
+  case class Def(name: String, args: Seq[String], operator: Boolean, embedded: Option[EmbeddedSpec], ret: Seq[String], rules: Seq[DefRule]) extends Statement {
+    def payloadType = embedded.map(_.payloadType).getOrElse(PayloadType.VOID)
+    def embeddedId: Option[EmbeddedIdent] = embedded.flatMap(_.id).map(EmbeddedIdent)
     def show: String = {
       val a = if(args.isEmpty) "" else args.map(s => if(s == null) "_" else s).mkString("(", ", ", ")")
       val r = if(ret.isEmpty) "" else if(ret.length == 1) ret.head else ret.mkString("(", ", ", ")")
       s"$name$a: $r"
     }
   }
-  case class DefRule(on: Seq[Expr], reduced: Seq[Expr])
-  case class Match(on: Expr, reduced: Seq[Expr]) extends Statement {
+  case class DefRule(on: Seq[Expr], embRed: Seq[EmbeddedExpr], reduced: Seq[Expr])
+  case class Match(on: Expr, embRed: Seq[EmbeddedExpr], reduced: Seq[Expr]) extends Statement {
     def show = s"${on.show} => ${reduced.map(_.show).mkString(", ")}"
   }
 
   object IdentOrAp {
-    def unapply(e: Expr): Option[(String, Seq[Expr])] = e match {
-      case Ident(s) => Some((s, Nil))
-      case Ap(Ident(s), a) => Some((s, a))
+    def unapply(e: Expr): Option[(String, Option[EmbeddedExpr], Seq[Expr])] = e match {
+      case Ident(s) => Some((s, None, Nil))
+      case Ap(Ident(s), emb, a) => Some((s, emb, a))
       case _ => None
     }
   }
   object SimpleExprSpec {
     def unapply(e: Expr): Option[(String, Seq[Expr])] = e match {
       case Ident(s) => Some((s, Nil))
-      case Ap(Ident(s), a) => Some((s, a))
+      case Ap(Ident(s), _, a) => Some((s, a))
       case Wildcard => Some((null, Nil))
       case Tuple(args) => Some((null, args))
     }
@@ -102,12 +124,17 @@ object Lexical {
   def letter[_: P] = P( CharIn("a-z") | CharIn("A-Z") )
   def digit[_: P] = P( CharIn("0-9") )
   def churchLit[_: P] = P(  digit.rep(1).! ~ "'c"  ).map(_.toInt)
+  def intLit[_: P] = P(  digit.rep(1).!  ).map(_.toInt)
 
   def operator[_: P](precedence: Int): P[String] =
     P(  CharPred(operatorStart(precedence).contains) ~ CharPred(operatorCont.contains).rep  ).!.filter(s => !notAnOperator.contains(s))
 
   def anyOperator[_: P]: P[String] =
     P(  CharPred(operatorCont.contains).rep(1)  ).!.filter(s => !notAnOperator.contains(s))
+
+  def stringLit[_: P]: P[String] = P(  "\"" ~ (stringChar | stringEscape).rep.! ~ "\""  )
+  def stringChar[_: P]: P[Unit] = P( CharsWhile(!s"\\\n\"}".contains(_)) )
+  def stringEscape[_: P]: P[Unit] = P( "\\" ~ AnyChar )
 }
 
 object Parser {
@@ -119,30 +146,44 @@ object Parser {
   def wildcard[_: P]: P[AST.Wildcard.type] = P("_").map(_ => AST.Wildcard)
 
   def church[_: P]: P[AST.Expr] = churchLit.map { i =>
-    (1 to i).foldLeft(AST.Ident("Z"): AST.Expr) { case (z, _) => AST.Ap(AST.Ident("S"), z :: Nil) }
+    (1 to i).foldLeft(AST.Ident("Z"): AST.Expr) { case (z, _) => AST.Ap(AST.Ident("S"), None, z :: Nil) }
   }
 
-  def app[_: P]: P[AST.Ap] =
-    P(  identExpr ~ "(" ~ expr.rep(sep = ",") ~ ")"  ).map(AST.Ap.tupled)
+  def bracketedEmbeddedExpr[_: P]: P[AST.EmbeddedExpr] =
+    P(  "[" ~ embeddedExpr ~ "]"  )
+
+  def embeddedExpr[_: P]: P[AST.EmbeddedExpr] =
+    P(  embeddedAp | embeddedIdent | intLit.map(AST.EmbeddedInt) | stringLit.map(AST.EmbeddedString)  )
+
+  def embeddedAp[_: P]: P[AST.EmbeddedAp] =
+    P(  ident.rep(2, ".") ~ "(" ~ embeddedExpr.rep(0, ",") ~ ")"  ).map(AST.EmbeddedAp.tupled)
+
+  def embeddedIdent[_: P]: P[AST.EmbeddedIdent] =
+    P(  ident.map(AST.EmbeddedIdent)  )
+
+  def appOrIdent[_: P]: P[AST.Expr] =
+    P(  identExpr ~ bracketedEmbeddedExpr.? ~ ("(" ~ expr.rep(sep = ",") ~ ")").?  ).map { case (id, embO, argsO) =>
+      if(embO.isDefined || argsO.isDefined) AST.Ap(id, embO, argsO.getOrElse(Nil)) else id
+    }
 
   def tuple[_: P]: P[AST.Tuple] =
     P(  "(" ~ expr.rep(min = 0, sep = ",") ~ ")"  ).map(AST.Tuple)
 
   def simpleExpr[_: P]: P[AST.Expr] =
-    P(  (app | identExpr | wildcard | church | tuple)  )
+    P(  (appOrIdent | wildcard | church | tuple)  )
 
   def operatorEx[_: P](precedence: Int): P[AST.Expr] = {
     def next = if(precedence == 0) simpleExpr else operatorEx(precedence - 1)
-    P(  next ~ (operator(precedence) ~ next).rep  ).map {
+    P(  next ~ (operator(precedence) ~ bracketedEmbeddedExpr.? ~ next).rep  ).map {
       case (e, Seq()) => e
       case (e, ts) =>
         val right = ts.count(_._1.endsWith(":"))
         if(right == 0)
-          ts.foldLeft(e) { case (z, (o, a)) => AST.Ap(AST.Ident(o), Seq(z, a)) }
+          ts.foldLeft(e) { case (z, (o, oe, a)) => AST.Ap(AST.Ident(o), oe, Seq(z, a)) }
         else if(right == ts.length) {
-          val e2 = ts.last._2
-          val ts2 = ts.map(_._1).zip(e +: ts.map(_._2).init)
-          ts2.foldRight(e2) { case ((o, a), z) => AST.Ap(AST.Ident(o), Seq(a, z)) }
+          val e2 = ts.last._3
+          val ts2 = ts.map(t => (t._1, t._2)).zip(e +: ts.map(_._3).init)
+          ts2.foldRight(e2) { case (((o, oe), a), z) => AST.Ap(AST.Ident(o), oe, Seq(a, z)) }
         } else sys.error("Chained binary operators must have the same associativity")
     }
   }
@@ -165,29 +206,45 @@ object Parser {
   def deriving[_ : P]: P[AST.Deriving] =
     P(  kw("deriving") ~/ "(" ~ ident.rep(0, sep=",") ~ ")" ).map(AST.Deriving)
 
+  def embeddedSpecOpt[_: P]: P[Option[AST.EmbeddedSpec]] =
+  P(  ("[" ~ ident ~ ident.? ~ "]"  ).?  ).map(_.map {
+    case ("int", name) => AST.EmbeddedSpec(PayloadType.INT, name)
+    case ("ref", name) => AST.EmbeddedSpec(PayloadType.REF, name)
+    case (tpe, _) => sys.error(s"Illegal payload type: $tpe")
+  })
+
   def cons[_: P]: P[AST.Cons] =
     P(  kw("cons") ~/ (operatorDef | namedCons) ~ (":" ~ ident).? ~ deriving.?  ).map(AST.Cons.tupled)
 
-  def namedCons[_: P]: P[(String, Seq[String], Boolean)] =
-    P(  ident ~ params(0).?.map(_.getOrElse(Nil))  ).map { case (n, as) => (n, as, false) }
+  def namedCons[_: P]: P[(String, Seq[String], Boolean, Option[AST.EmbeddedSpec])] =
+    P(  ident ~ embeddedSpecOpt ~ params(0).?.map(_.getOrElse(Nil))  ).map { case (n, na, as) => (n, as, false, na) }
 
-  def operatorDef[_: P]: P[(String, Seq[String], Boolean)] =
-    P(  param ~ anyOperator ~ param  ).map { case (a1, o, a2) => (o, Seq(a1, a2), true) }
+  def operatorDef[_: P]: P[(String, Seq[String], Boolean, Option[AST.EmbeddedSpec])] =
+    P(  param ~ anyOperator ~ embeddedSpecOpt ~ param  ).map { case (a1, o, na, a2) => (o, Seq(a1, a2), true, na) }
 
   def definition[_: P]: P[AST.Def] =
     P(  kw("def") ~/ (operatorDef | namedDefinition) ~ (":" ~ defReturn).?.map(_.getOrElse(Nil)) ~ defRule.rep  ).map(AST.Def.tupled)
 
-  def namedDefinition[_: P]: P[(String, Seq[String], Boolean)] =
-    P(  ident ~ params(1)  ).map { case (n, as) => (n, as, false) }
+  def namedDefinition[_: P]: P[(String, Seq[String], Boolean, Option[AST.EmbeddedSpec])] =
+    P(  ident ~ embeddedSpecOpt ~ params(1)  ).map { case (n, na, as) => (n, as, false, na) }
+
+  def reduction[_: P]: P[Seq[AST.AnyExpr]] =
+    P(  (expr | bracketedEmbeddedExpr).rep(1, sep = ",")  )
 
   def defRule[_: P]: P[AST.DefRule] =
-    P(  "|" ~ expr.rep(1, ",") ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.DefRule.tupled)
+    P(  "|" ~ expr.rep(1, ",") ~ "=>" ~ reduction  ).map { case (on, anyRed) =>
+      AST.DefRule(on, anyRed.collect { case e: AST.EmbeddedExpr => e }, anyRed.collect { case e: AST.Expr => e })
+    }
 
   def matchStatement[_: P]: P[AST.Match] =
-    P(  "match" ~ expr ~ "=>" ~ expr.rep(1, sep = ",")  ).map(AST.Match.tupled)
+    P(  "match" ~ expr ~ "=>" ~ reduction  ).map { case (on, anyRed) =>
+      AST.Match(on, anyRed.collect { case e: AST.EmbeddedExpr => e }, anyRed.collect { case e: AST.Expr => e })
+    }
 
   def data[_: P]: P[AST.Data] =
-    P(  kw("let") ~/ expr.rep(1, sep = ",") ).map(AST.Data)
+    P(  kw("let") ~/ (expr | bracketedEmbeddedExpr).rep(1, sep = ",") ).map { es =>
+      AST.Data(es.collect { case e: AST.Expr => e }, es.collect { case e: AST.EmbeddedExpr => e })
+    }
 
   def unit[_: P]: P[Seq[AST.Statement]] =
     P(  Start ~ (cons | data | definition | matchStatement ).rep ~ End  )
