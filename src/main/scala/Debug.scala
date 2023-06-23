@@ -26,10 +26,10 @@ object Debug extends App {
   }
 
   @tailrec def step(): Unit = {
-    println(s"${Colors.cGreen}At step $steps:${Colors.cNormal}")
+    println(s"${MaybeColors.cGreen}At step $steps:${MaybeColors.cNormal}")
     cuts = inter.scope.log(System.out, markCut = (c1, _) => inter.getRuleImpl(c1.pref) != null)
     if(cuts.isEmpty)
-      println(s"${Colors.cGreen}Irreducible after $steps reductions.${Colors.cNormal}")
+      println(s"${MaybeColors.cGreen}Irreducible after $steps reductions.${MaybeColors.cNormal}")
     steps += 1
     readLine() match {
       case None => ()

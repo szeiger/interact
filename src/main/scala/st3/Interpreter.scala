@@ -1,7 +1,7 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, GenericRuleImpl, IntBox, RefBox, PayloadAssigner, PayloadType, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, EmbeddedComputation, GenericRule, GenericRuleBranch, IntBox, PayloadAssigner, PayloadType, RefBox, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.lang.invoke.MethodHandle
@@ -181,13 +181,14 @@ class WireCell(final val sym: Symbol, _symId: Int) extends Cell0V(_symId) {
 }
 
 abstract class RuleImpl {
-  var rule: GenericRuleImpl = _
+  var rule: GenericRule = _
   def reduce(cut: Cell, ptw: PerThreadWorker): Unit
   def cellAllocationCount: Int
 }
 
 final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Int],
-    assigners: Array[PayloadAssigner], embeddedComps: Array[MethodHandle], embeddedArgss: Array[Array[Int]]) extends RuleImpl {
+    assigners: Array[PayloadAssigner], embeddedComps: Array[EmbeddedComputation[Int]], embeddedArgss: Array[scala.collection.Seq[Int]],
+    condComp: EmbeddedComputation[Int], condArgs: scala.collection.Seq[Int], next: RuleImpl) extends RuleImpl {
   override def toString = rule.toString
 
   private[this] def delay(nanos: Int): Unit = {
@@ -197,6 +198,21 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 
   def reduce(cell: Cell, ptw: PerThreadWorker): Unit = {
     val (c1, c2) = if(cell.symId == s1id) (cell, cell.pcell) else (cell.pcell, cell)
+
+    if(condComp != null) {
+      var i = 0
+      val args = new Array[Any](condArgs.length)
+      while(i < condArgs.length) {
+        args(i) = condArgs(i) match {
+          case -1 => c1.getGenericPayload
+          case -2 => c2.getGenericPayload
+        }
+        i += 1
+      }
+      val b = condComp.invoke(args).asInstanceOf[Boolean]
+      if(!b) return next.reduce(cell, ptw)
+    }
+
     val cells = ptw.tempCells
     val cccells = ptw.cutCacheCells
     val ccports = ptw.cutCachePorts
@@ -232,7 +248,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
           }
           i += 1
         }
-        embeddedComp.invokeWithArguments(args: _*)
+        embeddedComp.invoke(args)
         j += 1
       }
     }
@@ -324,6 +340,15 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
   def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
 
+  def createInterpretedRuleImpl(g: GenericRule, b: GenericRuleBranch, next: Option[RuleImpl]): RuleImpl = {
+    val pcs = b.cells.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType)))
+    val embArgs = b.embeddedComps.map(_.argIndices)
+    val condArgs = b.condition.map(_.argIndices)
+    new InterpretedRuleImpl(getSymbolId(g.sym1), pcs, b.freeWiresPacked, b.connectionsPacked, b.assigners,
+      if(b.embeddedComps.isEmpty) null else b.embeddedComps.toArray, if(embArgs.isEmpty) null else embArgs.toArray,
+      b.condition.orNull, condArgs.orNull, next.orNull)
+  }
+
   def createRuleImpls(): (Array[RuleImpl], Int, Int) = {
     val (cl, codeGen) =
       if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/st3/gen", debugBytecode))
@@ -331,7 +356,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxA = new ParSupport.AtomicCounter
     ParSupport.foreach(rules) { cr =>
-      val g = GenericRuleImpl(cr, globals)
+      val g = GenericRule(getClass.getClassLoader, cr, globals)
       if(debugLog) g.log()
       val ri =
         if(compile) codeGen.compile(g, cl)(this)
@@ -339,11 +364,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
           maxC.max(g.maxCells)
           maxA.max(g.arity1)
           maxA.max(g.arity2)
-          val pcs = g.cells.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType)))
-          val embMhs = g.embeddedComps.map(_.getMethod(getClass.getClassLoader))
-          val embArgs = g.embeddedComps.map(_.argIndices)
-          new InterpretedRuleImpl(getSymbolId(g.sym1), pcs, g.freeWiresPacked, g.connectionsPacked, g.assigners,
-            if(embMhs.isEmpty) null else embMhs.toArray, if(embArgs.isEmpty) null else embArgs.toArray)
+          g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(g, b, Option(z)) }
         }
       ri.rule = g
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri

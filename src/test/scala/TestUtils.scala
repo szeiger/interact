@@ -18,7 +18,7 @@ object TestUtils {
     model.setData(inter)
     val steps = inter.reduce()
     val out = new ByteArrayOutputStream()
-    inter.scope.log(new PrintStream(out, true, StandardCharsets.UTF_8))
+    inter.scope.log(new PrintStream(out, true, StandardCharsets.UTF_8), color = false)
     val s = out.toString(StandardCharsets.UTF_8)
     val checkFile = Path.of(basePath+".check")
     if(Files.exists(checkFile)) {

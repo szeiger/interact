@@ -40,18 +40,20 @@ abstract class Scope[Cell] { self =>
       }
     }
     val embComp = data.embDefs.map { ee =>
-      EmbeddedComputation.apply(ee)(data.show) { as =>
-        if((as.distinct.length != as.length) || as.exists(a => !foundEmbIds.contains(a)))
-          sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
-        as.map(foundEmbIds.remove(_).get)
+      val as = mutable.HashMap.empty[String, Int]
+      val ec = EmbeddedComputation.apply(getClass.getClassLoader, ee)(data.show) { a =>
+        as.put(a, as.getOrElse(a, 0) + 1)
+        foundEmbIds.remove(a) match {
+          case Some(s) => s
+          case None => sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
+        }
       }
+      if(as.exists(_._2 != 1))
+        sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
+      ec
     }
     if(foundEmbIds.nonEmpty) sys.error(s"Non-linear variable use of ${foundEmbIds.mkString(", ")} in data ${data.show}")
-    embComp.foreach { e =>
-      val mh = e.getMethod(getClass.getClassLoader)
-      mh.invokeWithArguments(e.argIndices: _*)
-    }
-
+    embComp.foreach { e => e.invoke(e.argIndices) }
   }
 
   def addExprs(defs: Iterable[AST.Expr], syms: Symbols): Unit = {
@@ -143,8 +145,9 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     s.iterator
   }
 
-  def log(out: PrintStream, prefix: String = "  ", markCut: (Cell, Cell) => Boolean = (_, _) => false): mutable.ArrayBuffer[Cell] = {
-    import Colors._
+  def log(out: PrintStream, prefix: String = "  ", markCut: (Cell, Cell) => Boolean = (_, _) => false, color: Boolean = true): mutable.ArrayBuffer[Cell] = {
+    val colors = if(color) MaybeColors else NoColors
+    import colors._
     val cuts = mutable.ArrayBuffer.empty[Cell]
     def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
     val stack = mutable.Stack.from(freeWires.toIndexedSeq.sortBy(c => getSymbol(c).id).map(c => getConnected(c, -1)._1))
@@ -226,7 +229,24 @@ object PayloadType {
   final val PAYLOAD_TYPES_COUNT = 3
 }
 
-object Colors {
+abstract class Colors {
+  def cNormal: String
+  def cBlack: String
+  def cRed: String
+  def cGreen: String
+  def cYellow: String
+  def cBlue: String
+  def cMagenta: String
+  def cCyan: String
+  def bRed: String
+  def bGreen: String
+  def bYellow: String
+  def bBlue: String
+  def bMagenta: String
+  def bCyan: String
+}
+
+object MaybeColors extends Colors {
   val useColors: Boolean = System.getProperty("interact.colors", "true").toBoolean
 
   val (cNormal, cBlack, cRed, cGreen, cYellow, cBlue, cMagenta, cCyan) =
@@ -235,4 +255,8 @@ object Colors {
   val (bRed, bGreen, bYellow, bBlue, bMagenta, bCyan) =
     if(useColors) ("\u001B[41m", "\u001B[42m", "\u001B[43m", "\u001B[44m", "\u001B[45m", "\u001B[46m")
     else ("", "", "", "", "", "")
+}
+
+object NoColors extends Colors {
+  val cNormal, cBlack, cRed, cGreen, cYellow, cBlue, cMagenta, cCyan, bRed, bGreen, bYellow, bBlue, bMagenta, bCyan = ""
 }

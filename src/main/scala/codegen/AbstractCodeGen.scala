@@ -1,6 +1,6 @@
 package de.szeiger.interact.codegen
 
-import de.szeiger.interact.{GenericRuleImpl, RuleImplFactory, Symbol, SymbolIdLookup}
+import de.szeiger.interact.{GenericRule, RuleImplFactory, Symbol, SymbolIdLookup}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.util.{Textifier, TraceClassVisitor}
 import org.objectweb.asm.{ClassReader, ClassWriter}
@@ -29,12 +29,12 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
     b.result()
   }
 
-  def compile(g: GenericRuleImpl, cl: LocalClassLoader): RuleImplFactory[RI] = {
+  def compile(g: GenericRule, cl: LocalClassLoader): RuleImplFactory[RI] = {
     val name1 = encodeName(g.sym1.id)
     val name2 = encodeName(g.sym2.id)
     val implClassName = s"$genPackage/Rule_$name1$$_$name2"
     val factClassName = s"$genPackage/RuleFactory_$name1$$_$name2"
-    val syms = (Iterator.single(g.sym1) ++ g.cells.iterator).distinct.toArray
+    val syms = (Iterator.single(g.sym1) ++ g.branches.iterator.flatMap(_.cells)).distinct.toArray
     val sids = syms.iterator.zipWithIndex.toMap
     val (ric, sidFields) = createRuleClassBase(implClassName, riT, sids)
     implementRuleClass(ric, sids, sidFields, g)
@@ -57,7 +57,7 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
     cl.defineClass(name, raw)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRuleImpl): Unit
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRule): Unit
 
   private def createFactoryClass(implClass: ClassDSL, factClassName: String, names: Seq[String]): ClassDSL = {
     val implClassT = implClass.thisTp

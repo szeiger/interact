@@ -5,6 +5,7 @@ import de.szeiger.interact.mt.BitOps._
 import java.lang.invoke.{MethodHandle, MethodHandles}
 import java.lang.reflect.Modifier
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 case class Connection(c1: Idx, c2: Idx) { def str = s"${c1.str} <-> ${c2.str}" }
 
@@ -37,9 +38,34 @@ class RefLHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
 class RefRHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(rhs.asInstanceOf[RefBox].getValue)
 }
+class EmbeddedComputationAssigner(_cellIdx: Int, ec: EmbeddedComputation[Int]) extends PayloadAssigner(_cellIdx) {
+  def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = {
+    val args = ec.argIndices.map {
+      case -1 => lhs match {
+        case c: RefBox => c.getValue
+        case c: IntBox => c.getValue
+      }
+      case -2 => rhs match {
+        case c: RefBox => c.getValue
+        case c: IntBox => c.getValue
+      }
+    }
+    val v = ec.invoke(args)
+    target match {
+      case c: RefBox => c.setValue(v.asInstanceOf[AnyRef])
+      case c: IntBox => c.setValue(v.asInstanceOf[Int])
+    }
+  }
+}
 
-final class EmbeddedComputation[A](cls: String, method: String, consts: Iterable[(Int, Any)], val argIndices: A) {
-  def getMethod(cl: ClassLoader): MethodHandle = {
+abstract class EmbeddedComputation[A](val argIndices: scala.collection.Seq[A]) {
+  def invoke(args: scala.collection.Seq[Any]): Any
+  def argArity: Int = argIndices.length
+}
+
+final class EmbeddedMethodApplication[A](cl: ClassLoader, cls: String, method: String, consts: Iterable[(Int, Any)],
+  _argIndices: scala.collection.IndexedSeq[A], subComps: Array[EmbeddedComputation[A]]) extends EmbeddedComputation(_argIndices) {
+  private val mh: MethodHandle = {
     val c = cl.loadClass(cls)
     val m = c.getMethods.find(_.getName == method).getOrElse(sys.error(s"Method $method not found in $cls"))
     var mh = MethodHandles.lookup().unreflect(m)
@@ -47,14 +73,42 @@ final class EmbeddedComputation[A](cls: String, method: String, consts: Iterable
     for((pos, v) <- consts) mh = MethodHandles.insertArguments(mh, pos, v)
     mh
   }
+  def invoke(args: scala.collection.Seq[Any]): Any = {
+    if(subComps == null) mh.invokeWithArguments(args.asJava)
+    else {
+      var i, j = 0
+      val mhArgs = new Array[Any](subComps.length)
+      while(i < mhArgs.length) {
+        if(subComps(i) == null) {
+          mhArgs(i) = args(j)
+          j += 1
+        } else {
+          val sub = subComps(i)
+          val sa = sub.argArity
+          val subArgs = args.slice(j, j+sa)
+          j += sa
+          mhArgs(i) = sub.invoke(subArgs)
+        }
+        i += 1
+      }
+      mh.invokeWithArguments(mhArgs: _*)
+    }
+  }
 }
 
 object EmbeddedComputation {
-  def apply[A](e: AST.EmbeddedExpr)(creator: => String)(handleArgs: IndexedSeq[String] => A): EmbeddedComputation[A] = e match {
+  private[this] val operators = Map(
+    "==" -> (Intrinsics.getClass.getName, "eq"),
+    "+" -> (Intrinsics.getClass.getName, "intAdd"),
+    "-" -> (Intrinsics.getClass.getName, "intSub"),
+  )
+
+  def apply[A](cl: ClassLoader, e: AST.EmbeddedExpr)(creator: => String)(handleArg: String => A): EmbeddedComputation[A] = e match {
     case emb @ AST.EmbeddedAp(_, args) =>
       val consts = mutable.ArrayBuffer.empty[(Int, Any)]
-      val vars = mutable.ArrayBuffer.empty[String]
+      val argIndices = mutable.ArrayBuffer.empty[A]
       var offset = 0
+      var subComps: Array[EmbeddedComputation[A]] = null
       args.zipWithIndex.foreach {
         case (AST.EmbeddedInt(v), i) =>
           consts += ((i-offset, v))
@@ -63,27 +117,29 @@ object EmbeddedComputation {
           consts += ((i-offset, v))
           offset += 1
         case (AST.EmbeddedIdent(id), _) =>
-          vars += id
-        case (e, _) =>
-          sys.error(s"Argument $e of embedded computation must be a literal or variable in $creator")
+          argIndices += handleArg(id)
+        case (a: AST.EmbeddedAp, i) =>
+          if(subComps == null) subComps = new Array(args.length)
+          val sub = apply(cl, a)(creator)(handleArg)
+          subComps(i) = sub
+          argIndices ++= sub.argIndices
       }
-      new EmbeddedComputation(emb.className, emb.methodName, consts, handleArgs(vars.toIndexedSeq))
+      val (cln, mn) = emb.methodQN match {
+        case Seq(op) => operators(op)
+        case _ => (emb.className, emb.methodName)
+      }
+      new EmbeddedMethodApplication(cl, cln, mn, consts, argIndices, subComps)
     case _ => sys.error(s"Embedded computation must be a method call in $creator")
-
   }
 }
 
-final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
+final class GenericRuleBranch(arity1: Int,
   val cells: Array[Symbol], val connectionsPacked: Array[Int],
   val freeWiresPacked: Array[Int],
   val assigners: Array[PayloadAssigner],
-  val embeddedComps: Seq[EmbeddedComputation[Array[Int]]]) {
+  val embeddedComps: Seq[EmbeddedComputation[Int]],
+  val condition: Option[EmbeddedComputation[Int]]) {
 
-  def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
-  def arity1: Int = sym1.arity
-  def arity2: Int = sym2.arity
-  def maxCells: Int = cells.length
-  def maxWires: Int = connectionsPacked.length + freeWiresPacked.length
   lazy val (freeWiresPacked1, freWiresPacked2) = freeWiresPacked.splitAt(arity1)
 
   private[this] def mkFreeIdx(idx: Int): FreeIdx = {
@@ -123,24 +179,16 @@ final class GenericRuleImpl(val sym1: Symbol, val sym2: Symbol,
   }
 
   def log(): Unit = {
-    println(s"Rule ${sym1.id} ${sym2.id}")
-    println("  Cells:")
-    cells.zipWithIndex.foreach { case (sym, idx) => println(s"    [$idx] $sym ${sym.arity}") }
-    println("  Connections:")
-    (internalConns ++ wireConnsDistinct).foreach { c => println(s"    ${c.str}") }
+    println(s"  Branch:")
+    println("    Cells:")
+    cells.zipWithIndex.foreach { case (sym, idx) => println(s"      [$idx] $sym ${sym.arity}") }
+    println("    Connections:")
+    (internalConns ++ wireConnsDistinct).foreach { c => println(s"      ${c.str}") }
   }
-
-  override def toString: String = s"$sym1 . $sym2"
 }
 
-object GenericRuleImpl {
-  def apply[C](cr: CheckedRule, globals: Symbols): GenericRuleImpl = cr match {
-    case dr: DerivedRule if dr.name1 == "erase" => deriveErase(dr.name2, globals)
-    case dr: DerivedRule if dr.name1 == "dup" => deriveDup(dr.name2, globals)
-    case cr: CheckedMatchRule => apply(cr, globals)
-  }
-
-  def apply[C](cr: CheckedMatchRule, globals: Symbols): GenericRuleImpl = {
+object GenericRuleBranch {
+  def apply[C](cl: ClassLoader, cr: CheckedMatchRule, red: AST.Reduction, globals: Symbols): GenericRuleBranch = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val cells = mutable.ArrayBuffer.empty[Symbol]
@@ -154,10 +202,18 @@ object GenericRuleImpl {
     val embIdsUsed = mutable.HashSet.empty[String]
     val cellEmbIds = mutable.HashMap.empty[String, Int]
     val shouldUseEmbIds = mutable.HashSet.empty[String]
-    if(globals(cr.name1).payloadType == PayloadType.REF) shouldUseEmbIds += (if(lhsEmbId != null) lhsEmbId else "$unnamedLHS")
-    if(globals(cr.name2).payloadType == PayloadType.REF) shouldUseEmbIds += (if(rhsEmbId != null) rhsEmbId else "$unnamedRHS")
+    val lhsPayloadType = globals(cr.name1).payloadType
+    val rhsPayloadType = globals(cr.name2).payloadType
+    if(lhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(lhsEmbId != null) lhsEmbId else "$unnamedLHS")
+    if(rhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(rhsEmbId != null) rhsEmbId else "$unnamedRHS")
     if(lhsEmbId != null) cellEmbIds.put(lhsEmbId, -1)
     if(rhsEmbId != null) cellEmbIds.put(rhsEmbId, -2)
+    def payloadTypeForEmbeddedIdent(s: String): Int = cellEmbIds(s) match {
+      case -1 => lhsPayloadType
+      case -2 => rhsPayloadType
+      case -2 => rhsPayloadType
+      case i => cells(i).payloadType
+    }
     val sc = new Scope[Int] {
       override def createCell(sym: Symbol, emb: Option[AST.EmbeddedExpr]): Int = {
         if(sym.isCons) {
@@ -168,29 +224,48 @@ object GenericRuleImpl {
             case Some(AST.EmbeddedInt(i)) => assigners += new IntConstAssigner(cellIdx, i)
             case Some(AST.EmbeddedString(s)) => assigners += new RefConstAssigner(cellIdx, s)
             case Some(e @ AST.EmbeddedIdent(id)) if id == lhsEmbId =>
-              if(embIdsUsed.contains(lhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
-              embIdsUsed += lhsEmbId
               assigners += (sym.payloadType match {
                 case PayloadType.INT => new IntLHSMover(cellIdx)
-                case PayloadType.REF => new RefLHSMover(cellIdx)
+                case PayloadType.REF =>
+                  if(embIdsUsed.contains(lhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
+                  embIdsUsed += lhsEmbId
+                  new RefLHSMover(cellIdx)
               })
             case Some(e @ AST.EmbeddedIdent(id)) if id == rhsEmbId =>
-              if(embIdsUsed.contains(rhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
-              embIdsUsed += rhsEmbId
               assigners += (sym.payloadType match {
                 case PayloadType.INT => new IntRHSMover(cellIdx)
-                case PayloadType.REF => new RefRHSMover(cellIdx)
+                case PayloadType.REF =>
+                  if(embIdsUsed.contains(rhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
+                  embIdsUsed += rhsEmbId
+                  new RefRHSMover(cellIdx)
               })
             case Some(e @ AST.EmbeddedIdent(id)) =>
               embId = id
               if(cellEmbIds.put(id, cellIdx).isDefined)
                 sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Duplicate use of variable")
+            case Some(e: AST.EmbeddedAp) =>
+              val ec = EmbeddedComputation[Int](cl, e)(cr.show) { a =>
+                if(a == lhsEmbId) {
+                  if(lhsPayloadType == PayloadType.REF) {
+                    if(embIdsUsed.contains(lhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
+                    embIdsUsed += lhsEmbId
+                  }
+                  -1
+                } else if(a == rhsEmbId) {
+                  if(rhsPayloadType == PayloadType.REF) {
+                    if(embIdsUsed.contains(rhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
+                    embIdsUsed += rhsEmbId
+                  }
+                  -2
+                } else sys.error(s"Invalid payload expression ${e.show} in ${cr.show}")
+              }
+              assigners += new EmbeddedComputationAssigner(cellIdx, ec)
             case Some(e) =>
               sys.error(s"Invalid payload expression ${e.show} in ${cr.show}")
             case None =>
               embId = "$unnamedCell" + cellIdx
           }
-          if(sym.hasPayload && embId != null) shouldUseEmbIds += embId
+          if(sym.payloadType == PayloadType.REF && embId != null) shouldUseEmbIds += embId
           cellIdx
         } else freeLookup(sym)
       }
@@ -204,37 +279,65 @@ object GenericRuleImpl {
         }
       }
     }
-    sc.addExprs(cr.connected, syms)
-    val embComp = cr.embRed.map { ee =>
-      EmbeddedComputation(ee)(cr.show) { as =>
-        if((as.distinct.length != as.length) || as.exists(embIdsUsed.contains(_)))
-          sys.error(s"Non-linear variable use in embedded method call ${ee.show} in rule ${cr.show}")
-        embIdsUsed ++= as
-        as.map(cellEmbIds).toArray
-      }
+    sc.addExprs(red.reduced, syms)
+    val embComp = red.embRed.map { ee =>
+      val as = mutable.ArrayBuffer.empty[String]
+      val ec = EmbeddedComputation(cl, ee)(cr.show) { a => as += a; cellEmbIds(a) }
+      val refAs = as.filter(s => payloadTypeForEmbeddedIdent(s) == PayloadType.REF)
+      if((refAs.distinct.length != refAs.length) || refAs.exists(embIdsUsed.contains))
+        sys.error(s"Non-linear use of ref in embedded expression ${ee.show} in rule ${cr.show}")
+      embIdsUsed ++= refAs
+      ec
     }
+    val cond = red.cond.map { ee => EmbeddedComputation(cl, ee)(cr.show)(cellEmbIds(_)) }
     val unusedEmbIds = shouldUseEmbIds -- embIdsUsed
-    if(unusedEmbIds.nonEmpty) sys.error(s"Unused variable(s) ${unusedEmbIds.mkString(", ")} in rule ${cr.show}")
-    new GenericRuleImpl(globals(cr.name1), globals(cr.name2), cells.toArray, conns.toArray, fwp, assigners.toArray, embComp)
+    if(unusedEmbIds.nonEmpty) sys.error(s"Unused ref(s) ${unusedEmbIds.mkString(", ")} in rule ${cr.show}")
+    new GenericRuleBranch(globals(cr.name1).arity, cells.toArray, conns.toArray, fwp, assigners.toArray, embComp, cond)
+  }
+}
+
+final class GenericRule(val sym1: Symbol, val sym2: Symbol, val branches: Seq[GenericRuleBranch]) {
+  def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
+  def arity1: Int = sym1.arity
+  def arity2: Int = sym2.arity
+  def maxCells: Int = branches.iterator.map(_.cells.length).max
+  def maxWires: Int = branches.iterator.map(b => b.connectionsPacked.length + b.freeWiresPacked.length).max
+
+  def log(): Unit = {
+    println(s"Rule ${sym1.id} ${sym2.id}")
+    branches.foreach(_.log())
   }
 
-  def deriveErase(name: String, globals: Symbols): GenericRuleImpl = {
+  override def toString: String = s"$sym1 . $sym2"
+}
+
+object GenericRule {
+  def apply[C](cl: ClassLoader, cr: CheckedRule, globals: Symbols): GenericRule = cr match {
+    case dr: DerivedRule if dr.name1 == "erase" => deriveErase(cl, dr.name2, globals)
+    case dr: DerivedRule if dr.name1 == "dup" => deriveDup(cl, dr.name2, globals)
+    case cr: CheckedMatchRule => apply(cl, cr, globals)
+  }
+
+  def apply[C](cl: ClassLoader, cr: CheckedMatchRule, globals: Symbols): GenericRule =
+    new GenericRule(globals(cr.name1), globals(cr.name2), cr.reduction.map(r => GenericRuleBranch(cl, cr, r, globals)))
+
+  def deriveErase(cl: ClassLoader, name: String, globals: Symbols): GenericRule = {
     val sym = globals(name)
     val eraseSym = globals("erase")
     val cells = Array.fill(sym.arity)(eraseSym)
     val fwp = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
     val embComp = sym.payloadType match {
-      case PayloadType.REF => Seq(new EmbeddedComputation(classOf[Intrinsics.type].getName, "eraseRef", Nil, Array(-2)))
+      case PayloadType.REF => Seq(new EmbeddedMethodApplication(cl, classOf[Intrinsics.type].getName, "eraseRef", Nil, Array(-2), null))
       case _ => Nil
     }
-    new GenericRuleImpl(eraseSym, sym, cells, Array.empty, fwp, Array(), embComp)
+    new GenericRule(eraseSym, sym, Seq(new GenericRuleBranch(0, cells, Array.empty, fwp, Array(), embComp, None)))
   }
 
-  def deriveDup(name: String, globals: Symbols): GenericRuleImpl = {
+  def deriveDup(cl: ClassLoader, name: String, globals: Symbols): GenericRule = {
     val sym = globals(name)
     val dupSym = globals("dup")
     if(name == "dup")
-      new GenericRuleImpl(dupSym, sym, Array.empty, Array.empty, Array(checkedIntOfShorts(-3, -1), checkedIntOfShorts(-4, -1)), Array(), Nil)
+      new GenericRule(dupSym, sym, Seq(new GenericRuleBranch(2, Array.empty, Array.empty, Array(checkedIntOfShorts(-3, -1), checkedIntOfShorts(-4, -1)), Array(), Nil, None)))
     else {
       val cells = Array.fill(sym.arity)(dupSym) ++ Array.fill(2)(sym)
       val conns = new Array[Int](sym.arity*2)
@@ -245,10 +348,10 @@ object GenericRuleImpl {
       val fwp1 = Array[Int](checkedIntOfShorts(sym.arity, -1), checkedIntOfShorts(sym.arity+1, -1))
       val fwp2 = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
       val embComp = sym.payloadType match {
-        case PayloadType.REF => Seq(new EmbeddedComputation(classOf[Intrinsics.type].getName, "dupRef", Nil, Array(-2, sym.arity, sym.arity+1)))
+        case PayloadType.REF => Seq(new EmbeddedMethodApplication(cl, classOf[Intrinsics.type].getName, "dupRef", Nil, Array(-2, sym.arity, sym.arity+1), null))
         case _ => Nil
       }
-      new GenericRuleImpl(dupSym, sym, cells, conns, fwp1 ++ fwp2, Array(), embComp)
+      new GenericRule(dupSym, sym, Seq(new GenericRuleBranch(2, cells, conns, fwp1 ++ fwp2, Array(), embComp, None)))
     }
   }
 }

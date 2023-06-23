@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, Symbol}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
@@ -36,16 +36,18 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val new_CellSpec_I = cellSpecTs.map(_.constr(tp.m(tp.I).V))
   private val new_WireRef_LILI = wrT.constr(tp.m(cellT, tp.I, cellT, tp.I).V)
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRuleImpl): Unit = {
-    val internalConns = g.internalConns.toArray
-    val allConns = (g.wireConnsDistinct ++ internalConns.iterator).toArray
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRule): Unit = {
+    assert(g.branches.length == 1)
+    val branch = g.branches.head
+    val internalConns = branch.internalConns.toArray
+    val allConns = (branch.wireConnsDistinct ++ internalConns.iterator).toArray
     var cellAllocations, wireAllocations = 0
 
     val (reuse1, reuse2, fullReuseConn) = {
-      val matchingArity1 = g.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }.map(_._2).toSet
-      val matchingArity2 = g.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }.map(_._2).toSet
-      val matchingSym1 = matchingArity1.filter(i => g.cells(i) == g.sym1)
-      val matchingSym2 = matchingArity2.filter(i => g.cells(i) == g.sym2)
+      val matchingArity1 = branch.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }.map(_._2).toSet
+      val matchingArity2 = branch.cells.iterator.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }.map(_._2).toSet
+      val matchingSym1 = matchingArity1.filter(i => branch.cells(i) == g.sym1)
+      val matchingSym2 = matchingArity2.filter(i => branch.cells(i) == g.sym2)
       val matchingSyms = matchingSym1 ++ matchingSym2
       // Find principal connection with both cut cells to reuse
       val fullReuseConn = internalConns.find {
@@ -55,12 +57,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       }.orNull
       val(reuse1, reuse2) = if(fullReuseConn != null) {
         val Connection(CellIdx(i1, _), CellIdx(i2, _)) = fullReuseConn
-        if(g.cells(i1) == g.sym1) (i1, i2) else (i2, i1)
+        if(branch.cells(i1) == g.sym1) (i1, i2) else (i2, i1)
       } else {
         // Find individual cells for reuse (with potential relabeling)
         val sameA = g.sym1.arity == g.sym2.arity
-        var matchingArity1 = g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }
-        var matchingArity2 = g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }
+        var matchingArity1 = branch.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym1.arity }
+        var matchingArity2 = branch.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.sym2.arity }
         // Find full Symbol matches first
         var match1 = matchingArity1.find { case (sym, _) => sym == g.sym1 }.orNull
         if(match1 != null && sameA) matchingArity2 = matchingArity2.filter(_._2 != match1._2)
@@ -140,7 +142,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       m.aload(m.receiver).getfield(sidFields(sids(sym)))
       m.invokevirtual(cell_symIdSetter)
     }
-    val cells = g.cells.zipWithIndex.map {
+    val cells = branch.cells.zipWithIndex.map {
       case (sym, idx) if idx == reuse1 =>
         if(sym != g.sym1) updateSym(cLeft, sym)
         cLeft
@@ -173,7 +175,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         if((!skip1 && !skip2) || i2.port == -1) { //TODO: Allow i2.port == -1 and check for cut
           val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
           m.aload(ptw).aload(l).aload(cells(i2.idx))
-          ptwConnectLL(g.cells(i2.idx).arity, i2.port)
+          ptwConnectLL(branch.cells(i2.idx).arity, i2.port)
           if(i2.port < 0) deferred += l
         }
       }
@@ -188,9 +190,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
           if(reuseWire != VarIdx.none) {
             val (c1, c2) = if(i1.port > i2.port) (i1, i2) else (i2, i1)
             m.aload(ptw).aload(reuseWire).aload(cells(c1.idx))
-            ptwConnectLL(g.cells(c1.idx).arity, c1.port)
+            ptwConnectLL(branch.cells(c1.idx).arity, c1.port)
             m.aload(ptw).aload(reuseWire).invokevirtual(wr_oppo).aload(cells(c2.idx))
-            ptwConnectLL(g.cells(c2.idx).arity, c2.port)
+            ptwConnectLL(branch.cells(c2.idx).arity, c2.port)
             reuseWireDeferred = (reuseWire, (if(i1.port < 0) 1 else 0) + (if(i2.port < 0) 1 else 0))
             reuseWire = VarIdx.none
           } else {
@@ -204,11 +206,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         m.aload(ptw)
         m.aload(cells(i1.idx))
         if(i1.port < 0) m.invokevirtual(cell_pref)
-        else getAuxRef(g.cells(i1.idx).arity, i1.port)
+        else getAuxRef(branch.cells(i1.idx).arity, i1.port)
         m.invokevirtual(wr_oppo)
         val o = m.dup.storeAnonLocal(wrT)
         m.aload(cells(i2.idx))
-        ptwConnectLL(g.cells(i2.idx).arity, i2.port)
+        ptwConnectLL(branch.cells(i2.idx).arity, i2.port)
         reuseWireDeferred = (o, (if(i1.port < 0) 1 else 0) + (if(i2.port < 0) 1 else 0))
       }
       (idx1, idx2) match {

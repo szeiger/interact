@@ -30,7 +30,7 @@ object AST {
     def show = s"\"$s\""
   }
   case class EmbeddedAp(methodQN: Seq[String], args: Seq[EmbeddedExpr]) extends EmbeddedExpr {
-    def show = args.mkString(s"${methodQN.mkString(".")}(", ", ", ")")
+    def show = args.map(_.show).mkString(s"${methodQN.mkString(".")}(", ", ", ")")
     def className = methodQN.init.mkString(".")
     def methodName = methodQN.last
   }
@@ -75,9 +75,18 @@ object AST {
       s"$name$a: $r"
     }
   }
-  case class DefRule(on: Seq[Expr], embRed: Seq[EmbeddedExpr], reduced: Seq[Expr])
-  case class Match(on: Expr, embRed: Seq[EmbeddedExpr], reduced: Seq[Expr]) extends Statement {
-    def show = s"${on.show} => ${reduced.map(_.show).mkString(", ")}"
+  case class DefRule(on: Seq[Expr], reduced: Seq[Reduction]) {
+    def show = s"${on.map(_.show).mkString(", ")} ${Reduction.show(reduced)}"
+  }
+  case class Match(on: Expr, reds: Seq[Reduction]) extends Statement {
+    def show = s"${on.show} ${Reduction.show(reds)}"
+  }
+  case class Reduction(cond: Option[EmbeddedExpr], embRed: Seq[EmbeddedExpr], reduced: Seq[Expr]) {
+    def show(singular: Boolean) = s"${cond.map(e => s"if [${e.show}] ").getOrElse(if(singular) "" else "else ")}=> ${(embRed.map(_.show) ++ reduced.map(_.show)).mkString(", ")}"
+  }
+  object Reduction {
+    def show(rs: Seq[Reduction]) =
+      if(rs.length == 1) rs.head.show(true) else rs.map(_.show(false)).mkString(" ")
   }
 
   object IdentOrAp {
@@ -107,39 +116,74 @@ object AST {
 object Lexical {
   import NoWhitespace._
 
-  val keywords = Set("cons", "let", "deriving", "def", "match", "_")
-  private val operatorStart = IndexedSeq(Set('*', '/', '%'), Set('+', '-'), Set(':'), Set('<', '>'), Set('&'), Set('^'), Set('|'))
+  val reservedTokens = Set("cons", "let", "deriving", "def", "if", "else", "match", "_", ":", "=", "=>", "|")
+  private val operatorStart = IndexedSeq(Set('*', '/', '%'), Set('+', '-'), Set(':'), Set('<', '>'), Set('=', '!'), Set('&'), Set('^'), Set('|'))
   private val operatorCont = operatorStart.iterator.flatten.toSet
-  private val notAnOperator = Set(":", "=", "=>", "|")
   val MaxPrecedence = operatorStart.length-1
 
   def precedenceOf(s: String): Int =
-    if(notAnOperator.contains(s) || !s.forall(operatorCont.contains)) -1
+    if(reservedTokens.contains(s) || !s.forall(operatorCont.contains)) -1
     else { val c = s.charAt(0); operatorStart.indexWhere(_.contains(c)) }
   def isRightAssoc(s: String): Boolean = s.endsWith(":")
 
   def ident[_: P]: P[String] =
-     P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!keywords.contains(_))
+     P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!reservedTokens.contains(_))
   def kw[_: P](s: String) = P(  s ~ !(letter | digit | "_")  )
   def letter[_: P] = P( CharIn("a-z") | CharIn("A-Z") )
   def digit[_: P] = P( CharIn("0-9") )
   def churchLit[_: P] = P(  digit.rep(1).! ~ "'c"  ).map(_.toInt)
-  def intLit[_: P] = P(  digit.rep(1).!  ).map(_.toInt)
+  def intLit[_: P] = P(  (("-").? ~ digit.rep(1)).!  ).map(_.toInt)
 
   def operator[_: P](precedence: Int): P[String] =
-    P(  CharPred(operatorStart(precedence).contains) ~ CharPred(operatorCont.contains).rep  ).!.filter(s => !notAnOperator.contains(s))
+    P(  CharPred(operatorStart(precedence).contains) ~ CharPred(operatorCont.contains).rep  ).!.filter(s => !reservedTokens.contains(s))
 
   def anyOperator[_: P]: P[String] =
-    P(  CharPred(operatorCont.contains).rep(1)  ).!.filter(s => !notAnOperator.contains(s))
+    P(  CharPred(operatorCont.contains).rep(1)  ).!.filter(s => !reservedTokens.contains(s))
 
   def stringLit[_: P]: P[String] = P(  "\"" ~ (stringChar | stringEscape).rep.! ~ "\""  )
   def stringChar[_: P]: P[Unit] = P( CharsWhile(!s"\\\n\"}".contains(_)) )
   def stringEscape[_: P]: P[Unit] = P( "\\" ~ AnyChar )
 }
 
+object EmbeddedSyntax {
+  import ScriptWhitespace._
+  import Lexical._
+
+  def embeddedExpr[_: P]: P[AST.EmbeddedExpr] = P(  embeddedOperatorExpr(MaxPrecedence)  )
+
+  def embeddedAp[_: P]: P[AST.EmbeddedAp] =
+    P(  ident.rep(2, ".") ~ "(" ~ embeddedExpr.rep(0, ",") ~ ")"  ).map(AST.EmbeddedAp.tupled)
+
+  def embeddedIdent[_: P]: P[AST.EmbeddedIdent] =
+    P(  ident.map(AST.EmbeddedIdent)  )
+
+  def bracketedEmbeddedExpr[_: P]: P[AST.EmbeddedExpr] =
+    P(  "[" ~ embeddedExpr ~ "]"  )
+
+  def simpleEmbeddedExpr[_: P]: P[AST.EmbeddedExpr] =
+    P(  embeddedAp | embeddedIdent | intLit.map(AST.EmbeddedInt) | stringLit.map(AST.EmbeddedString) | ("(" ~ embeddedExpr ~ ")")  )
+
+  def embeddedOperatorExpr[_: P](precedence: Int): P[AST.EmbeddedExpr] = {
+    def next = if(precedence == 0) simpleEmbeddedExpr else embeddedOperatorExpr(precedence - 1)
+    P(  next ~ (operator(precedence) ~ next).rep  ).map {
+      case (e, Seq()) => e
+      case (e, ts) =>
+        val right = ts.count(_._1.endsWith(":"))
+        if(right == 0)
+          ts.foldLeft(e) { case (z, (o, a)) => AST.EmbeddedAp(Seq(o), Seq(z, a)) }
+        else if(right == ts.length) {
+          val e2 = ts.last._2
+          val ts2 = ts.map(_._1).zip(e +: ts.map(_._2).init)
+          ts2.foldRight(e2) { case ((o, a), z) => AST.EmbeddedAp(Seq(o), Seq(a, z)) }
+        } else sys.error("Chained binary operators must have the same associativity")
+    }
+  }
+}
+
 object Parser {
   import ScriptWhitespace._
   import Lexical._
+  import EmbeddedSyntax.bracketedEmbeddedExpr
 
   def identExpr[_: P]: P[AST.Ident] = ident.map(AST.Ident)
 
@@ -148,18 +192,6 @@ object Parser {
   def church[_: P]: P[AST.Expr] = churchLit.map { i =>
     (1 to i).foldLeft(AST.Ident("Z"): AST.Expr) { case (z, _) => AST.Ap(AST.Ident("S"), None, z :: Nil) }
   }
-
-  def bracketedEmbeddedExpr[_: P]: P[AST.EmbeddedExpr] =
-    P(  "[" ~ embeddedExpr ~ "]"  )
-
-  def embeddedExpr[_: P]: P[AST.EmbeddedExpr] =
-    P(  embeddedAp | embeddedIdent | intLit.map(AST.EmbeddedInt) | stringLit.map(AST.EmbeddedString)  )
-
-  def embeddedAp[_: P]: P[AST.EmbeddedAp] =
-    P(  ident.rep(2, ".") ~ "(" ~ embeddedExpr.rep(0, ",") ~ ")"  ).map(AST.EmbeddedAp.tupled)
-
-  def embeddedIdent[_: P]: P[AST.EmbeddedIdent] =
-    P(  ident.map(AST.EmbeddedIdent)  )
 
   def appOrIdent[_: P]: P[AST.Expr] =
     P(  identExpr ~ bracketedEmbeddedExpr.? ~ ("(" ~ expr.rep(sep = ",") ~ ")").?  ).map { case (id, embO, argsO) =>
@@ -228,18 +260,27 @@ object Parser {
   def namedDefinition[_: P]: P[(String, Seq[String], Boolean, Option[AST.EmbeddedSpec])] =
     P(  ident ~ embeddedSpecOpt ~ params(1)  ).map { case (n, na, as) => (n, as, false, na) }
 
-  def reduction[_: P]: P[Seq[AST.AnyExpr]] =
-    P(  (expr | bracketedEmbeddedExpr).rep(1, sep = ",")  )
+  def simpleReduction[_: P]: P[AST.Reduction] =
+    P(  "=>" ~ (expr | bracketedEmbeddedExpr).rep(1, sep = ",")  ).map { es =>
+      AST.Reduction(None, es.collect { case e: AST.EmbeddedExpr => e }, es.collect { case e: AST.Expr => e })
+    }
+
+  def conditionalReductions[_: P]: P[Seq[AST.Reduction]] =
+    P(  ("if" ~ (bracketedEmbeddedExpr ~ simpleReduction).map { case (p, r) => r.copy(cond = Some(p))}).rep(1) ~
+      "else" ~ simpleReduction
+    ).map { case (rs, r) => rs :+ r }
+
+  def reductions[_: P]: P[Seq[AST.Reduction]] =
+    P(  conditionalReductions | simpleReduction.map(Seq(_))  )
+
+  def condition[_: P]: P[AST.EmbeddedExpr] =
+    P(  "if" ~ bracketedEmbeddedExpr  )
 
   def defRule[_: P]: P[AST.DefRule] =
-    P(  "|" ~ expr.rep(1, ",") ~ "=>" ~ reduction  ).map { case (on, anyRed) =>
-      AST.DefRule(on, anyRed.collect { case e: AST.EmbeddedExpr => e }, anyRed.collect { case e: AST.Expr => e })
-    }
+    P(  "|" ~ expr.rep(1, ",") ~ reductions  ).map(AST.DefRule.tupled)
 
   def matchStatement[_: P]: P[AST.Match] =
-    P(  "match" ~ expr ~ "=>" ~ reduction  ).map { case (on, anyRed) =>
-      AST.Match(on, anyRed.collect { case e: AST.EmbeddedExpr => e }, anyRed.collect { case e: AST.Expr => e })
-    }
+    P(  "match" ~ expr ~ reductions  ).map(AST.Match.tupled)
 
   def data[_: P]: P[AST.Data] =
     P(  kw("let") ~/ (expr | bracketedEmbeddedExpr).rep(1, sep = ",") ).map { es =>

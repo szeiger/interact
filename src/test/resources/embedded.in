@@ -12,8 +12,9 @@ def _ + y : r
 def intAdd[int a](_): r
   | Int[b] => [de.szeiger.interact.Intrinsics.add(a, b, c)], Int[c]
 
+# Value-returning method call instead of out parameter
 def strlen(_): r
-  | String[s] => [de.szeiger.interact.Intrinsics.strlen(s, i)], Int[i]
+  | String[s] => Int[de.szeiger.interact.Intrinsics.strlen(s)]
 
 let simple = Int[42],
     x = Int[5], y = Int[3], sum = x + y,
@@ -29,3 +30,11 @@ def _ * _ : r
   | Int[a], Int[b] => [de.szeiger.interact.Intrinsics.mult(a, b, c)], Int[c]
 
 let mult = Int[3] * Int[2]
+
+# Conditional matching
+def fib(_): r
+  | Int[i] if [i == 0]  => Int[1]
+           if [i == 1]  => Int[1]
+           else         => fib(Int[i-1]) + fib(Int[i-2])
+
+let fib10 = fib(Int[10])

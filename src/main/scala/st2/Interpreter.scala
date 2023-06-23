@@ -1,7 +1,7 @@
 package de.szeiger.interact.st2
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, GenericRuleImpl, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, GenericRule, Symbol, SymbolIdLookup, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays
@@ -191,13 +191,15 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val max = new ParSupport.AtomicCounter
     ParSupport.foreach(rules) { cr =>
-      val g = GenericRuleImpl(cr, globals)
+      val g = GenericRule(getClass.getClassLoader, cr, globals)
       if(debugLog) g.log()
+      assert(g.branches.length == 1)
+      val branch = g.branches.head
       val ri =
         if(compile) codeGen.compile(g, cl)(this)
         else {
           max.max(g.maxCells)
-          new InterpretedRuleImpl(getSymbolId(g.sym1), g.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), g.freeWiresPacked1, g.freWiresPacked2, g.connectionsPacked)
+          new InterpretedRuleImpl(getSymbolId(g.sym1), branch.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), branch.freeWiresPacked1, branch.freWiresPacked2, branch.connectionsPacked)
         }
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri
     }

@@ -12,13 +12,12 @@ class DerivedRule(val name1: String, val name2: String) extends CheckedRule {
   def show = s"$name1 . $name2 = <derived>"
 }
 
-class CheckedMatchRule(val connected: Seq[AST.Expr], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String],
-    val emb1: Option[AST.EmbeddedIdent], val emb2: Option[AST.EmbeddedIdent], val embRed: Seq[AST.EmbeddedExpr]) extends CheckedRule {
+class CheckedMatchRule(val reduction: Seq[AST.Reduction], val name1: String, val args1: Seq[String], val name2: String, val args2: Seq[String],
+    val emb1: Option[AST.EmbeddedIdent], val emb2: Option[AST.EmbeddedIdent]) extends CheckedRule {
   def show: String = {
     def on(n: String, e: Option[AST.EmbeddedIdent], as: Seq[String]): String =
       s"$n${e.map(s => s"[${s.show}]").getOrElse("")}(${as.mkString(", ")})"
-    val red = connected.map(_.show) ++ embRed.map(_.show)
-    s"match ${on(name1, emb1, args1)} = ${on(name2, emb2, args2)} => ${red.mkString(", ")}"
+    s"match ${on(name1, emb1, args1)} = ${on(name2, emb2, args2)} => ${AST.Reduction.show(reduction)}"
   }
 }
 
@@ -30,7 +29,7 @@ class Symbol(val id: String) {
   def callArity: Int = arity + 1 - returnArity
   var matchContinuationPort: Int = -2
   var payloadType: Int = PayloadType.VOID
-  def hasPayload = payloadType != PayloadType.VOID
+  def hasPayload: Boolean = payloadType != PayloadType.VOID
   override def toString: String = id
 }
 
@@ -102,8 +101,7 @@ class Model(val statements: Seq[AST.Statement],
     val dret = AST.Tuple(d.ret.map(AST.Ident))
     val di = AST.Ident(d.name)
     d.rules.foreach { r =>
-      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, d.embeddedId, r.on ++ d.args.drop(r.on.length).map(AST.Ident)), dret), r.embRed, r.reduced),
-        s"${r.on.map(_.show).mkString(", ")} = ${r.reduced.map(_.show).mkString(", ")}")
+      addMatchRule(AST.Match(AST.Assignment(AST.Ap(di, d.embeddedId, r.on ++ d.args.drop(r.on.length).map(AST.Ident)), dret), r.reduced))
     }
   }
 
@@ -154,7 +152,7 @@ class Model(val statements: Seq[AST.Statement],
         val curryArgs = keepArgs ++ splitArgs.zipWithIndex.filter(_._2 != idx).map(_._1)
         addDerivedRules(defaultDerive, curryId)
         val fwd = AST.Assignment(AST.Ap(AST.Ident(curryId), emb1.orElse(emb2), curryArgs.map(AST.Ident)), AST.Ident(splitArgs(idx)))
-        addChecked(new CheckedMatchRule(Seq(fwd), ls.id, largs, rs.id, rargs, emb1, emb2, Nil))
+        addChecked(new CheckedMatchRule(Seq(AST.Reduction(None, Nil, Seq(fwd))), ls.id, largs, rs.id, rargs, emb1, emb2))
         sym
     }
   }
@@ -165,7 +163,7 @@ class Model(val statements: Seq[AST.Statement],
     checkedRules.put(key, impl)
   }
 
-  private def addMatchRule(m: AST.Match, creator: => String): Unit = {
+  private def addMatchRule(m: AST.Match): Unit = {
     val on2 = m.on match {
       // complete lhs assignment for raw match rules (already completed for def rules):
       case e: AST.Ap =>
@@ -182,33 +180,35 @@ class Model(val statements: Seq[AST.Statement],
     inlined match {
       case Seq(AST.Assignment(ConsAp(_, ls, lemb, largs: Seq[AST.Expr]), ConsAp(_, rs, remb, rargs))) =>
         val compl = if(ls.isDef) largs.takeRight(ls.returnArity) else Nil
-        val connected = m.reduced.init :+ connectLastStatement(m.reduced.last, compl.asInstanceOf[Seq[AST.Ident]])
-        addMatchRule(ls, lemb, largs, rs, remb, rargs, m.embRed, connected, creator)
+        val connected = m.reds.map { r =>
+          r.copy(reduced = r.reduced.init :+ connectLastStatement(r.reduced.last, compl.asInstanceOf[Seq[AST.Ident]]))
+        }
+        addMatchRule(ls, lemb, largs, rs, remb, rargs, connected, m.show)
       case _ => sys.error(s"Invalid rule: ${m.show}")
     }
   }
 
-  private def addMatchRule(ls: Symbol, lemb: Option[AST.EmbeddedExpr], largs: Seq[AST.Expr], rs: Symbol, remb: Option[AST.EmbeddedExpr], rargs: Seq[AST.Expr], embRed: Seq[AST.EmbeddedExpr], reduced: Seq[AST.Expr], creator: => String): Unit = {
+  private def addMatchRule(ls: Symbol, lemb: Option[AST.EmbeddedExpr], largs: Seq[AST.Expr], rs: Symbol, remb: Option[AST.EmbeddedExpr], rargs: Seq[AST.Expr], red: Seq[AST.Reduction], creator: => String): Unit = {
     //println(s"addMatchRule($ls${lemb.map(e => s"[${e.show}]").getOrElse("")}(${largs.map(_.show).mkString(", ")}) = $rs${remb.map(e => s"[${e.show}]").getOrElse("")}(${rargs.map(_.show).mkString(", ")}) => ${embRed.map(e => s"[${e.show}]").mkString(", ")}, ${reduced.map(_.show).mkString(", ")})")
     largs.indexWhere(e => !e.isInstanceOf[AST.Ident]) match {
       case -1 =>
         singleNonIdentIdx(rargs) match {
           case -2 => sys.error(s"Only one nested match allowed in $creator")
           case -1 =>
-            addChecked(new CheckedMatchRule(reduced, ls.id,
+            addChecked(new CheckedMatchRule(red, ls.id,
               largs.asInstanceOf[Seq[AST.Ident]].map(_.s), rs.id, rargs.asInstanceOf[Seq[AST.Ident]].map(_.s),
-              lemb.map(_.asInstanceOf[AST.EmbeddedIdent]), remb.map(_.asInstanceOf[AST.EmbeddedIdent]), embRed))
+              lemb.map(_.asInstanceOf[AST.EmbeddedIdent]), remb.map(_.asInstanceOf[AST.EmbeddedIdent])))
           case idx =>
             val currySym = createCurriedDef(ls, rs, idx, false)
             val ConsAp(_, crs, cemb, crargs) = rargs(idx)
             val clargs = largs ++ rargs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
-            addMatchRule(currySym, lemb.orElse(remb), clargs, crs, cemb, crargs, embRed, reduced, creator)
+            addMatchRule(currySym, lemb.orElse(remb), clargs, crs, cemb, crargs, red, creator)
         }
       case idx =>
         val currySym = createCurriedDef(ls, rs, idx, true)
         val ConsAp(_, cls, cemb, clargs) = largs(idx)
         val crargs = rargs ++ largs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[AST.Ident])
-        addMatchRule(currySym, lemb.orElse(remb), crargs, cls, cemb, clargs, embRed, reduced, creator)
+        addMatchRule(currySym, lemb.orElse(remb), crargs, cls, cemb, clargs, red, creator)
     }
   }
 
@@ -230,7 +230,7 @@ class Model(val statements: Seq[AST.Statement],
     addDerivedRules(d)
   }
   prepare.constrs.foreach(addDerivedRules)
-  prepare.matchRules.foreach(m => addMatchRule(m, s"${m.on.show} = ${m.reduced.map(_.show).mkString(", ")}"))
+  prepare.matchRules.foreach(addMatchRule)
 
   rules.foreach {
     case cr: CheckedMatchRule =>

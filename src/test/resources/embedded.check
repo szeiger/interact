@@ -1,5 +1,6 @@
   dummy = Dummy[d:0:0]
   dummy2b = Dummy[d2:1:1]
+  fib10 = Int[89]
   len = Int[5]
   mult = Int[6]
   simple = Int[42]

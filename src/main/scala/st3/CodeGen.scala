@@ -1,7 +1,7 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRuleImpl, Symbol}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
@@ -42,8 +42,10 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     t.constr(tp.m(params: _*).V)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRuleImpl): Unit = {
-    val allConns = g.wireConnsDistinct ++ g.internalConns
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRule): Unit = {
+    assert(g.branches.length == 1)
+    val branch = g.branches.head
+    val allConns = branch.wireConnsDistinct ++ branch.internalConns
     var cellAllocations = 0
 
     // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
@@ -51,9 +53,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       reuseSkip(cellIdx, rhs).length
     // Find connections to skip for reuse
     def reuseSkip(cellIdx: Int, rhs: Boolean): IndexedSeq[Connection] =
-      (0 until g.cells(cellIdx).arity).flatMap { p =>
+      (0 until branch.cells(cellIdx).arity).flatMap { p =>
         val ci = new CellIdx(cellIdx, p)
-        g.wireConnsDistinct.collect {
+        branch.wireConnsDistinct.collect {
           case c @ Connection(FreeIdx(rhs2, fi2), ci2) if ci2 == ci && rhs2 == rhs && fi2 == p => c
           case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
         }
@@ -65,7 +67,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         .sortBy { case (s, i, q) => -q }.headOption
     // Find sym/cellIdx of cells with same arity as rhs/lhs
     def reuseCandidates(rhs: Boolean): Array[(Symbol, Int)] =
-      g.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.symFor(rhs).arity }
+      branch.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.symFor(rhs).arity }
     // Find best reuse combination for both sides
     def bestReuse2: (Option[(Symbol, Int, Int)], Option[(Symbol, Int, Int)], Set[Connection]) = {
       var cand1 = reuseCandidates(false)
@@ -156,12 +158,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     }
 
     val cells: mutable.ArraySeq[VarIdx] = {
-      val cells = mutable.ArraySeq.fill[VarIdx](g.cells.length)(VarIdx.none)
+      val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
       def createCell(sym: Symbol, cellIdx: Int): m.type = {
         if(sym.arity < new_CellSpec.length) {
           m.newInitDup(new_CellSpec(sym.arity)) {
             m.aload(m.receiver).getfield(sidFields(sids(sym)))
-            g.cellConns(cellIdx).map {
+            branch.cellConns(cellIdx).map {
               case CellIdx(ci, p) =>
                 if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
                 m.iconst(p)
@@ -180,7 +182,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       def updateSym(cell: VarIdx, sym: Symbol): Unit =
         m.aload(cell).aload(m.receiver).getfield(sidFields(sids(sym))).invokevirtual(cell_symIdSetter)
       for(idx <- cells.indices) {
-        cells(idx) = g.cells(idx) match {
+        cells(idx) = branch.cells(idx) match {
           case sym if idx == reuse1 =>
             if(sym != g.sym1) updateSym(cLeft, sym)
             cLeft
@@ -200,7 +202,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
       if(isReuse(c1)) {
         m.aload(cells(c1))
-        setCell(g.cells(c1).arity, p1)(m.aload(c2))(m.iload(p2))
+        setCell(branch.cells(c1).arity, p1)(m.aload(c2))(m.iload(p2))
       }
       m.aload(c2).iload(p2).aload(cells(c1)).iconst(p1).invokevirtual(cell_setCell)
       if(p1 < 0)
@@ -218,11 +220,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       val (c2, p2) = (ct2.idx, ct2.port)
       if(c2 >= c1 || isReuse(c1)) {
         m.aload(cells(c1))
-        setCell(g.cells(c1).arity, p1, !isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
+        setCell(branch.cells(c1).arity, p1, !isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
       }
       if(c1 >= c2 || isReuse(c2)) {
         m.aload(cells(c2))
-        setCell(g.cells(c2).arity, p2, !isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
+        setCell(branch.cells(c2).arity, p2, !isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
       }
       if(p1 < 0 && p2 < 0) m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut)
     }
