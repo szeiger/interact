@@ -1,6 +1,7 @@
 package de.szeiger.interact
 
 import de.szeiger.interact.mt.BitOps._
+import de.szeiger.interact.ast._
 
 import java.lang.invoke.{MethodHandle, MethodHandles}
 import java.lang.reflect.Modifier
@@ -103,22 +104,22 @@ object EmbeddedComputation {
     "-" -> (Intrinsics.getClass.getName, "intSub"),
   )
 
-  def apply[A](cl: ClassLoader, e: AST.EmbeddedExpr)(creator: => String)(handleArg: String => A): EmbeddedComputation[A] = e match {
-    case emb @ AST.EmbeddedAp(_, args) =>
+  def apply[A](cl: ClassLoader, e: EmbeddedExpr)(creator: => String)(handleArg: String => A): EmbeddedComputation[A] = e match {
+    case emb @ EmbeddedApply(_, args) =>
       val consts = mutable.ArrayBuffer.empty[(Int, Any)]
       val argIndices = mutable.ArrayBuffer.empty[A]
       var offset = 0
       var subComps: Array[EmbeddedComputation[A]] = null
       args.zipWithIndex.foreach {
-        case (AST.EmbeddedInt(v), i) =>
+        case (IntLit(v), i) =>
           consts += ((i-offset, v))
           offset += 1
-        case (AST.EmbeddedString(v), i) =>
+        case (StringLit(v), i) =>
           consts += ((i-offset, v))
           offset += 1
-        case (AST.EmbeddedIdent(id), _) =>
+        case (Ident(id), _) =>
           argIndices += handleArg(id)
-        case (a: AST.EmbeddedAp, i) =>
+        case (a: EmbeddedApply, i) =>
           if(subComps == null) subComps = new Array(args.length)
           val sub = apply(cl, a)(creator)(handleArg)
           subComps(i) = sub
@@ -188,12 +189,12 @@ final class GenericRuleBranch(arity1: Int,
 }
 
 object GenericRuleBranch {
-  def apply[C](cl: ClassLoader, cr: CheckedMatchRule, red: AST.Reduction, globals: Symbols): GenericRuleBranch = {
+  def apply[C](cl: ClassLoader, cr: CheckedMatchRule, red: Branch, globals: Symbols): GenericRuleBranch = {
     //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
     val syms = new Symbols(Some(globals))
     val cells = mutable.ArrayBuffer.empty[Symbol]
     val conns = mutable.HashSet.empty[Int]
-    val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (syms.getOrAdd(n), -i-1) }.toMap
+    val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (syms.getOrAdd(n.s), -i-1) }.toMap
     assert(freeLookup.size == cr.args1.length + cr.args2.length)
     val fwp = new Array[Int](freeLookup.size)
     val assigners = mutable.ArrayBuffer.empty[PayloadAssigner]
@@ -208,22 +209,21 @@ object GenericRuleBranch {
     if(rhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(rhsEmbId != null) rhsEmbId else "$unnamedRHS")
     if(lhsEmbId != null) cellEmbIds.put(lhsEmbId, -1)
     if(rhsEmbId != null) cellEmbIds.put(rhsEmbId, -2)
-    def payloadTypeForEmbeddedIdent(s: String): Int = cellEmbIds(s) match {
+    def payloadTypeForIdent(s: String): PayloadType = cellEmbIds(s) match {
       case -1 => lhsPayloadType
-      case -2 => rhsPayloadType
       case -2 => rhsPayloadType
       case i => cells(i).payloadType
     }
     val sc = new Scope[Int] {
-      override def createCell(sym: Symbol, emb: Option[AST.EmbeddedExpr]): Int = {
+      override def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Int = {
         if(sym.isCons) {
           val cellIdx = cells.length
           cells += sym
           var embId: String = null
           emb match {
-            case Some(AST.EmbeddedInt(i)) => assigners += new IntConstAssigner(cellIdx, i)
-            case Some(AST.EmbeddedString(s)) => assigners += new RefConstAssigner(cellIdx, s)
-            case Some(e @ AST.EmbeddedIdent(id)) if id == lhsEmbId =>
+            case Some(IntLit(i)) => assigners += new IntConstAssigner(cellIdx, i)
+            case Some(StringLit(s)) => assigners += new RefConstAssigner(cellIdx, s)
+            case Some(e @ Ident(id)) if id == lhsEmbId =>
               assigners += (sym.payloadType match {
                 case PayloadType.INT => new IntLHSMover(cellIdx)
                 case PayloadType.REF =>
@@ -231,7 +231,7 @@ object GenericRuleBranch {
                   embIdsUsed += lhsEmbId
                   new RefLHSMover(cellIdx)
               })
-            case Some(e @ AST.EmbeddedIdent(id)) if id == rhsEmbId =>
+            case Some(e @ Ident(id)) if id == rhsEmbId =>
               assigners += (sym.payloadType match {
                 case PayloadType.INT => new IntRHSMover(cellIdx)
                 case PayloadType.REF =>
@@ -239,11 +239,11 @@ object GenericRuleBranch {
                   embIdsUsed += rhsEmbId
                   new RefRHSMover(cellIdx)
               })
-            case Some(e @ AST.EmbeddedIdent(id)) =>
+            case Some(e @ Ident(id)) =>
               embId = id
               if(cellEmbIds.put(id, cellIdx).isDefined)
                 sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Duplicate use of variable")
-            case Some(e: AST.EmbeddedAp) =>
+            case Some(e: EmbeddedApply) =>
               val ec = EmbeddedComputation[Int](cl, e)(cr.show) { a =>
                 if(a == lhsEmbId) {
                   if(lhsPayloadType == PayloadType.REF) {
@@ -283,7 +283,7 @@ object GenericRuleBranch {
     val embComp = red.embRed.map { ee =>
       val as = mutable.ArrayBuffer.empty[String]
       val ec = EmbeddedComputation(cl, ee)(cr.show) { a => as += a; cellEmbIds(a) }
-      val refAs = as.filter(s => payloadTypeForEmbeddedIdent(s) == PayloadType.REF)
+      val refAs = as.filter(s => payloadTypeForIdent(s) == PayloadType.REF)
       if((refAs.distinct.length != refAs.length) || refAs.exists(embIdsUsed.contains))
         sys.error(s"Non-linear use of ref in embedded expression ${ee.show} in rule ${cr.show}")
       embIdsUsed ++= refAs

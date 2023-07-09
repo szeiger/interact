@@ -1,6 +1,7 @@
 package de.szeiger.interact.codegen
 
-import de.szeiger.interact.{GenericRule, RuleImplFactory, Symbol, SymbolIdLookup}
+import de.szeiger.interact.{GenericRule, RuleImplFactory, SymbolIdLookup}
+import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.util.{Textifier, TraceClassVisitor}
 import org.objectweb.asm.{ClassReader, ClassWriter}

@@ -5,6 +5,7 @@
 scalacOptions ++= Seq("-feature")
 
 fork in Test := true
+fork in run := true
 
 Global / resolvers += "scala-integration" at
   "https://scala-ci.typesafe.com/artifactory/scala-integration/"

@@ -84,7 +84,7 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {
-    val model: Model = new Model(Parser.parse(source))
+    val model: Compiler = new Compiler(Parser.parse(source))
     val inter = model.createInterpreter(spec)
     def setup(): BaseInterpreter = {
       model.setData(inter)

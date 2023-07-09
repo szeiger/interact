@@ -1,7 +1,8 @@
 package de.szeiger.interact.st2
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, GenericRule, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact.{Analyzer, BaseInterpreter, CheckedRule, GenericRule, SymbolIdLookup}
+import de.szeiger.interact.ast.{EmbeddedExpr, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays
@@ -164,7 +165,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
   debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
   final val scope: Analyzer[Cell] = new Analyzer[Cell] {
-    def createCell(sym: Symbol, emb: Option[AST.EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
+    def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym

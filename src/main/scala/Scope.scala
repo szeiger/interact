@@ -4,18 +4,20 @@ import java.io.PrintStream
 import scala.annotation.tailrec
 import scala.collection.mutable
 
+import de.szeiger.interact.ast._
+
 abstract class Scope[Cell] { self =>
   val freeWires = mutable.HashSet.empty[Cell]
 
-  def createCell(sym: Symbol, payload: Option[AST.EmbeddedExpr]): Cell
+  def createCell(sym: Symbol, payload: Option[EmbeddedExpr]): Cell
   def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit
 
   def clear(): Unit = freeWires.clear()
 
-  def addData(data: AST.Data, globals: Symbols): Unit = {
-    val createEmb = mutable.ArrayBuffer.empty[(Symbol, AST.EmbeddedExpr, Cell)]
+  def addData(data: Let, globals: Symbols): Unit = {
+    val createEmb = mutable.ArrayBuffer.empty[(Symbol, EmbeddedExpr, Cell)]
     val catchEmb: Scope[Cell] = new Scope[Cell] {
-      override def createCell(sym: Symbol, payload: Option[AST.EmbeddedExpr]): Cell = {
+      override def createCell(sym: Symbol, payload: Option[EmbeddedExpr]): Cell = {
         val c = self.createCell(sym, None)
         payload.foreach(emb => createEmb += ((sym, emb, c)))
         c
@@ -27,13 +29,13 @@ abstract class Scope[Cell] { self =>
     val foundEmbIds = mutable.HashMap.empty[String, Cell]
     createEmb.foreach { case (sym, e, c) =>
       e match {
-        case AST.EmbeddedInt(v) =>
+        case IntLit(v) =>
           assert(sym.payloadType == PayloadType.INT)
           c.asInstanceOf[IntBox].setValue(v)
-        case AST.EmbeddedString(v) =>
+        case StringLit(v) =>
           assert(sym.payloadType == PayloadType.REF)
           c.asInstanceOf[RefBox].setValue(v)
-        case AST.EmbeddedIdent(id) =>
+        case Ident(id) =>
           if(foundEmbIds.put(id, c).isDefined)
             sys.error(s"Invalid payload expression ${e.show} in ${data.show}: Duplicate use of variable")
         case _ => sys.error(s"Invalid payload expression ${e.show} in data ${data.show}")
@@ -56,7 +58,7 @@ abstract class Scope[Cell] { self =>
     embComp.foreach { e => e.invoke(e.argIndices) }
   }
 
-  def addExprs(defs: Iterable[AST.Expr], syms: Symbols): Unit = {
+  def addExprs(defs: Iterable[Expr], syms: Symbols): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
     @tailrec def connectAny(t1: Any, p1: Int, t2: Any, p2: Int): Unit = (t1, t2) match {
       case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, p2, t1, p1)
@@ -64,26 +66,27 @@ abstract class Scope[Cell] { self =>
       case (t1: Cell @unchecked, t2: TempWire) => connectCells(t1, p1, t2.c, t2.p)
       case (t1: Cell @unchecked, t2: Cell @unchecked) => connectCells(t1, p1, t2, p2)
     }
+    val refs = new RefsMap
     for(e <- defs; i <- e.allIdents) {
       val s = syms.getOrAdd(i.s)
-      if(!s.isCons) s.refs += 1
+      if(!s.isCons) refs.inc(s)
     }
     def cellRet(s: Symbol, c: Cell): Seq[(Any, Int)] = {
       if(s.isDef) (s.arity-s.returnArity).until(s.arity).map(p => (c, p))
       else Seq((c, -1))
     }
     val bind = mutable.HashMap.empty[Symbol, TempWire]
-    def create(e: AST.Expr): Seq[(Any, Int)] = e match {
-      case i: AST.Ident =>
+    def create(e: Expr): Seq[(Any, Int)] = e match {
+      case i: Ident =>
         val s = syms.getOrAdd(i.s)
-        s.refs match {
+        refs(s) match {
           case 0 => cellRet(s, createCell(s, None))
           case 1 => val c = createCell(s, None); freeWires.addOne(c); cellRet(s, c)
           case 2 => Seq((bind.getOrElseUpdate(s, new TempWire), -1))
           case _ => sys.error(s"Non-linear use of ${i.show} in data")
         }
-      case AST.Tuple(es) => es.flatMap(create)
-      case AST.Ap(i, emb, args) =>
+      case Tuple(es) => es.flatMap(create)
+      case Apply(i, emb, args) =>
         val s = syms(i.s)
         assert(s.isCons)
         val c = createCell(s, emb)
@@ -96,12 +99,12 @@ abstract class Scope[Cell] { self =>
         cellRet(s, c)
     }
     defs.foreach {
-      case AST.Assignment(e1, e2) =>
+      case Assignment(e1, e2) =>
         val c1 = create(e1)
         val c2 = create(e2)
         assert(c1.length == c2.length)
         c1.zip(c2).foreach { case ((t1, p1), (t2, p2)) => connectAny(t1, p1, t2, p2) }
-      case e: AST.Ap =>
+      case e: Apply =>
         val c = create(e)
         assert(c.isEmpty)
     }
@@ -220,43 +223,4 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     }
     cuts
   }
-}
-
-object PayloadType {
-  final val VOID = 0
-  final val INT  = 1
-  final val REF  = 2
-  final val PAYLOAD_TYPES_COUNT = 3
-}
-
-abstract class Colors {
-  def cNormal: String
-  def cBlack: String
-  def cRed: String
-  def cGreen: String
-  def cYellow: String
-  def cBlue: String
-  def cMagenta: String
-  def cCyan: String
-  def bRed: String
-  def bGreen: String
-  def bYellow: String
-  def bBlue: String
-  def bMagenta: String
-  def bCyan: String
-}
-
-object MaybeColors extends Colors {
-  val useColors: Boolean = System.getProperty("interact.colors", "true").toBoolean
-
-  val (cNormal, cBlack, cRed, cGreen, cYellow, cBlue, cMagenta, cCyan) =
-    if(useColors) ("\u001B[0m", "\u001B[30m", "\u001B[31m", "\u001B[32m", "\u001B[33m", "\u001B[34m", "\u001B[35m", "\u001B[36m")
-    else ("", "", "", "", "", "", "", "")
-  val (bRed, bGreen, bYellow, bBlue, bMagenta, bCyan) =
-    if(useColors) ("\u001B[41m", "\u001B[42m", "\u001B[43m", "\u001B[44m", "\u001B[45m", "\u001B[46m")
-    else ("", "", "", "", "", "")
-}
-
-object NoColors extends Colors {
-  val cNormal, cBlack, cRed, cGreen, cYellow, cBlue, cMagenta, cCyan, bRed, bGreen, bYellow, bBlue, bMagenta, bCyan = ""
 }

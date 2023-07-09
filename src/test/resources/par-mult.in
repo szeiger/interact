@@ -10,4 +10,4 @@ def _ * y : r
   | S(x) => (a, b) = dup(y),
             r = b + x * a
 
-let res = 1000'c * 1000'c
+let res = 100'c * 100'c

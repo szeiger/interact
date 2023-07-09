@@ -1,7 +1,8 @@
 package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{AST, Analyzer, BaseInterpreter, CheckedRule, EmbeddedComputation, GenericRule, GenericRuleBranch, IntBox, PayloadAssigner, PayloadType, RefBox, Symbol, SymbolIdLookup, Symbols}
+import de.szeiger.interact._
+import de.szeiger.interact.ast.{PayloadType, EmbeddedExpr, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.lang.invoke.MethodHandle
@@ -160,20 +161,20 @@ object Cells {
     case REFN  => new CellNL(symId, arity)
   }
 
-  final val VOID0 = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
-  final val VOID1 = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
-  final val VOID2 = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
-  final val VOIDN = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID
-  final val INT0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
-  final val INT1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
-  final val INT2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
-  final val INTN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT
-  final val REF0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
-  final val REF1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
-  final val REF2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
-  final val REFN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF
+  final val VOID0 = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val VOID1 = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val VOID2 = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val VOIDN = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val INT0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val INT1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val INT2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val INTN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val REF0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val REF1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val REF2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val REFN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
 
-  def cellKind(arity: Int, payloadType: Int): Int = payloadType + math.min(arity, 3) * PayloadType.PAYLOAD_TYPES_COUNT
+  def cellKind(arity: Int, payloadType: PayloadType): Int = payloadType.value + math.min(arity, 3) * PayloadType.PAYLOAD_TYPES_COUNT
 }
 
 class WireCell(final val sym: Symbol, _symId: Int) extends Cell0V(_symId) {
@@ -315,7 +316,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
   debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
   final val scope: Analyzer[Cell] = new Analyzer[Cell] {
-    def createCell(sym: Symbol, emb: Option[AST.EmbeddedExpr]): Cell =
+    def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell =
       if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity, Cells.cellKind(sym.arity, sym.payloadType)) else new WireCell(sym, 0)
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
       c1.setCell(p1, c2, p2)
