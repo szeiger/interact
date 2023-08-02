@@ -6,20 +6,20 @@ import scala.collection.mutable
 
 sealed trait CheckedRule {
   def show: String
-  def name1: String
-  def name2: String
+  def sym1: Symbol
+  def sym2: Symbol
 }
 
-class DerivedRule(val name1: String, val name2: String) extends CheckedRule {
-  def show = s"$name1 . $name2 = <derived>"
+class DerivedRule(val sym1: Symbol, val sym2: Symbol) extends CheckedRule {
+  def show = s"$sym1 . $sym2 = <derived>"
 }
 
-class CheckedMatchRule(val reduction: Seq[Branch], val name1: String, val args1: Seq[Ident], val name2: String, val args2: Seq[Ident],
+class CheckedMatchRule(val reduction: Vector[Branch], val sym1: Symbol, val args1: Seq[Ident], val sym2: Symbol, val args2: Seq[Ident],
     val emb1: Option[Ident], val emb2: Option[Ident]) extends CheckedRule {
   def show: String = {
-    def on(n: String, e: Option[Ident], as: Seq[Ident]): String =
+    def on(n: Symbol, e: Option[Ident], as: Seq[Ident]): String =
       s"$n${e.map(s => s"[${s.show}]").getOrElse("")}(${as.map(_.s).mkString(", ")})"
-    s"match ${on(name1, emb1, args1)} = ${on(name2, emb2, args2)} ${Branch.show(reduction)}"
+    s"match ${on(sym1, emb1, args1)} = ${on(sym2, emb2, args2)} ${Branch.show(reduction)}"
   }
 }
 
@@ -28,34 +28,61 @@ trait BaseInterpreter {
   def reduce(): Int
 }
 
-class Compiler(val unit: CompilationUnit,
-  defaultDerive: Seq[String] = Seq("erase", "dup"),
-  addEraseDup: Boolean = true) {
-
-  val global = new Global
+class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
   import global._
 
   private[this] val prepare = new Prepare(global)
+  private[this] val normalize = new Normalize(global)
   private[this] val checkedRules = mutable.Map.empty[(String, String), CheckedRule]
 
   if(addEraseDup) {
-    globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
-    globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2)
-    addChecked(new DerivedRule("erase", "erase"))
-    addChecked(new DerivedRule("erase", "dup"))
-    addChecked(new DerivedRule("dup", "dup"))
+    val erase = globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
+    val dup = globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2)
+    addChecked(new DerivedRule(erase, erase))
+    addChecked(new DerivedRule(erase, dup))
+    addChecked(new DerivedRule(dup, dup))
   }
+
   prepare.apply(unit)
 
+  val unit2 = (new Transform {
+    private[this] def wildcardCount(e: Expr): Int = e match {
+      case _: Wildcard => 1
+      case e: Apply => e.args.iterator.map(wildcardCount).sum
+      case _ => 0
+    }
+    private[this] def returnArity(e: Expr): Int = e match {
+      case e: Apply => e.target.sym.returnArity
+      case Assignment(lhs, rhs) => wildcardCount(lhs) + wildcardCount(rhs)
+      case _ => 0
+    }
+    override def apply(n: Statement): Statement = n match {
+      case n: Match => apply(n): Match
+      case n => n
+    }
+    override def apply(m: Match): Match = returnArity(m.on) match {
+      case 0 => m
+      case n =>
+        val p = m.on.pos
+        m.copy(on = Assignment(m.on, Tuple((1 to n).map(i => mkLocalId(s"$$ret$i").setPos(p)).toVector).setPos(p)).setPos(p)).setPos(m.pos)
+    }
+  })(unit)
+
+  private[this] lazy val defaultDeriveSyms =
+    defaultDerive.iterator.map(globalSymbols.get).filter(_.exists(_.isCons)).map(_.get).toSeq
+
   private[this] val data = mutable.ArrayBuffer.empty[Let]
-  unit.statements.foreach {
+  unit2.statements.foreach {
     case c: Cons =>
-      addDerivedRules(c.der.getOrElse(defaultDerive.map(Ident(_))).filter(n => globalSymbols.get(n.s).exists(_.isCons)), c.name)
+      addDerivedRules(c.der.map(_.map(_.sym)).getOrElse(defaultDeriveSyms), c.name.sym, c.name.pos)
     case d: Def =>
-      addDefRules(d)
-      addChecked(new DerivedRule("erase", d.name.s))
+      d.rules.foreach { r =>
+        val dret = Tuple(d.ret).setPos(d.pos)
+        addMatchRule(Match(Assignment(Apply(d.name, d.embeddedId, r.on ++ d.args.drop(r.on.length)).setPos(d.pos), dret).setPos(r.pos), r.reduced).setPos(r.pos))
+      }
+      addChecked(new DerivedRule(globalSymbols("erase"), d.name.sym))
       if(d.name.s != "dup" && d.name.s != "erase")
-        addChecked(new DerivedRule("dup", d.name.s))
+        addChecked(new DerivedRule(globalSymbols("dup"), d.name.sym))
     case l: Let => data += l
     case m: Match =>
       addMatchRule(m)
@@ -71,28 +98,20 @@ class Compiler(val unit: CompilationUnit,
 
   checkThrow()
 
-  private def addDerivedRules(names1: Seq[Ident], name2: Ident): Unit = {
-    names1.foreach { i =>
-      if(i.s == "erase" || i.s == "dup") addChecked(new DerivedRule(i.s, name2.s))
-      else error(s"Don't know how to derive '${i.s}'", i)
+  private def addDerivedRules(syms1: Seq[Symbol], sym2: Symbol, pos: Position): Unit = {
+    syms1.foreach { sym =>
+      if(sym.id == "erase" || sym.id == "dup") addChecked(new DerivedRule(sym, sym2))
+      else error(s"Don't know how to derive '$sym'", pos)
     }
   }
 
-  private def addDefRules(d: Def): Unit = {
-    d.rules.foreach { r =>
-      val dret = Tuple(d.ret).setPos(d.pos)
-      addMatchRule(Match(Assignment(Apply(d.name, d.embeddedId, r.on ++ d.args.drop(r.on.length)).setPos(d.pos), dret).setPos(r.pos), r.reduced).setPos(r.pos))
-    }
-  }
-
-  private def connectLastStatement(e: Expr, extraRhs: Seq[Ident]): Expr = e match {
+  private def connectLastStatement(e: Expr, extraRhs: Vector[Ident]): Expr = e match {
     case e: Assignment => e
     case e: Tuple =>
       assert(e.exprs.length == extraRhs.length)
       Assignment(Tuple(extraRhs).setPos(extraRhs.head.pos), e).setPos(extraRhs.head.pos)
     case e: Apply =>
       val sym = globalSymbols(e.target.s)
-      assert(sym.isCons)
       if(sym.returnArity == 0) e
       else {
         assert(sym.returnArity == extraRhs.length)
@@ -114,80 +133,70 @@ class Compiler(val unit: CompilationUnit,
 
   private def createCurriedDef(ls: Symbol, rs: Symbol, idx: Int, rhs: Boolean): Symbol = {
     val curryId = Ident(s"${ls.id}$$${if(rhs) "ac" else "nc"}$$${rs.id}")
-    globalSymbols.get(curryId.s) match {
+    globalSymbols.get(curryId) match {
       case Some(sym) =>
         if(sym.matchContinuationPort != idx) sys.error("Port mismatch in curried ${ls.id} -> ${rs.id} match in $creator")
-        sym
+        curryId.sym = sym
       case None =>
         if(ls.hasPayload && rs.hasPayload)
           sys.error("Implementation limitation: Curried definitions cannot have payload on both sides")
-        val curriedPtp = if(ls.hasPayload) ls.payloadType else rs.payloadType
-        val emb1 = if(ls.hasPayload) Some(Ident("$l")) else None
-        val emb2 = if(rs.hasPayload) Some(Ident("$r")) else None
-        val sym = globalSymbols.define(curryId.s, isCons = true, arity = ls.arity + rs.arity - 1, payloadType = curriedPtp, matchContinuationPort = idx)
-        val largs = (0 until ls.callArity).map(i => Ident(s"$$l$i"))
-        val rargs = (0 until rs.callArity).map(i => Ident(s"$$r$i"))
-        val (keepArgs, splitArgs) = if(rhs) (rargs, largs) else (largs, rargs)
-        val curryArgs = keepArgs ++ splitArgs.zipWithIndex.filter(_._2 != idx).map(_._1)
-        addDerivedRules(defaultDerive.map(Ident(_)), curryId)
-        val fwd = Assignment(Apply(curryId, emb1.orElse(emb2), curryArgs), splitArgs(idx))
-        addChecked(new CheckedMatchRule(Seq(Branch(None, Nil, Seq(fwd))), ls.id, largs, rs.id, rargs, emb1, emb2))
-        sym
+        else {
+          val curriedPtp = if(ls.hasPayload) ls.payloadType else rs.payloadType
+          val emb1 = if(ls.hasPayload) Some(Ident("$l")) else None
+          val emb2 = if(rs.hasPayload) Some(Ident("$r")) else None
+          curryId.sym = globalSymbols.define(curryId.s, isCons = true, arity = ls.arity + rs.arity - 1, payloadType = curriedPtp, matchContinuationPort = idx)
+          val largs = (0 until ls.callArity).map(i => Ident(s"$$l$i")).toVector
+          val rargs = (0 until rs.callArity).map(i => Ident(s"$$r$i")).toVector
+          val (keepArgs, splitArgs) = if(rhs) (rargs, largs) else (largs, rargs)
+          val curryArgs = keepArgs ++ splitArgs.zipWithIndex.filter(_._2 != idx).map(_._1)
+          addDerivedRules(defaultDeriveSyms, curryId.sym, Position.unknown)
+          val fwd = Assignment(Apply(curryId, emb1.orElse(emb2), curryArgs), splitArgs(idx))
+          addChecked(new CheckedMatchRule(Vector(Branch(None, Vector.empty, Vector(fwd))), ls, largs, rs, rargs, emb1, emb2))
+        }
     }
+    curryId.sym
   }
 
   private def addChecked(impl: CheckedRule): Unit = {
-    val key = if(impl.name1 <= impl.name2) (impl.name1, impl.name2) else (impl.name2, impl.name1)
-    if(checkedRules.contains(key)) sys.error(s"Duplicate rule ${impl.name1} . ${impl.name2}")
+    val key = if(impl.sym1.id <= impl.sym2.id) (impl.sym1.id, impl.sym2.id) else (impl.sym2.id, impl.sym1.id)
+    if(checkedRules.contains(key)) sys.error(s"Duplicate rule ${impl.sym1.id} . ${impl.sym2.id}")
     checkedRules.put(key, impl)
   }
 
   private def addMatchRule(m: Match): Unit = {
-    val on2 = m.on match {
-      // complete lhs assignment for raw match rules (already completed for def rules):
-      case e: Apply =>
-        val s = globalSymbols(e.target.s)
-        if(s.isDef) {
-          assert(e.args.length == s.callArity)
-          Assignment(e, Tuple((1 to s.returnArity).map(i => Ident(s"$$ret$i").setPos(e.pos))).setPos(e.pos)).setPos(e.pos)
-        } else e
-      case e => e
-    }
-    val unnest = new Normalize(globalSymbols)
-    val inlined = unnest.toInline(unnest(Seq(on2)).map(unnest.toConsOrder))
-    //inlined.foreach(e => println(e.show))
+    val inlined = normalize.toInline(normalize.toANF(Seq(m.on)).map(normalize.toConsOrder))
     inlined match {
-      case Seq(Assignment(ApplyCons(_, ls, lemb, largs: Seq[Expr]), ApplyCons(_, rs, remb, rargs))) =>
-        val compl = if(ls.isDef) largs.takeRight(ls.returnArity) else Nil
+      case Seq(Assignment(ApplyCons(lid, lemb, largs: Seq[Expr]), ApplyCons(rid, remb, rargs))) =>
+        val compl = if(lid.sym.isDef) largs.takeRight(lid.sym.returnArity) else Vector.empty
         val connected = m.reduced.map { r =>
-          r.copy(reduced = r.reduced.init :+ connectLastStatement(r.reduced.last, compl.asInstanceOf[Seq[Ident]]))
+          r.copy(reduced = r.reduced.init :+ connectLastStatement(r.reduced.last, compl.asInstanceOf[Vector[Ident]]))
         }
-        addMatchRule(ls, lemb, largs, rs, remb, rargs, connected, m.show)
+        addMatchRule(lid.sym, lemb, largs, rid.sym, remb, rargs, connected, m.show)
       case _ => sys.error(s"Invalid rule: ${m.show}")
     }
   }
 
-  private def addMatchRule(ls: Symbol, lemb: Option[EmbeddedExpr], largs: Seq[Expr], rs: Symbol, remb: Option[EmbeddedExpr], rargs: Seq[Expr], red: Seq[Branch], creator: => String): Unit = {
+  private def addMatchRule(ls: Symbol, lemb: Option[EmbeddedExpr], largs: Seq[Expr], rs: Symbol, remb: Option[EmbeddedExpr], rargs: Seq[Expr], red: Vector[Branch], creator: => String): Unit = {
     //println(s"addMatchRule($ls${lemb.map(e => s"[${e.show}]").getOrElse("")}(${largs.map(_.show).mkString(", ")}) = $rs${remb.map(e => s"[${e.show}]").getOrElse("")}(${rargs.map(_.show).mkString(", ")}) => ${embRed.map(e => s"[${e.show}]").mkString(", ")}, ${reduced.map(_.show).mkString(", ")})")
     largs.indexWhere(e => !e.isInstanceOf[Ident]) match {
       case -1 =>
         singleNonIdentIdx(rargs) match {
           case -2 => sys.error(s"Only one nested match allowed in $creator")
           case -1 =>
-            addChecked(new CheckedMatchRule(red, ls.id,
-              largs.asInstanceOf[Seq[Ident]], rs.id, rargs.asInstanceOf[Seq[Ident]],
+            addChecked(new CheckedMatchRule(red, ls,
+              largs.asInstanceOf[Seq[Ident]], rs, rargs.asInstanceOf[Seq[Ident]],
               lemb.map(_.asInstanceOf[Ident]), remb.map(_.asInstanceOf[Ident])))
           case idx =>
             val currySym = createCurriedDef(ls, rs, idx, false)
-            val ApplyCons(_, crs, cemb, crargs) = rargs(idx)
+            val ApplyCons(cid, cemb, crargs) = rargs(idx)
             val clargs = largs ++ rargs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-            addMatchRule(currySym, lemb.orElse(remb), clargs, crs, cemb, crargs, red, creator)
+            addMatchRule(currySym, lemb.orElse(remb), clargs, cid.sym, cemb, crargs, red, creator)
         }
       case idx =>
         val currySym = createCurriedDef(ls, rs, idx, true)
-        val ApplyCons(_, cls, cemb, clargs) = largs(idx)
+        val ApplyCons(cid, cemb, clargs) = largs(idx)
         val crargs = rargs ++ largs.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-        addMatchRule(currySym, lemb.orElse(remb), crargs, cls, cemb, clargs, red, creator)
+        addMatchRule(currySym, lemb.orElse(remb), crargs, cid.sym, cemb, clargs, red, creator)
     }
   }
 
@@ -215,108 +224,8 @@ class Compiler(val unit: CompilationUnit,
     }
   }
 
-  def setData(inter: BaseInterpreter): Unit = {
+  def setDataIn(inter: BaseInterpreter): Unit = {
     inter.scope.clear()
     data.foreach(inter.scope.addData(_, globalSymbols))
-  }
-}
-
-// Normalize expressions:
-// - all compound expressions are unnested (ANF)
-// - constructor Idents are converted to Ap
-// - only non-constructor Idents can be nested
-// - all Ap assignments have the Ap on the RHS
-// - all direct assignments are untupled
-// - wildcards in assignments are resolved
-// - only the last expr can be a non-assignment
-class Normalize(globals: Symbols) {
-  private var lastTmp = 0
-  private def mk(): Ident = { lastTmp += 1; Ident(s"$$u${lastTmp}") }
-
-  def apply(exprs: Seq[Expr]): Seq[Expr] = {
-    val assigned = mutable.HashSet.empty[Ident]
-    val buf = mutable.ArrayBuffer.empty[Expr]
-    def expandWildcards(e: Expr, wild: Ident): Expr = e match {
-      case Assignment(ls, rs) =>
-        val wild2 = mk()
-        val ass2 = Assignment(expandWildcards(ls, wild2), expandWildcards(rs, wild2)).setPos(e.pos)
-        if(assigned.contains(wild2)) { reorder(unnest(ass2, false)); wild2 }
-        else ass2
-      case Tuple(es) => Tuple(es.map(expandWildcards(_, wild))).setPos(e.pos)
-      case Apply(t, emb, args) => Apply(t, emb, args.map(expandWildcards(_, wild))).setPos(e.pos)
-      case Wildcard() =>
-        if(assigned.contains(wild)) sys.error(s"Duplicate wildcard in assignment")
-        assigned += wild
-        wild
-      case e: Ident => e
-    }
-    def unnest(e: Expr, nested: Boolean): Expr = e match {
-      case Assignment(ls, rs) =>
-        if(nested) sys.error("Unexpected nested assignment without wilcard")
-        else Assignment(unnest(ls, false), unnest(rs, false)).setPos(e.pos)
-      case Tuple(es) => Tuple(es.map(unnest(_, true))).setPos(e.pos)
-      case IdentOrAp(s, emb, args) =>
-        val symO = globals.get(s)
-        if(symO.exists(_.isCons) || args.nonEmpty) {
-          val ap = Apply(Ident(s).setPos(e.pos), emb, args.map(unnest(_, true))).setPos(e.pos)
-          if(nested) {
-            val v = mk()
-            reorder(Assignment(v, ap).setPos(e.pos))
-            v
-          } else ap
-        } else Ident(s).setPos(e.pos)
-    }
-    def reorder(e: Expr): Unit = e match {
-      case Assignment(ls: Apply, rs: Apply) =>
-        val sym1 = globals(ls.target.s)
-        val sym2 = globals(rs.target.s)
-        if(sym1.returnArity != sym2.returnArity) sys.error(s"Invalid assignments with different arities: $e")
-        if(sym1.returnArity == 1) {
-          val v = mk()
-          buf += Assignment(v, ls).setPos(ls.pos)
-          buf += Assignment(v, rs).setPos(rs.pos)
-        } else {
-          val vs = (0 until sym1.returnArity).map(_ => mk())
-          buf += Assignment(Tuple(vs).setPos(ls.pos), ls).setPos(ls.pos)
-          buf += Assignment(Tuple(vs).setPos(rs.pos), rs).setPos(rs.pos)
-        }
-      case Assignment(ls: Apply, rs) => reorder(Assignment(rs, ls).setPos(e.pos))
-      case Assignment(Tuple(ls), Tuple(rs)) =>
-        ls.zip(rs).foreach { case (l, r) => reorder(Assignment(l, r).setPos(e.pos)) }
-      case e => buf += e
-    }
-    exprs.foreach { e =>
-      val wild = mk()
-      reorder(unnest(expandWildcards(e, wild), false))
-      if(assigned.contains(wild)) sys.error("Unexpected wildcard outside of assignment")
-    }
-    buf.toSeq
-  }
-
-  // reorder assignments as if every def was a cons
-  def toConsOrder(e: Expr): Expr = e match {
-    case Assignment(id  @ IdentOrTuple(es), a @ Apply(t, emb, args)) =>
-      val s = globals(t.s)
-      if(!s.isDef) Assignment(id, ApplyCons(t, s, emb, args).setPos(a.pos)).setPos(e.pos) else Assignment(args.head, ApplyCons(t, s, emb, args.tail ++ es).setPos(a.pos)).setPos(e.pos)
-    case Apply(t, emb, args) =>
-      val s = globals(t.s)
-      if(!s.isDef) ApplyCons(t, s, emb, args).setPos(e.pos) else Assignment(args.head, ApplyCons(t, s, emb, args.tail).setPos(e.pos))
-    case e => e
-  }
-
-  // convert from cons-order ANF back to inlined expressions
-  def toInline(es: Seq[Expr]): Seq[Expr] = {
-    if(es.isEmpty) es
-    else {
-      val vars = mutable.HashMap.from(es.init.map { case a: Assignment => (a.lhs, a) })
-      def f(e: Expr): Expr = e match {
-        case e: Ident => vars.remove(e).map { a => f(a.rhs) }.getOrElse(e)
-        case e: Tuple => vars.remove(e).map { a => f(a.rhs) }.getOrElse(e)
-        case ApplyCons(target, tsym, emb, args) => ApplyCons(target, tsym, emb, args.map(f)).setPos(e.pos)
-        case Assignment(l, r) => Assignment(f(r), f(l)).setPos(e.pos)
-      }
-      val e2 = f(es.last)
-      (vars.valuesIterator ++ Iterator.single(e2)).toSeq
-    }
   }
 }

@@ -25,7 +25,7 @@ object Main extends App {
     //ShowableNode.print(model.unit)
 
     val inter = model.createST3Interpreter(compile = false, collectStats = true)
-    model.setData(inter)
+    model.setDataIn(inter)
     println("Initial state:")
     inter.scope.log(System.out)
     val steps = inter.reduce()

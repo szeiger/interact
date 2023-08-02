@@ -3,17 +3,17 @@ cons String[ref]
 cons Dummy[ref]
 
 # Automatic move of payload
-def _ + y : r
+def _ + y = r
   | Int[i] => intAdd[i](y)
 
 #match Int[i] + y => intAdd[i](y)
 
 # Explicit computation on payloads
-def intAdd[int a](_): r
+def intAdd[int a](_) = r
   | Int[b] => [de.szeiger.interact.Intrinsics.add(a, b, c)], Int[c]
 
 # Value-returning method call instead of out parameter
-def strlen(_): r
+def strlen(_) = r
   | String[s] => Int[de.szeiger.interact.Intrinsics.strlen(s)]
 
 let simple = Int[42],
@@ -26,13 +26,13 @@ let simple = Int[42],
     erase(dummy2a)
 
 # Currying
-def _ * _ : r
+def _ * _ = r
   | Int[a], Int[b] => [de.szeiger.interact.Intrinsics.mult(a, b, c)], Int[c]
 
 let mult = Int[3] * Int[2]
 
 # Conditional matching
-def fib(_): r
+def fib(_) = r
   | Int[i] if [i == 0]  => Int[1]
            if [i == 1]  => Int[1]
            else         => fib(Int[i-1]) + fib(Int[i-2])

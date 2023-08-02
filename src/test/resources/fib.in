@@ -1,11 +1,11 @@
 cons Z
 cons S(n)
 
-def _ + y : r
+def _ + y = r
   | Z    => y
   | S(x) => S(x + y)
 
-def fib(_): r
+def fib(_) = r
   | Z       => 1'c
   | S(Z)    => 1'c
   | S(S(n)) => (n1, n2) = dup(n),

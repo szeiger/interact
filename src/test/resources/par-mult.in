@@ -1,11 +1,11 @@
 cons Z
 cons S(n)
 
-def _ + y : r
+def _ + y = r
   | Z    => y
   | S(x) => x + S(y)
 
-def _ * y : r
+def _ * y = r
   | Z    => erase(y), Z
   | S(x) => (a, b) = dup(y),
             r = b + x * a

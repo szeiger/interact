@@ -4,16 +4,16 @@ cons S(n)
 
 # Erasure and Duplication
 # def erase(_)
-# def dup(_): (a, b)
+# def dup(_) = (a, b)
 #   | dup(_) = (c, d) => (c, d)
 
 # Addition
-def _ + y : r
+def _ + y = r
   | Z    => y
   | S(x) => x + S(y)
 
 # Multiplication
-def _ * y : r
+def _ * y = r
   | Z    => erase(y), Z
   | S(x) => (y1, y2) = dup(y), x * y1 + y2
 
@@ -26,13 +26,13 @@ let example_3_times_2 = 3'c * 2'c
 
 # Lists
 cons Nil
-cons head :: tail : l
+cons head :: tail = l
 
-def length(list): r
+def length(list) = r
   | Nil => Z
   | x :: xs => erase(x) , S(length(xs))
 
-def map(list, fi, fo): r
+def map(list, fi, fo) = r
   | Nil => erase(fi), erase(fo), Nil
   | x :: xs => (x, fi2) = dup(fi),
                (fo1, fo2) = dup(fo),
@@ -46,11 +46,11 @@ let l0 = 1'c :: 2'c :: 3'c :: Nil,
 
 # Explicit lambdas
 cons in |> out
-def apply(l, in): out
+def apply(l, in) = out
   | i |> o => in = i, o
 
 # Example: List mapping with lambdas
-def map2(l, f): r
+def map2(l, f) = r
   | Nil     => erase(f), Nil
   | x :: xs => (f1, f2) = dup(f),
                apply(f1, x) :: map2(xs, f2)

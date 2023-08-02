@@ -13,9 +13,10 @@ object TestUtils {
   def check(testName: String, spec: String, expectedSteps: Int = -1, addEraseDup: Boolean = true): Unit = {
     val basePath = s"src/test/resources/$testName"
     val statements = Parser.parse(Path.of(basePath+".in"))
-    val model = new Compiler(statements, addEraseDup = addEraseDup)
+    val global = new Global(addEraseDup = addEraseDup)
+    val model = new Compiler(statements, global)
     val inter = model.createInterpreter(spec, collectStats = true, debugLog = false, debugBytecode = false)
-    model.setData(inter)
+    model.setDataIn(inter)
     val steps = inter.reduce()
     val out = new ByteArrayOutputStream()
     inter.scope.log(new PrintStream(out, true, StandardCharsets.UTF_8), color = false)

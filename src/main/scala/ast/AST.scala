@@ -38,11 +38,11 @@ sealed trait Node extends ShowableNode with Cloneable {
 
 sealed trait Statement extends Node
 
-case class CompilationUnit(statements: Seq[Statement]) extends Node {
+case class CompilationUnit(statements: Vector[Statement]) extends Node {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += statements
 }
 
-case class Cons(name: Ident, args: Seq[IdentOrWildcard], operator: Boolean, payloadType: PayloadType, embeddedId: Option[Ident], ret: Option[Ident], der: Option[Seq[Ident]]) extends Statement {
+case class Cons(name: Ident, args: Vector[IdentOrWildcard], operator: Boolean, payloadType: PayloadType, embeddedId: Option[Ident], ret: Option[Ident], der: Option[Vector[Ident]]) extends Statement {
   def show: String = {
     val a = if(args.isEmpty) "" else args.map(_.show).mkString("(", ", ", ")")
     val p = if(payloadType.isDefined) s"[$payloadType${embeddedId.map(i => " "+i.show).getOrElse("")}]" else ""
@@ -62,7 +62,9 @@ sealed trait EmbeddedExpr extends AnyExpr
 trait Expr extends AnyExpr {
   def allIdents: Iterator[Ident]
 }
-trait IdentOrWildcard extends Expr
+trait IdentOrWildcard extends Expr {
+  def isWildcard: Boolean
+}
 
 case class IntLit(i: Int) extends EmbeddedExpr {
   def show = i.toString
@@ -72,7 +74,7 @@ case class StringLit(s: String) extends EmbeddedExpr {
   def show = s"\"$s\""
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
-case class EmbeddedApply(methodQNIds: Seq[Ident], args: Seq[EmbeddedExpr]) extends EmbeddedExpr {
+case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr]) extends EmbeddedExpr {
   lazy val methodQN = methodQNIds.map(_.s)
   def show = args.map(_.show).mkString(s"${methodQN.mkString(".")}(", ", ", ")")
   def className = methodQN.init.mkString(".")
@@ -86,11 +88,13 @@ case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
   def show = s
   def allIdents: Iterator[Ident] = Iterator.single(this)
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+  def isWildcard = false
 }
 case class Wildcard() extends IdentOrWildcard {
   def show = "_"
   def allIdents: Iterator[Ident] = Iterator.empty
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+  def isWildcard = true
 }
 case class Assignment(lhs: Expr, rhs: Expr) extends Expr {
   def show = s"${lhs.show} = ${rhs.show}"
@@ -98,28 +102,28 @@ case class Assignment(lhs: Expr, rhs: Expr) extends Expr {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (lhs, "lhs") += (rhs, "rhs")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
-case class Tuple(exprs: Seq[Expr]) extends Expr {
+case class Tuple(exprs: Vector[Expr]) extends Expr {
   def show = exprs.map(_.show).mkString("(", ", ", ")")
   def allIdents: Iterator[Ident] = exprs.iterator.flatMap(_.allIdents)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += exprs
 }
-case class Apply(target: Ident, embedded: Option[EmbeddedExpr], args: Seq[Expr]) extends Expr {
+case class Apply(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends Expr {
   def show = args.iterator.map(_.show).mkString(s"${target.show}${embedded.map(s => s"[${s.show}]").getOrElse("")}(", ", ", ")")
   def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
 }
-case class ApplyCons(target: Ident, tsym: Symbol, embedded: Option[EmbeddedExpr], args: Seq[Expr]) extends Expr {
+case class ApplyCons(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends Expr {
   def show = args.iterator.map(_.show).mkString(s"<${target.show}>${embedded.map(s => s"[$s]").getOrElse("")}(", ", ", ")")
   def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
 }
 
-case class Let(defs: Seq[Expr], embDefs: Seq[EmbeddedExpr]) extends Statement {
+case class Let(defs: Vector[Expr], embDefs: Vector[EmbeddedExpr]) extends Statement {
   def show = defs.map(_.show).mkString(", ")
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (defs, "defs") += (embDefs, "embDefs")
 }
 
-case class Def(name: Ident, args: Seq[IdentOrWildcard], operator: Boolean, payloadType: PayloadType, embeddedId: Option[Ident], ret: Seq[IdentOrWildcard], rules: Seq[DefRule]) extends Statement {
+case class Def(name: Ident, args: Vector[IdentOrWildcard], operator: Boolean, payloadType: PayloadType, embeddedId: Option[Ident], ret: Vector[IdentOrWildcard], rules: Vector[DefRule]) extends Statement {
   def show: String = {
     val a = if(args.isEmpty) "" else args.map(_.show).mkString("(", ", ", ")")
     val p = if(payloadType.isDefined) s"[$payloadType${embeddedId.map(i => " "+i.show).getOrElse("")}]" else ""
@@ -129,17 +133,17 @@ case class Def(name: Ident, args: Seq[IdentOrWildcard], operator: Boolean, paylo
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (name, "name") += (args, "args") += (embeddedId, "embeddedId") += (ret, "ret") += (rules, "rules")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
-case class DefRule(on: Seq[Expr], reduced: Seq[Branch]) extends Node {
+case class DefRule(on: Vector[Expr], reduced: Vector[Branch]) extends Node {
   def show = s"${on.map(_.show).mkString(", ")} ${Branch.show(reduced)}"
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (on, "on") += (reduced, "reduced")
 }
 
-case class Match(on: Expr, reduced: Seq[Branch]) extends Statement {
+case class Match(on: Expr, reduced: Vector[Branch]) extends Statement {
   def show = s"${on.show} ${Branch.show(reduced)}"
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (on, "on") += (reduced, "reduced")
 }
 
-case class Branch(cond: Option[EmbeddedExpr], embRed: Seq[EmbeddedExpr], reduced: Seq[Expr]) extends Node {
+case class Branch(cond: Option[EmbeddedExpr], embRed: Vector[EmbeddedExpr], reduced: Vector[Expr]) extends Node {
   def show(singular: Boolean) = {
     val es = embRed.map(e => s"[${e.show}]") ++ reduced.map(_.show)
     s"${cond.map(e => s"if [${e.show}] ").getOrElse(if(singular) "" else "else ")}=> ${es.mkString(", ")}"
@@ -147,20 +151,20 @@ case class Branch(cond: Option[EmbeddedExpr], embRed: Seq[EmbeddedExpr], reduced
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (cond, "cond") += (embRed, "embRed") += (reduced, "reduced")
 }
 object Branch {
-  def show(rs: Seq[Branch]) =
+  def show(rs: Vector[Branch]) =
     if(rs.length == 1) rs.head.show(true) else rs.map(_.show(false)).mkString(" ")
 }
 
 object IdentOrAp {
-  def unapply(e: Expr): Option[(String, Option[EmbeddedExpr], Seq[Expr])] = e match {
-    case Ident(s) => Some((s, None, Nil))
-    case Apply(Ident(s), emb, a) => Some((s, emb, a))
+  def unapply(e: Expr): Option[(Ident, Option[EmbeddedExpr], Vector[Expr])] = e match {
+    case i: Ident => Some((i, None, Vector.empty))
+    case Apply(i, emb, a) => Some((i, emb, a))
     case _ => None
   }
 }
 object IdentOrTuple {
-  def unapply(e: Expr): Option[Seq[Expr]] = e match {
-    case i: Ident => Some(Seq(i))
+  def unapply(e: Expr): Option[Vector[Expr]] = e match {
+    case i: Ident => Some(Vector(i))
     case Tuple(es) => Some(es)
     case _ => None
   }

@@ -194,7 +194,7 @@ object GenericRuleBranch {
     val syms = new Symbols(Some(globals))
     val cells = mutable.ArrayBuffer.empty[Symbol]
     val conns = mutable.HashSet.empty[Int]
-    val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (syms.getOrAdd(n.s), -i-1) }.toMap
+    val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (syms.getOrAdd(n), -i-1) }.toMap
     assert(freeLookup.size == cr.args1.length + cr.args2.length)
     val fwp = new Array[Int](freeLookup.size)
     val assigners = mutable.ArrayBuffer.empty[PayloadAssigner]
@@ -203,8 +203,8 @@ object GenericRuleBranch {
     val embIdsUsed = mutable.HashSet.empty[String]
     val cellEmbIds = mutable.HashMap.empty[String, Int]
     val shouldUseEmbIds = mutable.HashSet.empty[String]
-    val lhsPayloadType = globals(cr.name1).payloadType
-    val rhsPayloadType = globals(cr.name2).payloadType
+    val lhsPayloadType = cr.sym1.payloadType
+    val rhsPayloadType = cr.sym2.payloadType
     if(lhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(lhsEmbId != null) lhsEmbId else "$unnamedLHS")
     if(rhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(rhsEmbId != null) rhsEmbId else "$unnamedRHS")
     if(lhsEmbId != null) cellEmbIds.put(lhsEmbId, -1)
@@ -292,7 +292,7 @@ object GenericRuleBranch {
     val cond = red.cond.map { ee => EmbeddedComputation(cl, ee)(cr.show)(cellEmbIds(_)) }
     val unusedEmbIds = shouldUseEmbIds -- embIdsUsed
     if(unusedEmbIds.nonEmpty) sys.error(s"Unused ref(s) ${unusedEmbIds.mkString(", ")} in rule ${cr.show}")
-    new GenericRuleBranch(globals(cr.name1).arity, cells.toArray, conns.toArray, fwp, assigners.toArray, embComp, cond)
+    new GenericRuleBranch(cr.sym1.arity, cells.toArray, conns.toArray, fwp, assigners.toArray, embComp, cond)
   }
 }
 
@@ -313,13 +313,13 @@ final class GenericRule(val sym1: Symbol, val sym2: Symbol, val branches: Seq[Ge
 
 object GenericRule {
   def apply[C](cl: ClassLoader, cr: CheckedRule, globals: Symbols): GenericRule = cr match {
-    case dr: DerivedRule if dr.name1 == "erase" => deriveErase(cl, dr.name2, globals)
-    case dr: DerivedRule if dr.name1 == "dup" => deriveDup(cl, dr.name2, globals)
+    case dr: DerivedRule if dr.sym1.id == "erase" => deriveErase(cl, dr.sym2.id, globals)
+    case dr: DerivedRule if dr.sym1.id == "dup" => deriveDup(cl, dr.sym2.id, globals)
     case cr: CheckedMatchRule => apply(cl, cr, globals)
   }
 
   def apply[C](cl: ClassLoader, cr: CheckedMatchRule, globals: Symbols): GenericRule =
-    new GenericRule(globals(cr.name1), globals(cr.name2), cr.reduction.map(r => GenericRuleBranch(cl, cr, r, globals)))
+    new GenericRule(cr.sym1, cr.sym2, cr.reduction.map(r => GenericRuleBranch(cl, cr, r, globals)))
 
   def deriveErase(cl: ClassLoader, name: String, globals: Symbols): GenericRule = {
     val sym = globals(name)

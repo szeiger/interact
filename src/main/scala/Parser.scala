@@ -54,7 +54,7 @@ trait EmbeddedSyntax { this: Parser =>
   def embeddedExpr[_: P]: P[EmbeddedExpr] = P(  positioned(embeddedOperatorExpr(MaxPrecedence))  )
 
   def embeddedAp[_: P]: P[EmbeddedApply] =
-    P(  identExpr.rep(2, ".") ~ "(" ~ embeddedExpr.rep(0, ",") ~ ")"  ).map(EmbeddedApply.tupled)
+    P(  identExpr.rep(2, ".").map(_.toVector) ~ "(" ~ embeddedExpr.rep(0, ",").map(_.toVector) ~ ")"  ).map(EmbeddedApply.tupled)
 
   def bracketedEmbeddedExpr[_: P]: P[EmbeddedExpr] =
     P(  "[" ~ embeddedExpr ~ "]"  )
@@ -71,11 +71,11 @@ trait EmbeddedSyntax { this: Parser =>
       case (e, ts) =>
         val right = ts.count(_._1.s.endsWith(":"))
         if(right == 0)
-          ts.foldLeft(e) { case (z, (o, a)) => EmbeddedApply(Seq(o), Seq(z, a)).setPos(o.pos) }
+          ts.foldLeft(e) { case (z, (o, a)) => EmbeddedApply(Vector(o), Vector(z, a)).setPos(o.pos) }
         else if(right == ts.length) {
           val e2 = ts.last._2
           val ts2 = ts.map(_._1).zip(e +: ts.map(_._2).init)
-          ts2.foldRight(e2) { case ((o, a), z) => EmbeddedApply(Seq(o), Seq(a, z)).setPos(o.pos) }
+          ts2.foldRight(e2) { case ((o, a), z) => EmbeddedApply(Vector(o), Vector(a, z)).setPos(o.pos) }
         } else sys.error("Chained binary operators must have the same associativity")
     }
   }
@@ -88,18 +88,18 @@ trait Syntax { this: Parser =>
   def wildcard[_: P]: P[Wildcard] = P("_").map(_ => Wildcard())
 
   def church[_: P]: P[Expr] = (pos ~ churchLit).map { case (p, i) =>
-    (1 to i).foldLeft(Ident("Z").setPos(p): Expr) { case (z, _) => Apply(Ident("S").setPos(p), None, z :: Nil).setPos(p) }
+    (1 to i).foldLeft(Ident("Z").setPos(p): Expr) { case (z, _) => Apply(Ident("S").setPos(p), None, Vector(z)).setPos(p) }
   }
 
   def appOrIdent[_: P]: P[Expr] =
     P(
       positioned((identExpr ~ bracketedEmbeddedExpr.? ~ ("(" ~ expr.rep(sep = ",") ~ ")").?).map { case (id, embO, argsO) =>
-        if(embO.isDefined || argsO.isDefined) Apply(id, embO, argsO.getOrElse(Nil)) else id
+        if(embO.isDefined || argsO.isDefined) Apply(id, embO, argsO.getOrElse(Vector.empty).toVector) else id
       })
     )
 
   def tuple[_: P]: P[Tuple] =
-    P(  "(" ~ expr.rep(min = 0, sep = ",") ~ ")"  ).map(Tuple)
+    P(  "(" ~ expr.rep(min = 0, sep = ",").map(_.toVector) ~ ")"  ).map(Tuple)
 
   def simpleExpr[_: P]: P[Expr] =
     P(  (appOrIdent | wildcard | church | tuple)  )
@@ -113,11 +113,11 @@ trait Syntax { this: Parser =>
       case (e, ts) =>
         val right = ts.count(_._1.s.endsWith(":"))
         if(right == 0)
-          ts.foldLeft(e) { case (z, (o, oe, a)) => Apply(o, oe, Seq(z, a)).setPos(o.pos) }
+          ts.foldLeft(e) { case (z, (o, oe, a)) => Apply(o, oe, Vector(z, a)).setPos(o.pos) }
         else if(right == ts.length) {
           val e2 = ts.last._3
           val ts2 = ts.map(t => (t._1, t._2)).zip(e +: ts.map(_._3).init)
-          ts2.foldRight(e2) { case (((o, oe), a), z) => Apply(o, oe, Seq(a, z)).setPos(o.pos) }
+          ts2.foldRight(e2) { case (((o, oe), a), z) => Apply(o, oe, Vector(a, z)).setPos(o.pos) }
         } else sys.error("Chained binary operators must have the same associativity")
     }
   }
@@ -128,17 +128,17 @@ trait Syntax { this: Parser =>
       case (e1, Some(e2)) => Assignment(e1, e2).setPos(e1.pos)
     }
 
-  def params[_: P](min: Int): P[Seq[IdentOrWildcard]] =
-    P(  ("(" ~ param.rep(min = min, sep = ",") ~ ")")  )
+  def params[_: P](min: Int): P[Vector[IdentOrWildcard]] =
+    P(  ("(" ~ param.rep(min = min, sep = ",").map(_.toVector) ~ ")")  )
 
   def param[_: P]: P[IdentOrWildcard] =
     P(  positioned(identExpr | wildcard)  )
 
-  def defReturn[_: P]: P[Seq[IdentOrWildcard]] =
-    P(  params(1) | identExpr.map(Seq(_))  )
+  def defReturn[_: P]: P[Vector[IdentOrWildcard]] =
+    P(  params(1) | identExpr.map(Vector(_))  )
 
-  def deriving[_ : P]: P[Seq[Ident]] =
-    P(  kw("deriving") ~/ "(" ~ identExpr.rep(0, sep=",") ~ ")" )
+  def deriving[_ : P]: P[Vector[Ident]] =
+    P(  kw("deriving") ~/ "(" ~ identExpr.rep(0, sep=",").map(_.toVector) ~ ")" )
 
   def embeddedSpecOpt[_: P]: P[(PayloadType, Option[Ident])] =
   P(  ("[" ~ ident ~ identExpr.? ~ "]"  ).?  ).map(_.map {
@@ -148,18 +148,18 @@ trait Syntax { this: Parser =>
   }.getOrElse((PayloadType.VOID, None)))
 
   def cons[_: P]: P[Cons] =
-    P(  kw("cons") ~/ (operatorDef | namedCons) ~ (":" ~ identExpr).? ~ deriving.?  ).map(Cons.tupled)
+    P(  kw("cons") ~/ (operatorDef | namedCons) ~ ("=" ~ identExpr).? ~ deriving.?  ).map(Cons.tupled)
 
   def definition[_: P]: P[Def] =
-    P(  kw("def") ~/ (operatorDef | namedDef) ~ (":" ~ defReturn).?.map(_.getOrElse(Nil)) ~ defRule.rep  ).map(Def.tupled)
+    P(  kw("def") ~/ (operatorDef | namedDef) ~ ("=" ~ defReturn).?.map(_.getOrElse(Vector.empty)) ~ defRule.rep.map(_.toVector)  ).map(Def.tupled)
 
-  def namedCons[_: P]: P[(Ident, Seq[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
-    P(  identExpr ~ embeddedSpecOpt ~ params(0).?.map(_.getOrElse(Nil))  ).map { case (n, (pt, eid), as) => (n, as, false, pt, eid) }
+  def namedCons[_: P]: P[(Ident, Vector[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
+    P(  identExpr ~ embeddedSpecOpt ~ params(0).?.map(_.getOrElse(Vector.empty))  ).map { case (n, (pt, eid), as) => (n, as, false, pt, eid) }
 
-  def operatorDef[_: P]: P[(Ident, Seq[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
-    P(  param ~ anyOperator ~ embeddedSpecOpt ~ param  ).map { case (a1, o, (pt, eid), a2) => (o, Seq(a1, a2), true, pt, eid) }
+  def operatorDef[_: P]: P[(Ident, Vector[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
+    P(  param ~ anyOperator ~ embeddedSpecOpt ~ param  ).map { case (a1, o, (pt, eid), a2) => (o, Vector(a1, a2), true, pt, eid) }
 
-  def namedDef[_: P]: P[(Ident, Seq[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
+  def namedDef[_: P]: P[(Ident, Vector[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
     P(  identExpr ~ embeddedSpecOpt ~ params(1)  ).map { case (n, (pt, eid), as) => (n, as, false, pt, eid) }
 
   def anyExpr[_ : P]: P[Either[EmbeddedExpr, Expr]] =
@@ -167,36 +167,36 @@ trait Syntax { this: Parser =>
 
   def simpleReduction[_: P]: P[Branch] = P(
     positioned("=>" ~ anyExpr.rep(1, sep = ",").map { es =>
-      val embRed = es.collect { case Left(e) => e }
-      val red = es.collect { case Right(e) => e }
+      val embRed = es.iterator.collect { case Left(e) => e }.toVector
+      val red = es.iterator.collect { case Right(e) => e }.toVector
       Branch(None, embRed, red)
     })
   )
 
-  def conditionalReductions[_: P]: P[Seq[Branch]] =
-    P(  ("if" ~ (bracketedEmbeddedExpr ~ simpleReduction).map { case (p, r) => r.copy(cond = Some(p)).setPos(r.pos)}).rep(1) ~
+  def conditionalReductions[_: P]: P[Vector[Branch]] =
+    P(  ("if" ~ (bracketedEmbeddedExpr ~ simpleReduction).map { case (p, r) => r.copy(cond = Some(p)).setPos(r.pos)}).rep(1).map(_.toVector) ~
       "else" ~ simpleReduction
     ).map { case (rs, r) => rs :+ r }
 
-  def reductions[_: P]: P[Seq[Branch]] =
-    P(  conditionalReductions | simpleReduction.map(Seq(_))  )
+  def reductions[_: P]: P[Vector[Branch]] =
+    P(  conditionalReductions | simpleReduction.map(Vector(_))  )
 
   def condition[_: P]: P[EmbeddedExpr] =
     P(  "if" ~ bracketedEmbeddedExpr  )
 
   def defRule[_: P]: P[DefRule] =
-    P(  positioned(("|" ~ expr.rep(1, ",") ~ reductions).map(DefRule.tupled))  )
+    P(  positioned(("|" ~ expr.rep(1, ",").map(_.toVector) ~ reductions).map(DefRule.tupled))  )
 
   def matchStatement[_: P]: P[Match] =
     P(  "match" ~ expr ~ reductions  ).map(Match.tupled)
 
   def data[_: P]: P[Let] =
     P(  kw("let") ~/ (expr.map(_ -> true) | bracketedEmbeddedExpr.map(_ -> false)).rep(1, sep = ",") ).map { es =>
-      Let(es.collect { case (e: Expr, true) => e }, es.collect { case (e: EmbeddedExpr, false) => e })
+      Let(es.iterator.collect { case (e: Expr, true) => e }.toVector, es.iterator.collect { case (e: EmbeddedExpr, false) => e }.toVector)
     }
 
   def unit[_: P]: P[CompilationUnit] =
-    P(  Start ~ pos ~ positioned(cons | data | definition | matchStatement ).rep ~ End  ).map { case (p, es) => CompilationUnit(es).setPos(p) }
+    P(  Start ~ pos ~ positioned(cons | data | definition | matchStatement ).rep ~ End  ).map { case (p, es) => CompilationUnit(es.toVector).setPos(p) }
 }
 
 class Parser(file: String, indexed: ConvenientParserInput) extends Lexical with EmbeddedSyntax with Syntax {

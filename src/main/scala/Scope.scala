@@ -68,7 +68,7 @@ abstract class Scope[Cell] { self =>
     }
     val refs = new RefsMap
     for(e <- defs; i <- e.allIdents) {
-      val s = syms.getOrAdd(i.s)
+      val s = syms.getOrAdd(i)
       if(!s.isCons) refs.inc(s)
     }
     def cellRet(s: Symbol, c: Cell): Seq[(Any, Int)] = {
@@ -78,7 +78,7 @@ abstract class Scope[Cell] { self =>
     val bind = mutable.HashMap.empty[Symbol, TempWire]
     def create(e: Expr): Seq[(Any, Int)] = e match {
       case i: Ident =>
-        val s = syms.getOrAdd(i.s)
+        val s = syms.getOrAdd(i)
         refs(s) match {
           case 0 => cellRet(s, createCell(s, None))
           case 1 => val c = createCell(s, None); freeWires.addOne(c); cellRet(s, c)

@@ -4,8 +4,12 @@ import de.szeiger.interact.ast._
 
 import scala.collection.mutable.ArrayBuffer
 
-final class Global {
-  val globalSymbols = new Symbols
+final class Global(
+  val defaultDerive: Seq[String] = Seq("erase", "dup"),
+  val addEraseDup: Boolean = true
+) {
+  final val globalSymbols = new Symbols
+
   private[this] var hasErrors: Boolean = false
   private[this] val accumulated = ArrayBuffer.empty[Notice]
 
@@ -23,6 +27,12 @@ final class Global {
   def fatal(msg: String, at: Position): Unit = {
     accumulated += new Notice(msg, at, Severity.Fatal)
     throw getCompilerResult()
+  }
+
+  def mkLocalId(name: String): Ident = {
+    val i = Ident(name)
+    i.sym = new Symbol(name)
+    i
   }
 
   def getCompilerResult(): CompilerResult = new CompilerResult(accumulated.toIndexedSeq)
