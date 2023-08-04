@@ -11,6 +11,7 @@ final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
   override def toString: String = id
   def isDefined: Boolean = this != Symbol.NoSymbol
   def isEmpty: Boolean = !isDefined
+  def uniqueStr: String = if(isDefined) s"$id @ ${System.identityHashCode(this)}" else "<NoSymbol>"
 }
 
 object Symbol {
@@ -18,7 +19,7 @@ object Symbol {
 }
 
 class Symbols(parent: Option[Symbols] = None) {
-  private val syms = mutable.HashMap.empty[String, Symbol]
+  private[this] val syms = mutable.HashMap.empty[String, Symbol]
   def define(id: String, isCons: Boolean = false, isDef: Boolean = false, arity: Int = 0, returnArity: Int = 1,
       payloadType: PayloadType = PayloadType.VOID, matchContinuationPort: Int = -2,
       isEmbedded: Boolean = false): Symbol = {
@@ -34,11 +35,7 @@ class Symbols(parent: Option[Symbols] = None) {
   def getOrAdd(id: Ident): Symbol = get(id).getOrElse(define(id.s))
   def contains(id: Ident): Boolean = get(id).isDefined
   def get(id: Ident): Option[Symbol] = get(id.s)
-  def get(id: String): Option[Symbol] =
-    (parent match {
-      case Some(p) => p.syms.get(id)
-      case None => None
-    }).orElse(syms.get(id))
+  def get(id: String): Option[Symbol] = syms.get(id).orElse(parent.flatMap(_.get(id)))
   def apply(id: Ident): Symbol = apply(id.s)
   def apply(id: String): Symbol =
     get(id).getOrElse(sys.error(s"No symbol found for $id"))

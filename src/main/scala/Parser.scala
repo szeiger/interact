@@ -188,7 +188,7 @@ trait Syntax { this: Parser =>
     P(  positioned(("|" ~ expr.rep(1, ",").map(_.toVector) ~ reductions).map(DefRule.tupled))  )
 
   def matchStatement[_: P]: P[Match] =
-    P(  "match" ~ expr ~ reductions  ).map(Match.tupled)
+    P(  "match" ~ expr ~ reductions  ).map { case (on, red) => Match(Vector(on), red) }
 
   def data[_: P]: P[Let] =
     P(  kw("let") ~/ (expr.map(_ -> true) | bracketedEmbeddedExpr.map(_ -> false)).rep(1, sep = ",") ).map { es =>

@@ -3,9 +3,10 @@ import de.szeiger.interact._
 import de.szeiger.interact.ast.ShowableNode
 
 object Main extends App {
-  def handleRes(res: CompilerResult): Unit = {
+  def handleRes(res: CompilerResult, full: Boolean): Unit = {
     res.notices.foreach(println)
-    println(res.summary)
+    if(full) res.printStackTrace()
+    else println(res.summary)
     if(res.hasErrors) sys.exit(1)
   }
   try {
@@ -24,13 +25,14 @@ object Main extends App {
     //model.data.foreach(r => println(s"  ${r.show}"))
     //ShowableNode.print(model.unit)
 
+    ShowableNode.print(model.unit2)
     val inter = model.createST3Interpreter(compile = false, collectStats = true)
-    model.setDataIn(inter)
+    model.setDataIn(inter.scope)
     println("Initial state:")
     inter.scope.log(System.out)
     val steps = inter.reduce()
     println(s"Irreducible after $steps reductions.")
     inter.scope.log(System.out)
-    handleRes(model.global.getCompilerResult())
-  } catch { case ex: CompilerResult => handleRes(ex) }
+    handleRes(model.global.getCompilerResult(), false)
+  } catch { case ex: CompilerResult => handleRes(ex, true) }
 }

@@ -81,14 +81,14 @@ abstract class Transform {
     case n: EmbeddedApply => apply(n)
   }
 
-  def apply(n: Match): Match = {
-    val on2 = apply(n.on)
+  def apply(n: Match): Vector[Statement] = Vector({
+    val on2 = mapC(n.on)(apply)
     val red2 = mapC(n.reduced)(apply)
     if((on2 eq n.on) && (red2 eq n.reduced)) n
     else Match(on2, red2).setPos(n.pos)
-  }
+  })
 
-  def apply(n: Cons): Cons = {
+  def apply(n: Cons): Vector[Statement] = Vector({
     val n2 = apply(n.name)
     val a2 = mapC(n.args)(apply)
     val e2 = mapC(n.embeddedId)(apply)
@@ -96,16 +96,16 @@ abstract class Transform {
     val d2 = mapC(n.der)(mapC(_)(apply))
     if((n2 eq n.name) && (a2 eq n.args) && (e2 eq n.embeddedId) && (r2 eq n.ret) && (d2 eq n.der)) n
     else Cons(n2, a2, n.operator, n.payloadType, e2, r2, d2).setPos(n.pos)
-  }
+  })
 
-  def apply(n: Let): Let = {
+  def apply(n: Let): Vector[Statement] = Vector({
     val d2 = mapC(n.defs)(apply)
     val e2 = mapC(n.embDefs)(apply)
     if((d2 eq n.defs) && (e2 eq n.embDefs)) n
     else Let(d2, e2).setPos(n.pos)
-  }
+  })
 
-  def apply(n: Def): Def = {
+  def apply(n: Def): Vector[Statement] = Vector({
     val n2 = apply(n.name)
     val a2 = mapC(n.args)(apply)
     val e2 = mapC(n.embeddedId)(apply)
@@ -113,17 +113,35 @@ abstract class Transform {
     val u2 = mapC(n.rules)(apply)
     if((n2 eq n.name) && (a2 eq n.args) && (e2 eq n.embeddedId) && (r2 eq n.ret) && (u2 eq n.rules)) n
     else Def(n2, a2, n.operator, n.payloadType, e2, r2, u2).setPos(n.pos)
-  }
+  })
 
-  def apply(n: Statement): Statement = n match {
+  def apply(n: Statement): Vector[Statement] = n match {
     case n: Match => apply(n)
     case n: Cons => apply(n)
     case n: Let => apply(n)
     case n: Def => apply(n)
+    case n: CheckedRule => apply(n)
   }
 
+  def apply(n: CheckedRule): Vector[Statement] = n match {
+    case n: DerivedRule => apply(n)
+    case n: MatchRule => apply(n)
+  }
+
+  def apply(n: DerivedRule): Vector[Statement] = Vector(n)
+
+  def apply(n: MatchRule): Vector[Statement] = Vector({
+    val a12 = mapC(n.args1)(apply)
+    val a22 = mapC(n.args2)(apply)
+    val emb12 = mapC(n.emb1)(apply)
+    val emb22 = mapC(n.emb2)(apply)
+    val red2 = mapC(n.reduction)(apply)
+    if((a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.reduction)) n
+    else MatchRule(n.sym1, n.sym2, a12, a22, emb12, emb22, red2).setPos(n.pos)
+  })
+
   def apply(n: CompilationUnit): CompilationUnit = {
-    val st2 = mapC(n.statements)(apply)
+    val st2 = flatMapC(n.statements)(apply)
     if(st2 eq n.statements) n
     else CompilationUnit(st2).setPos(n.pos)
   }
@@ -139,6 +157,16 @@ abstract class Transform {
   protected[this] final def mapC[T,R](xs: Vector[T])(f: T => R): Vector[R] = {
     var changed = false
     val xs2 = xs.map { x =>
+      val x2 = f(x)
+      if(x2.asInstanceOf[AnyRef] != x.asInstanceOf[AnyRef]) changed = true
+      x2
+    }
+    if(changed) xs2 else xs.asInstanceOf[Vector[R]]
+  }
+
+  protected[this] final def flatMapC[T,R](xs: Vector[T])(f: T => Vector[R]): Vector[R] = {
+    var changed = false
+    val xs2 = xs.flatMap { x =>
       val x2 = f(x)
       if(x2.asInstanceOf[AnyRef] != x.asInstanceOf[AnyRef]) changed = true
       x2

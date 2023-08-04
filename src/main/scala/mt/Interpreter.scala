@@ -1,8 +1,8 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BaseInterpreter, CheckedRule, GenericRule, SymbolIdLookup}
-import de.szeiger.interact.ast.{EmbeddedExpr, Symbol, Symbols}
+import de.szeiger.interact.{Analyzer, BaseInterpreter, GenericRule, SymbolIdLookup}
+import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.util.Arrays
@@ -257,7 +257,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxW = new ParSupport.AtomicCounter
     ParSupport.foreach(rules) { cr =>
-      val g = GenericRule(getClass.getClassLoader, cr, globals)
+      val g = GenericRule(getClass.getClassLoader, cr)
       if(debugLog) g.log()
       assert(g.branches.length == 1)
       val branch = g.branches.head

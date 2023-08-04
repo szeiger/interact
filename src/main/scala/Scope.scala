@@ -14,7 +14,7 @@ abstract class Scope[Cell] { self =>
 
   def clear(): Unit = freeWires.clear()
 
-  def addData(data: Let, globals: Symbols): Unit = {
+  def addData(data: Let): Unit = {
     val createEmb = mutable.ArrayBuffer.empty[(Symbol, EmbeddedExpr, Cell)]
     val catchEmb: Scope[Cell] = new Scope[Cell] {
       override def createCell(sym: Symbol, payload: Option[EmbeddedExpr]): Cell = {
@@ -24,7 +24,7 @@ abstract class Scope[Cell] { self =>
       }
       override def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = self.connectCells(c1, p1, c2, p2)
     }
-    catchEmb.addExprs(data.defs, new Symbols(Some(globals)))
+    catchEmb.addExprs(data.defs)
     freeWires ++= catchEmb.freeWires
     val foundEmbIds = mutable.HashMap.empty[String, Cell]
     createEmb.foreach { case (sym, e, c) =>
@@ -58,7 +58,7 @@ abstract class Scope[Cell] { self =>
     embComp.foreach { e => e.invoke(e.argIndices) }
   }
 
-  def addExprs(defs: Iterable[Expr], syms: Symbols): Unit = {
+  def addExprs(defs: Iterable[Expr]): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
     @tailrec def connectAny(t1: Any, p1: Int, t2: Any, p2: Int): Unit = (t1, t2) match {
       case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, p2, t1, p1)
@@ -68,7 +68,8 @@ abstract class Scope[Cell] { self =>
     }
     val refs = new RefsMap
     for(e <- defs; i <- e.allIdents) {
-      val s = syms.getOrAdd(i)
+      val s = i.sym
+      assert(s.isDefined)
       if(!s.isCons) refs.inc(s)
     }
     def cellRet(s: Symbol, c: Cell): Seq[(Any, Int)] = {
@@ -78,7 +79,8 @@ abstract class Scope[Cell] { self =>
     val bind = mutable.HashMap.empty[Symbol, TempWire]
     def create(e: Expr): Seq[(Any, Int)] = e match {
       case i: Ident =>
-        val s = syms.getOrAdd(i)
+        val s = i.sym
+        assert(s.isDefined)
         refs(s) match {
           case 0 => cellRet(s, createCell(s, None))
           case 1 => val c = createCell(s, None); freeWires.addOne(c); cellRet(s, c)
@@ -87,7 +89,7 @@ abstract class Scope[Cell] { self =>
         }
       case Tuple(es) => es.flatMap(create)
       case Apply(i, emb, args) =>
-        val s = syms(i.s)
+        val s = i.sym
         assert(s.isCons)
         val c = createCell(s, emb)
         args.zipWithIndex.foreach { case (a, p0) =>
@@ -223,4 +225,9 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     }
     cuts
   }
+}
+
+trait BaseInterpreter {
+  def scope: Analyzer[_]
+  def reduce(): Int
 }

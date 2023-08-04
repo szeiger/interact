@@ -2,11 +2,13 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast._
 
-class Prepare(global: Global) {
+/**
+ * Create all symbols and check function calls and linearity.
+ */
+class Prepare(global: Global) extends Phase {
   import global._
 
-  def apply(unit: CompilationUnit): Unit = {
-    // Enter constructor symbols and collect different statement types
+  def apply(unit: CompilationUnit): CompilationUnit = {
     unit.statements.foreach {
       case c: Cons =>
         if(globalSymbols.contains(c.name)) error(s"Duplicate cons/def: ${c.name.s}", c.name)
@@ -16,13 +18,11 @@ class Prepare(global: Global) {
         else d.name.sym = globalSymbols.defineDef(d.name.s, d.args.length, d.ret.length, d.payloadType)
       case _ =>
     }
-
     assign(unit, globalSymbols, false)
-    checkThrow()
+    unit
   }
 
-  // Assign symbols everywhere and check function calls and linearity
-  private def assign(n: Node, scope: Symbols, embedded: Boolean): Unit = n match {
+  private[this] def assign(n: Node, scope: Symbols, embedded: Boolean): Unit = n match {
     case n: Ident =>
       assert(n.sym.isEmpty)
       scope.get(n) match {
@@ -36,7 +36,7 @@ class Prepare(global: Global) {
           n.sym = scope.define(n.s, isEmbedded = embedded)
       }
     case Cons(_, args, _, _, embId, ret, der) =>
-      val sc = globalSymbols.sub()
+      val sc = scope.sub()
       args.foreach(assign(_, sc, false))
       args.foreach(a => if(a.isWildcard) error(s"No wildcard parameters allowed in cons", a))
       ret.foreach(assign(_, sc, false))
@@ -48,21 +48,21 @@ class Prepare(global: Global) {
         else i.sym = symO.get
       })
     case Def(_, args, _, _, embId, ret, rules) =>
-      val sc = globalSymbols.sub()
+      val sc = scope.sub()
       args.foreach(assign(_, sc, false))
       ret.foreach(assign(_, sc, false))
       embId.foreach(assign(_, sc, true))
       rules.foreach(assign(_, sc, false))
     case DefRule(on, reduced) =>
-      val sc = globalSymbols.sub()
+      val sc = scope.sub()
       on.foreach(assign(_, sc, false))
       reduced.foreach(assign(_, sc, false))
     case Match(on, reduced) =>
-      val sc = globalSymbols.sub()
-      assign(on, sc, false)
+      val sc = scope.sub()
+      on.foreach(assign(_, sc, false))
       reduced.foreach(assign(_, sc, false))
     case Branch(cond, embRed, red) =>
-      val sc = globalSymbols.sub()
+      val sc = scope.sub()
       cond.foreach(assign(_, sc, true))
       embRed.foreach(assign(_, sc, true))
       red.foreach(assign(_, sc, false))
@@ -79,7 +79,7 @@ class Prepare(global: Global) {
     case EmbeddedApply(_, args) =>
       args.foreach(assign(_, scope, true))
     case n @ Let(defs, embDefs) =>
-      val sc = globalSymbols.sub()
+      val sc = scope.sub()
       defs.foreach(assign(_, sc, false))
       embDefs.foreach(assign(_, sc, true))
       val refs = new RefsMap

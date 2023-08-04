@@ -16,7 +16,7 @@ object TestUtils {
     val global = new Global(addEraseDup = addEraseDup)
     val model = new Compiler(statements, global)
     val inter = model.createInterpreter(spec, collectStats = true, debugLog = false, debugBytecode = false)
-    model.setDataIn(inter)
+    model.setDataIn(inter.scope)
     val steps = inter.reduce()
     val out = new ByteArrayOutputStream()
     inter.scope.log(new PrintStream(out, true, StandardCharsets.UTF_8), color = false)

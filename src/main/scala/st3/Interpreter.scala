@@ -2,7 +2,7 @@ package de.szeiger.interact.st3
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{PayloadType, EmbeddedExpr, Symbol, Symbols}
+import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
 import java.lang.invoke.MethodHandle
@@ -357,7 +357,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxA = new ParSupport.AtomicCounter
     ParSupport.foreach(rules) { cr =>
-      val g = GenericRule(getClass.getClassLoader, cr, globals)
+      val g = GenericRule(getClass.getClassLoader, cr)
       if(debugLog) g.log()
       val ri =
         if(compile) codeGen.compile(g, cl)(this)

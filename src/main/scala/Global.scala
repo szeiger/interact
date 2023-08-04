@@ -3,6 +3,7 @@ package de.szeiger.interact
 import de.szeiger.interact.ast._
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.control.NonFatal
 
 final class Global(
   val defaultDerive: Seq[String] = Seq("erase", "dup"),
@@ -23,8 +24,8 @@ final class Global(
     hasErrors = true
   }
 
-  def fatal(msg: String, at: Node): Unit = error(msg, at.pos)
-  def fatal(msg: String, at: Position): Unit = {
+  def fatal(msg: String, at: Node): Nothing = fatal(msg, at.pos)
+  def fatal(msg: String, at: Position): Nothing = {
     accumulated += new Notice(msg, at, Severity.Fatal)
     throw getCompilerResult()
   }
@@ -72,7 +73,7 @@ object Severity {
   case object Fatal extends Severity
 }
 
-class CompilerResult(val notices: IndexedSeq[Notice]) extends Exception {
+class CompilerResult(val notices: IndexedSeq[Notice], parent: Throwable = null) extends Exception(parent) {
   lazy val hasErrors = notices.exists(_.isError)
   lazy val summary: String = {
     val errs = notices.count(_.isError)
@@ -87,4 +88,10 @@ class CompilerResult(val notices: IndexedSeq[Notice]) extends Exception {
     notices.foreach(n => b.append(n.formatted).append(eol))
     b.append(summary).result()
   }
+}
+object CompilerResult {
+  def tryInternal[T](at: Position)(f: => T): T = try f catch { case NonFatal(e) =>
+    throw new CompilerResult(Vector(new Notice("Internal error: "+e, at, Severity.Fatal)), e)
+  }
+  def tryInternal[T](at: Node)(f: => T): T = tryInternal(at.pos)(f)
 }
