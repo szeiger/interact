@@ -16,8 +16,8 @@ class InterpreterBenchmark {
 
   @Param(Array(
     //"st2.i", "st2.c",
-    //"st3.i",
-    "st3.c",
+    "st3.i",
+    //"st3.c",
     //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
     //"mt0.c", //"mt1.c", "mt8.c",
@@ -35,25 +35,25 @@ class InterpreterBenchmark {
 
   private val mult1Src =
     """def mult(_, y): r
-      |  | Z => erase(y), Z
-      |  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
+      |  | Z => erase(y); Z
+      |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
       |let res = mult(100'c, 100'c)
       |""".stripMargin
 
   private val mult2Src =
     """def mult(_, y): r
-      |  | Z => erase(y), Z
-      |  | S(x) => (y1, y2) = dup(y), add(mult(x, y1), y2)
-      |let res1 = mult(100'c, 100'c),
-      |    res2 = mult(100'c, 100'c),
-      |    res3 = mult(100'c, 100'c),
+      |  | Z => erase(y); Z
+      |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
+      |let res1 = mult(100'c, 100'c)
+      |    res2 = mult(100'c, 100'c)
+      |    res3 = mult(100'c, 100'c)
       |    res4 = mult(100'c, 100'c)
       |""".stripMargin
 
   private val mult3Src =
     """def mult(_, y): r
-      |  | Z => erase(y), Z
-      |  | S(x) => (a, b) = dup(y), add(b, mult(x, a))
+      |  | Z => erase(y); Z
+      |  | S(x) => (a, b) = dup(y); add(b, mult(x, a))
       |let res = mult(1000'c, 1000'c)
       |""".stripMargin
 
@@ -66,7 +66,7 @@ class InterpreterBenchmark {
       |  | S(n) => fib2(n)
       |def fib2(_): r
       |  | Z    => 1'c
-      |  | S(n) => (n1, n2) = dup(n), add2(fib(S(n1)), fib(n2))
+      |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
       |let res = fib(22'c)
       |""".stripMargin
 
@@ -79,7 +79,7 @@ class InterpreterBenchmark {
       |  | S(n) => fib2(n)
       |def fib2(_): r
       |  | Z    => 1'c
-      |  | S(n) => (n1, n2) = dup(n), add2(fib(S(n1)), fib(n2))
+      |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
       |let res = fib(29'c)
       |""".stripMargin
 

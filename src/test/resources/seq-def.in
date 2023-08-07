@@ -18,22 +18,22 @@ def _ + y = r
 
 #match erase(Z) => ()
 #match erase(S(x)) => erase(x)
-#match dup(Z) = (a, b) => a = Z, b = Z
-#match dup(S(x)) = (a, b) => (sa, sb) = dup(x), s = S(sa), b = S(sb)
+#match dup(Z) = (a, b) => a = Z; b = Z
+#match dup(S(x)) = (a, b) => (sa, sb) = dup(x); s = S(sa); b = S(sb)
 #match dup(dup(_) = (c, d)) = (a, b) => (c, d)
 #match S(x) = S(y) => x = y
 
 # Multiplication
 def _ * y = r
 #  | Z    => erase(y), Z
-#  | S(x) => (y1, y2) = dup(y), x * y1 + y2
+#  | S(x) => (y1, y2) = dup(y); x * y1 + y2
 
-match Z * y => erase(y), Z
-match S(x) * y => (y1, y2) = dup(y), x * y1 + y2
+match Z * y => erase(y); Z
+match S(x) * y => (y1, y2) = dup(y); x * y1 + y2
 
 # Example: Computations on church numerals
-let y = 5'c,
-    x = 3'c,
+let y = 5'c
+    x = 3'c
     example_3_plus_5 = x + y
 
 let example_3_times_2 = 3'c * 2'c
@@ -44,36 +44,36 @@ cons head :: tail = l
 
 def length(list) = r
   | Nil     => Z
-  | x :: xs => erase(x) , S(length(xs))
+  | x :: xs => erase(x); S(length(xs))
 
 def map(list, fi, fo) = r
-  | Nil     => erase(fi), erase(fo), Nil
-  | x :: xs => (x, fi2) = dup(fi),
-               (fo1, fo2) = dup(fo),
+  | Nil     => erase(fi); erase(fo); Nil
+  | x :: xs => (x, fi2) = dup(fi)
+               (fo1, fo2) = dup(fo)
                fo1 :: map(xs, fi2, fo2)
 
 # Example: List operations
-let l0 = 1'c :: 2'c :: 3'c :: Nil,
-    (l0a, l0b) = dup(l0),
-    l0_length = length(l0a),
+let l0 = 1'c :: 2'c :: 3'c :: Nil
+    (l0a, l0b) = dup(l0)
+    l0_length = length(l0a)
     l0_mapped = map(l0b, x, x + 2'c)
 
 # Explicit lambdas
 cons in |> out
 def apply(l, in) = out
-  | i |> o => in = i, o
+  | i |> o => in = i; o
 
 # Example: List mapping with lambdas
 def map2(l, f) = r
-  | Nil     => erase(f), Nil
-  | x :: xs => (f1, f2) = dup(f),
+  | Nil     => erase(f); Nil
+  | x :: xs => (f1, f2) = dup(f)
                apply(f1, x) :: map2(xs, f2)
 
-let l0 = 1'c :: 2'c :: 3'c :: Nil,
+let l0 = 1'c :: 2'c :: 3'c :: Nil
     l0_mapped_lambda = map2(l0, x |> x + 2'c)
 
 # Currying on additional args:
 def foo(a, b) = r
-  | Z           => erase(b), Z
+  | Z           => erase(b); Z
   | S(x), S(y)  => x + y
 let foo_curry = foo(1'c, 2'c)

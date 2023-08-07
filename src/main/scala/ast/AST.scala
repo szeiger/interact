@@ -218,6 +218,7 @@ final class Position(val offset: Int, val file: String, val input: ConvenientPar
       s"$file:$p"
     }
   }
+  lazy val (line, column) = input.find(offset)
   def isDefined: Boolean = this != Position.unknown
   override def toString: String = s"Position($pretty)"
 }

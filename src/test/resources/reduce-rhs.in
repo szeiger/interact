@@ -3,7 +3,7 @@ cons B
 cons C(x)
 cons D
 
-match A(x) = B => C(x) = D, A(D) = C(D)
+match A(x) = B => C(x) = D; A(D) = C(D)
 match C(x) = D => x = D
 
 let A(res) = B

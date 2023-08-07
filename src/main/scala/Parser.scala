@@ -11,6 +11,8 @@ import de.szeiger.interact.ast._
 import scala.collection.mutable.ArrayBuffer
 
 object Lexical {
+  import NoWhitespace._
+
   val reservedTokens = Set("cons", "let", "deriving", "def", "if", "else", "match", "_", ":", "=", "=>", "|")
   private val operatorStart = IndexedSeq(Set('*', '/', '%'), Set('+', '-'), Set(':'), Set('<', '>'), Set('=', '!'), Set('&'), Set('^'), Set('|'))
   private val operatorCont = operatorStart.iterator.flatten.toSet
@@ -20,11 +22,6 @@ object Lexical {
     if(reservedTokens.contains(s) || !s.forall(operatorCont.contains)) -1
     else { val c = s.charAt(0); operatorStart.indexWhere(_.contains(c)) }
   def isRightAssoc(s: String): Boolean = s.endsWith(":")
-}
-
-trait Lexical { this: Parser =>
-  import NoWhitespace._
-  import Lexical._
 
   def ident[_: P]: P[String] =
      P(  (letter|"_") ~ (letter | digit | "_").rep  ).!.filter(!reservedTokens.contains(_))
@@ -38,18 +35,22 @@ trait Lexical { this: Parser =>
     P(  CharPred(operatorStart(precedence).contains) ~ CharPred(operatorCont.contains).rep  ).!.filter(s => !reservedTokens.contains(s))
 
   def anyOperator[_: P]: P[Ident] =
-    P(  positioned(CharPred(operatorCont.contains).rep(1).!.filter(s => !reservedTokens.contains(s)).map(Ident(_)))  )
+    P(  CharPred(operatorCont.contains).rep(1).!.filter(s => !reservedTokens.contains(s)).map(Ident(_))  )
 
   def stringLit[_: P]: P[String] = P(  "\"" ~ (stringChar | stringEscape).rep.! ~ "\""  )
   def stringChar[_: P]: P[Unit] = P( CharsWhile(!s"\\\n\"}".contains(_)) )
   def stringEscape[_: P]: P[Unit] = P( "\\" ~ AnyChar )
 
-  def identExpr[_: P]: P[Ident] = positioned(ident.map(Ident))
+  def comment[$: P] = P( "#" ~ CharsWhile(_ != '\n', 0) )
+  def whitespace[$: P](indent: Int) = P(
+    CharsWhile(_ == ' ', 0) ~ (CharsWhile(_ == ' ', 0) ~ comment.? ~ "\r".? ~ "\n" ~ " ".rep(indent)).rep(0)
+  )
 }
 
 trait EmbeddedSyntax { this: Parser =>
-  import ScriptWhitespace._
   import Lexical._
+
+  def identExpr[_: P]: P[Ident] = positioned(ident.map(Ident))
 
   def embeddedExpr[_: P]: P[EmbeddedExpr] = P(  positioned(embeddedOperatorExpr(MaxPrecedence))  )
 
@@ -82,7 +83,6 @@ trait EmbeddedSyntax { this: Parser =>
 }
 
 trait Syntax { this: Parser =>
-  import ScriptWhitespace._
   import Lexical._
 
   def wildcard[_: P]: P[Wildcard] = P("_").map(_ => Wildcard())
@@ -157,7 +157,7 @@ trait Syntax { this: Parser =>
     P(  identExpr ~ embeddedSpecOpt ~ params(0).?.map(_.getOrElse(Vector.empty))  ).map { case (n, (pt, eid), as) => (n, as, false, pt, eid) }
 
   def operatorDef[_: P]: P[(Ident, Vector[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
-    P(  param ~ anyOperator ~ embeddedSpecOpt ~ param  ).map { case (a1, o, (pt, eid), a2) => (o, Vector(a1, a2), true, pt, eid) }
+    P(  param ~ positioned(anyOperator) ~ embeddedSpecOpt ~ param  ).map { case (a1, o, (pt, eid), a2) => (o, Vector(a1, a2), true, pt, eid) }
 
   def namedDef[_: P]: P[(Ident, Vector[IdentOrWildcard], Boolean, PayloadType, Option[Ident])] =
     P(  identExpr ~ embeddedSpecOpt ~ params(1)  ).map { case (n, (pt, eid), as) => (n, as, false, pt, eid) }
@@ -165,13 +165,19 @@ trait Syntax { this: Parser =>
   def anyExpr[_ : P]: P[Either[EmbeddedExpr, Expr]] =
     P(  bracketedEmbeddedExpr.map(Left(_)) | expr.map(Right(_))  )
 
-  def simpleReduction[_: P]: P[Branch] = P(
-    positioned("=>" ~ anyExpr.rep(1, sep = ",").map { es =>
-      val embRed = es.iterator.collect { case Left(e) => e }.toVector
-      val red = es.iterator.collect { case Right(e) => e }.toVector
-      Branch(None, embRed, red)
-    })
-  )
+  def anyExprs[_: P]: P[Vector[Either[EmbeddedExpr, Expr]]] =
+    P(  anyExpr.rep(1, sep = ";").map(_.toVector) ~ ";".?  )
+
+  def anyExprBlock[_: P]: P[(Vector[Expr], Vector[EmbeddedExpr])] =
+    P(  pos.flatMapX(p => forIndent(p.column).anyExprBlock2)  )
+
+  def anyExprBlock2[_: P]: P[(Vector[Expr], Vector[EmbeddedExpr])] =
+    P(  (forIndent(indent+1).anyExprs).rep(1)  ).map { es =>
+      (es.iterator.flatten.collect { case Right(e) => e }.toVector, es.iterator.flatten.collect { case Left(e) => e }.toVector)
+    }
+
+  def simpleReduction[_: P]: P[Branch] =
+    P(  positioned("=>" ~ anyExprBlock.map { case (es, ees) => Branch(None, ees, es) })  )
 
   def conditionalReductions[_: P]: P[Vector[Branch]] =
     P(  ("if" ~ (bracketedEmbeddedExpr ~ simpleReduction).map { case (p, r) => r.copy(cond = Some(p)).setPos(r.pos)}).rep(1).map(_.toVector) ~
@@ -190,30 +196,31 @@ trait Syntax { this: Parser =>
   def matchStatement[_: P]: P[Match] =
     P(  "match" ~ expr ~ reductions  ).map { case (on, red) => Match(Vector(on), red) }
 
-  def data[_: P]: P[Let] =
-    P(  kw("let") ~/ (expr.map(_ -> true) | bracketedEmbeddedExpr.map(_ -> false)).rep(1, sep = ",") ).map { es =>
-      Let(es.iterator.collect { case (e: Expr, true) => e }.toVector, es.iterator.collect { case (e: EmbeddedExpr, false) => e }.toVector)
-    }
+  def let[_: P]: P[Let] =
+    P(  kw("let") ~/ anyExprBlock  ).map(Let.tupled)
 
   def unit[_: P]: P[CompilationUnit] =
-    P(  Start ~ pos ~ positioned(cons | data | definition | matchStatement ).rep ~ End  ).map { case (p, es) => CompilationUnit(es.toVector).setPos(p) }
+    P(  Start ~ pos ~ positioned(cons | let | definition | matchStatement ).rep ~ End  ).map { case (p, es) => CompilationUnit(es.toVector).setPos(p) }
 }
 
-class Parser(file: String, indexed: ConvenientParserInput) extends Lexical with EmbeddedSyntax with Syntax {
-  import NoWhitespace._
+class Parser(file: String, indexed: ConvenientParserInput, val indent: Int) extends EmbeddedSyntax with Syntax {
+  implicit val whitespace: fastparse.Whitespace =
+    (ctx: P[_]) => Lexical.whitespace(indent)(ctx)
 
   private[this] val positions = mutable.LongMap.empty[Position]
 
   def pos[_: P]: P[Position] = Index.map { offset => positions.getOrElseUpdate(offset, new Position(offset, file, indexed)) }
-  def positioned[T <: Node, _: P](n: => P[T]): P[T] = P(  (pos ~ n)  ).map { case (p, e) =>
-    if(!e.pos.isDefined) e.setPos(p) else e
-  }
+
+  def positioned[T <: Node, _: P](n: => P[T]): P[T] =
+    P(  (pos ~~ n)  ).map { case (p, e) => if(!e.pos.isDefined) e.setPos(p) else e }
+
+  def forIndent(i: Int): Parser = new Parser(file, indexed, i)
 }
 
 object Parser {
   def parse(input: String, file: String = "<input>"): CompilationUnit = {
     val in = new ConvenientParserInput(input)
-    val p = new Parser(file, in)
+    val p = new Parser(file, in, 0)
     fastparse.parse(in, p.unit(_), verboseFailures = true).get.value
   }
 

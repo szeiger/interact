@@ -6,8 +6,8 @@ def _ + y = r
   | S(x) => x + S(y)
 
 def _ * y = r
-  | Z    => erase(y), Z
-  | S(x) => (a, b) = dup(y),
+  | Z    => erase(y); Z
+  | S(x) => (a, b) = dup(y)
             r = b + x * a
 
 let res = 100'c * 100'c
