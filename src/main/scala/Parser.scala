@@ -28,7 +28,7 @@ object Lexical {
   def kw[_: P](s: String) = P(  s ~ !(letter | digit | "_")  )
   def letter[_: P] = P( CharIn("a-z") | CharIn("A-Z") )
   def digit[_: P] = P( CharIn("0-9") )
-  def churchLit[_: P] = P(  digit.rep(1).! ~ "'c"  ).map(_.toInt)
+  def natLit[_: P] = P(  digit.rep(1).! ~ "n"  ).map(_.toInt)
   def intLit[_: P] = P(  (("-").? ~ digit.rep(1)).!  ).map(_.toInt)
 
   def operator[_: P](precedence: Int): P[String] =
@@ -87,7 +87,7 @@ trait Syntax { this: Parser =>
 
   def wildcard[_: P]: P[Wildcard] = P("_").map(_ => Wildcard())
 
-  def church[_: P]: P[Expr] = (pos ~ churchLit).map { case (p, i) =>
+  def nat[_: P]: P[Expr] = (pos ~ natLit).map { case (p, i) =>
     (1 to i).foldLeft(Ident("Z").setPos(p): Expr) { case (z, _) => Apply(Ident("S").setPos(p), None, Vector(z)).setPos(p) }
   }
 
@@ -102,7 +102,7 @@ trait Syntax { this: Parser =>
     P(  "(" ~ expr.rep(min = 0, sep = ",").map(_.toVector) ~ ")"  ).map(Tuple)
 
   def simpleExpr[_: P]: P[Expr] =
-    P(  (appOrIdent | wildcard | church | tuple)  )
+    P(  (appOrIdent | wildcard | nat | tuple)  )
 
   def operatorIdent[_: P](precedence: Int): P[Ident] = positioned(operator(precedence).map(Ident(_)))
 

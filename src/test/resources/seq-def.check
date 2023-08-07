@@ -1,6 +1,6 @@
-  example_3_plus_5 = 8'c
-  example_3_times_2 = 6'c
-  foo_curry = 1'c
-  l0_length = 3'c
-  l0_mapped = 3'c :: 4'c :: 5'c :: Nil
-  l0_mapped_lambda = 3'c :: 4'c :: 5'c :: Nil
+  example_3_plus_5 = 8n
+  example_3_times_2 = 6n
+  foo_curry = 1n
+  l0_length = 3n
+  l0_mapped = 3n :: 4n :: 5n :: Nil
+  l0_mapped_lambda = 3n :: 4n :: 5n :: Nil

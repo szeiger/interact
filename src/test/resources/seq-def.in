@@ -1,4 +1,4 @@
-# Church numerals
+# Natural numbers
 cons Z
 cons S(n)
 
@@ -32,11 +32,11 @@ match Z * y => erase(y); Z
 match S(x) * y => (y1, y2) = dup(y); x * y1 + y2
 
 # Example: Computations on church numerals
-let y = 5'c
-    x = 3'c
+let y = 5n
+    x = 3n
     example_3_plus_5 = x + y
 
-let example_3_times_2 = 3'c * 2'c
+let example_3_times_2 = 3n * 2n
 
 # Lists
 cons Nil
@@ -53,10 +53,10 @@ def map(list, fi, fo) = r
                fo1 :: map(xs, fi2, fo2)
 
 # Example: List operations
-let l0 = 1'c :: 2'c :: 3'c :: Nil
+let l0 = 1n :: 2n :: 3n :: Nil
     (l0a, l0b) = dup(l0)
     l0_length = length(l0a)
-    l0_mapped = map(l0b, x, x + 2'c)
+    l0_mapped = map(l0b, x, x + 2n)
 
 # Explicit lambdas
 cons in |> out
@@ -69,11 +69,11 @@ def map2(l, f) = r
   | x :: xs => (f1, f2) = dup(f)
                apply(f1, x) :: map2(xs, f2)
 
-let l0 = 1'c :: 2'c :: 3'c :: Nil
-    l0_mapped_lambda = map2(l0, x |> x + 2'c)
+let l0 = 1n :: 2n :: 3n :: Nil
+    l0_mapped_lambda = map2(l0, x |> x + 2n)
 
 # Currying on additional args:
 def foo(a, b) = r
   | Z           => erase(b); Z
   | S(x), S(y)  => x + y
-let foo_curry = foo(1'c, 2'c)
+let foo_curry = foo(1n, 2n)

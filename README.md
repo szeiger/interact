@@ -133,8 +133,8 @@ It is possible to use both, nested patterns and additional matches on auxiliary 
 
 ```
 def fib(_) = r
-  | Z       => 1'c
-  | S(Z)    => 1'c
+  | Z       => 1n
+  | S(Z)    => 1n
   | S(S(n)) => (n1, n2) = dup(n)
                fib(S(n1)) + fib(n2)
 ```
@@ -143,11 +143,11 @@ This expands to a definition similar to this one (modulo the generated name of t
 
 ```
 def fib(_) = r
-  | Z    => 1'c
+  | Z    => 1n
   | S(n) => fib2(n)
 
 def fib2(_) = r
-  | Z    => 1'c
+  | Z    => 1n
   | S(n) => (n1, n2) = dup(n)
             fib(S(n1)) + fib(n2)
 ```
@@ -188,7 +188,7 @@ Currying works the same as in rules attached to a `def` statement.
 There is syntactic support for parsing and printing natural numbers, e.g.:
 
 ```
-let example_3_times_2 = mult(3'c, 2'c)
+let example_3_times_2 = mult(3n, 2n)
 ```
 
 The snippet expands to:

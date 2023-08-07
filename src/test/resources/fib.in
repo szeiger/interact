@@ -6,9 +6,9 @@ def _ + y = r
   | S(x) => S(x + y)
 
 def fib(_) = r
-  | Z       => 1'c
-  | S(Z)    => 1'c
+  | Z       => 1n
+  | S(Z)    => 1n
   | S(S(n)) => (n1, n2) = dup(n)
                fib(S(n1)) + fib(n2)
 
-let res = fib(10'c)
+let res = fib(10n)

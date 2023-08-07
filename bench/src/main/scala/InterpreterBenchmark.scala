@@ -37,24 +37,24 @@ class InterpreterBenchmark {
     """def mult(_, y): r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
-      |let res = mult(100'c, 100'c)
+      |let res = mult(100n, 100n)
       |""".stripMargin
 
   private val mult2Src =
     """def mult(_, y): r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
-      |let res1 = mult(100'c, 100'c)
-      |    res2 = mult(100'c, 100'c)
-      |    res3 = mult(100'c, 100'c)
-      |    res4 = mult(100'c, 100'c)
+      |let res1 = mult(100n, 100n)
+      |    res2 = mult(100n, 100n)
+      |    res3 = mult(100n, 100n)
+      |    res4 = mult(100n, 100n)
       |""".stripMargin
 
   private val mult3Src =
     """def mult(_, y): r
       |  | Z => erase(y); Z
       |  | S(x) => (a, b) = dup(y); add(b, mult(x, a))
-      |let res = mult(1000'c, 1000'c)
+      |let res = mult(1000n, 1000n)
       |""".stripMargin
 
   private val fib22Src =
@@ -62,12 +62,12 @@ class InterpreterBenchmark {
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
       |def fib(_): r
-      |  | Z    => 1'c
+      |  | Z    => 1n
       |  | S(n) => fib2(n)
       |def fib2(_): r
-      |  | Z    => 1'c
+      |  | Z    => 1n
       |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
-      |let res = fib(22'c)
+      |let res = fib(22n)
       |""".stripMargin
 
   private val fib29Src =
@@ -75,12 +75,12 @@ class InterpreterBenchmark {
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
       |def fib(_): r
-      |  | Z    => 1'c
+      |  | Z    => 1n
       |  | S(n) => fib2(n)
       |def fib2(_): r
-      |  | Z    => 1'c
+      |  | Z    => 1n
       |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
-      |let res = fib(29'c)
+      |let res = fib(29n)
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {

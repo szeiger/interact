@@ -128,7 +128,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
       assert(getConnected(c2, p2) == (c1, p1-1))
     }
 
-  object Church {
+  object Nat {
     def unapply(c: Cell): Option[Int] = unapply(c, 0)
     @tailrec private[this] def unapply(c: Cell, acc: Int): Option[Int] = (symbolName(c), getArity(c)) match {
       case ("Z", 0) => Some(acc)
@@ -184,7 +184,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
         nestedPre > thisPre || (nestedPre >= 0 && (Lexical.isRightAssoc(thisSym.id) != Lexical.isRightAssoc(nestedSym.id)))
       }
       val call = c1 match {
-        case Church(v) => s"$v'c"
+        case Nat(v) => s"${v}n"
         case _ =>
           val aposs = if(sym.isDef) -1 +: (0 until sym.callArity-1) else 0 until sym.arity
           val as0 = list(aposs)
