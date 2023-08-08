@@ -55,6 +55,9 @@ class ExpandRules(global: Global) extends Transform with Phase {
         assert(sym.returnArity == extraRhs.length)
         Assignment(if(extraRhs.length == 1) extraRhs.head else Tuple(extraRhs).setPos(extraRhs.head.pos), e).setPos(extraRhs.head.pos)
       }
+    case e: NatLit =>
+      assert(extraRhs.length == 1)
+      Assignment(extraRhs.head, e).setPos(extraRhs.head.pos)
     case e: Ident =>
       assert(extraRhs.length == 1)
       Assignment(extraRhs.head, e).setPos(e.pos)

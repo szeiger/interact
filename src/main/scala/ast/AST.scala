@@ -59,9 +59,7 @@ sealed trait AnyExpr extends Node {
 }
 
 sealed trait EmbeddedExpr extends AnyExpr
-sealed trait Expr extends AnyExpr {
-  def allIdents: Iterator[Ident]
-}
+sealed trait Expr extends AnyExpr
 sealed trait IdentOrWildcard extends Expr {
   def isWildcard: Boolean
 }
@@ -85,8 +83,8 @@ final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[Embedded
 
 final case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
   var sym: Symbol = Symbol.NoSymbol
+  def setSym(s: Symbol): this.type = { sym = s; this }
   def show = s
-  def allIdents: Iterator[Ident] = Iterator.single(this)
   override protected[this] def namedNodes: NamedNodesBuilder = {
     val msg = if(sym.isDefined) s"$s @ ${System.identityHashCode(sym)}" else s"$s @ <NoSymbol>"
     new NamedNodesBuilder(msg)
@@ -95,30 +93,36 @@ final case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
 }
 final case class Wildcard() extends IdentOrWildcard {
   def show = "_"
-  def allIdents: Iterator[Ident] = Iterator.empty
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
   def isWildcard = true
 }
 final case class Assignment(lhs: Expr, rhs: Expr) extends Expr {
   def show = s"${lhs.show} = ${rhs.show}"
-  def allIdents = lhs.allIdents ++ rhs.allIdents
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (lhs, "lhs") += (rhs, "rhs")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 final case class Tuple(exprs: Vector[Expr]) extends Expr {
   def show = exprs.map(_.show).mkString("(", ", ", ")")
-  def allIdents: Iterator[Ident] = exprs.iterator.flatMap(_.allIdents)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += exprs
 }
 final case class Apply(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends Expr {
   def show = args.iterator.map(_.show).mkString(s"${target.show}${embedded.map(s => s"[${s.show}]").getOrElse("")}(", ", ", ")")
-  def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
 }
 final case class ApplyCons(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends Expr {
   def show = args.iterator.map(_.show).mkString(s"<${target.show}>${embedded.map(s => s"[$s]").getOrElse("")}(", ", ", ")")
-  def allIdents: Iterator[Ident] = Iterator.single(target) ++ args.iterator.flatMap(_.allIdents)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
+}
+final case class NatLit(i: Int) extends Expr {
+  var sSym, zSym: Symbol = Symbol.NoSymbol
+  def show = s"${i}n"
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+  def expand: Expr = {
+    assert(sSym.isCons)
+    assert(zSym.isCons)
+    val z = Apply(Ident("Z").setPos(pos).setSym(zSym), None, Vector.empty).setPos(pos)
+    (1 to i).foldLeft(z) { case (z, _) => Apply(Ident("S").setPos(pos).setSym(sSym), None, Vector(z)).setPos(pos) }
+  }
 }
 
 final case class Let(defs: Vector[Expr], embDefs: Vector[EmbeddedExpr]) extends Statement {
@@ -255,7 +259,7 @@ object ShowableNode {
 case class NodeInfo(name: String, msg: String = "", children: Iterable[(String, NodeInfo)] = Vector.empty, annot: String = "")
 
 object NodeInfo {
-  val empty = NodeInfo("null")
+  val empty: NodeInfo = NodeInfo("null")
   def apply(s: ShowableNode): NodeInfo = if(s == null) empty else s.showNode
   def get(name: String, o: Option[ShowableNode]): Iterable[(String, NodeInfo)] = o match {
     case Some(n) => Vector(name -> NodeInfo(n))
@@ -279,9 +283,9 @@ final class NamedNodesBuilder(val msg: String) extends NodesBuilder {
   private[this] val buf = new ArrayBuffer[(Node, String)]()
   def += (n: Node): this.type = { buf += ((n, buf.length.toString)); this }
   def += (n: Node, s: String): this.type = { buf += ((n, s)); this }
-  def += (n: Option[Node]): this.type = { n.foreach(+= _); this }
+  def += (n: Option[Node]): this.type = { n.foreach(+=); this }
   def += (n: Option[Node], s: String): this.type = { n.foreach(n => buf += ((n, s))); this }
-  def += (n: IterableOnce[Node]): this.type = { n.iterator.foreach(+= _); this }
+  def += (n: IterableOnce[Node]): this.type = { n.iterator.foreach(+=); this }
   def += (n: IterableOnce[Node], prefix: String): this.type = {
     n.iterator.zipWithIndex.foreach { case (n, i) => buf += ((n, s"$prefix:$i")) }
     this
@@ -293,9 +297,9 @@ final class UnnamedNodesBuilder extends NodesBuilder {
   private[this] val buf = new ArrayBuffer[Node]()
   def += (n: Node): this.type = { buf += n; this }
   def += (n: Node, s: String): this.type = { buf += n; this }
-  def += (n: Option[Node]): this.type = { n.foreach(+= _); this }
-  def += (n: Option[Node], s: String): this.type = { n.foreach(+= _); this }
-  def += (n: IterableOnce[Node]): this.type = { n.iterator.foreach(+= _); this }
-  def += (n: IterableOnce[Node], prefix: String): this.type = { n.iterator.foreach(+= _); this }
+  def += (n: Option[Node]): this.type = { n.foreach(+=); this }
+  def += (n: Option[Node], s: String): this.type = { n.foreach(+=); this }
+  def += (n: IterableOnce[Node]): this.type = { n.iterator.foreach(+=); this }
+  def += (n: IterableOnce[Node], prefix: String): this.type = { n.iterator.foreach(+=); this }
   def iterator: Iterator[Node] = buf.iterator
 }

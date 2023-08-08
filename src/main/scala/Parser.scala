@@ -87,9 +87,7 @@ trait Syntax { this: Parser =>
 
   def wildcard[_: P]: P[Wildcard] = P("_").map(_ => Wildcard())
 
-  def nat[_: P]: P[Expr] = (pos ~ natLit).map { case (p, i) =>
-    (1 to i).foldLeft(Ident("Z").setPos(p): Expr) { case (z, _) => Apply(Ident("S").setPos(p), None, Vector(z)).setPos(p) }
-  }
+  def nat[_: P]: P[Expr] = P(  positioned(natLit.map(NatLit))  )
 
   def appOrIdent[_: P]: P[Expr] =
     P(

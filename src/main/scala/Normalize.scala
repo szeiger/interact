@@ -12,6 +12,7 @@ import scala.collection.mutable
 // - all direct assignments are untupled
 // - wildcards in assignments are resolved
 // - only the last expr can be a non-assignment
+// - NatLits are expanded
 class Normalize(global: Global) {
   import global._
 
@@ -34,6 +35,7 @@ class Normalize(global: Global) {
         assigned += wild
         wild.setPos(e.pos)
       case e: Ident => e
+      case e: NatLit => e.expand
     }
     def unnest(e: Expr, nested: Boolean): Expr = e match {
       case Assignment(ls, rs) =>

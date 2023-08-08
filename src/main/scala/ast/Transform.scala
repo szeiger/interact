@@ -57,7 +57,10 @@ abstract class Transform {
     case n: ApplyCons => apply(n)
     case n: Tuple => apply(n)
     case n: Assignment => apply(n)
+    case n: NatLit => apply(n)
   }
+
+  def apply(n: NatLit): NatLit = n
 
   def apply(n: StringLit): StringLit = n
 

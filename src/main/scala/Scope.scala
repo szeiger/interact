@@ -58,7 +58,7 @@ abstract class Scope[Cell] { self =>
     embComp.foreach { e => e.invoke(e.argIndices) }
   }
 
-  def addExprs(defs: Iterable[Expr]): Unit = {
+  final def addExprs(defs: Iterable[Expr]): Unit = {
     class TempWire { var c: Cell = _; var p: Int = 0 }
     @tailrec def connectAny(t1: Any, p1: Int, t2: Any, p2: Int): Unit = (t1, t2) match {
       case (t1: TempWire, t2: Cell @unchecked) => connectAny(t2, p2, t1, p1)
@@ -66,18 +66,31 @@ abstract class Scope[Cell] { self =>
       case (t1: Cell @unchecked, t2: TempWire) => connectCells(t1, p1, t2.c, t2.p)
       case (t1: Cell @unchecked, t2: Cell @unchecked) => connectCells(t1, p1, t2, p2)
     }
+    def foreachSym(e: Expr)(f: Symbol => Unit): Unit = e match {
+      case e: Ident => f(e.sym)
+      case _: Wildcard =>
+      case e: NatLit => f(e.zSym); f(e.sSym)
+      case Assignment(l, r) => foreachSym(l)(f); foreachSym(r)(f)
+      case Tuple(exprs) => exprs.foreach(e => foreachSym(e)(f))
+      case Apply(t, _, args) =>
+        foreachSym(t)(f)
+        args.foreach(e => foreachSym(e)(f))
+      case ApplyCons(t, _, args) =>
+        foreachSym(t)(f)
+        args.foreach(e => foreachSym(e)(f))
+    }
     val refs = new RefsMap
-    for(e <- defs; i <- e.allIdents) {
-      val s = i.sym
+    defs.foreach(e => foreachSym(e) { s =>
       assert(s.isDefined)
       if(!s.isCons) refs.inc(s)
-    }
+    })
     def cellRet(s: Symbol, c: Cell): Seq[(Any, Int)] = {
       if(s.isDef) (s.arity-s.returnArity).until(s.arity).map(p => (c, p))
       else Seq((c, -1))
     }
     val bind = mutable.HashMap.empty[Symbol, TempWire]
     def create(e: Expr): Seq[(Any, Int)] = e match {
+      case e: NatLit => create(e.expand)
       case i: Ident =>
         val s = i.sym
         assert(s.isDefined)

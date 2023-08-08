@@ -35,6 +35,13 @@ class Prepare(global: Global) extends Phase {
         case None =>
           n.sym = scope.define(n.s, isEmbedded = embedded)
       }
+    case n: NatLit =>
+      val sId = Ident("S")
+      val zId = Ident("Z")
+      assign(sId, scope, embedded)
+      assign(zId, scope, embedded)
+      n.sSym = sId.sym
+      n.zSym = zId.sym
     case Cons(_, args, _, _, embId, ret, der) =>
       val sc = scope.sub()
       args.foreach(assign(_, sc, false))
