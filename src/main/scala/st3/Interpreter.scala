@@ -5,7 +5,6 @@ import de.szeiger.interact._
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.mt.BitOps._
 
-import java.lang.invoke.MethodHandle
 import java.util.Arrays
 import scala.annotation.{switch, tailrec}
 import scala.collection.mutable
@@ -255,45 +254,80 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     }
 
     i = 0
+    var hasSelf = false
     while(i < c1.arity) {
-      cccells(i) = c1.auxCell(i)
+      val c = c1.auxCell(i)
+      hasSelf |= (c eq c1) || (c eq c2)
+      cccells(i) = c
       ccports(i) = c1.auxPort(i)
       i += 1
     }
     i = 0
     while(i < c2.arity) {
-      cccells(i + c1.arity) = c2.auxCell(i)
+      val c = c2.auxCell(i)
+      hasSelf |= (c eq c1) || (c eq c2)
+      cccells(i + c1.arity) = c
       ccports(i + c1.arity) = c2.auxPort(i)
       i += 1
     }
 
     // Connect cut wire to new cell
     @inline def connectFreeToInternal(ct1: Int, p1: Int, ct2: Int): Unit = {
-      val c2 = cccells(ct2)
+      val cc2 = cccells(ct2)
       val p2 = ccports(ct2)
-      val c1 = cells(ct1)
-      c1.setCell(p1, c2, p2)
-      c2.setCell(p2, c1, p1)
-      if((p1 & p2) < 0) ptw.createCut(c1)
+      val cc1 = cells(ct1)
+      cc1.setCell(p1, cc2, p2)
+      cc2.setCell(p2, cc1, p1)
+      if((p1 & p2) < 0) ptw.createCut(cc1)
+    }
+
+    // Allows "external" cell to be c1 or c2
+    @inline def connectFreeToInternalSafe(ct1: Int, p1: Int, ct2: Int): Unit = {
+      val cc2 = cccells(ct2)
+      val p2 = ccports(ct2)
+      val cc1 = cells(ct1)
+      cc1.setCell(p1, cc2, p2)
+      cc2.setCell(p2, cc1, p1)
+      if((p1 & p2) < 0) ptw.createCut(cc1)
+      if(cc2 eq c1) {
+        //println(s"internal cc1 = $cc1")
+        //println(s"cc2 = c1 @ $c1, p2 = $p2, c1(p2) = ${c1.getCell(p2)} : ${c1.getPort(p2)}")
+        //println(s"  cccells(p2) = ${cccells(p2)} : ${ccports(p2)}")
+        cccells(p2) = cc1
+        ccports(p2) = p1
+      } else if(cc2 eq c2) {
+        cccells(c1.arity + p2) = cc1
+        ccports(c1.arity + p2) = p1
+      }
     }
 
     @inline def connectFreeToFree(ct1: Int, ct2: Int): Unit = {
-      val c1 = cccells(ct1)
+      val cc1 = cccells(ct1)
       val p1 = ccports(ct1)
-      val c2 = cccells(ct2)
+      val cc2 = cccells(ct2)
       val p2 = ccports(ct2)
-      c1.setCell(p1, c2, p2)
-      c2.setCell(p2, c1, p1)
-      if((p1 & p2) < 0) ptw.createCut(c1)
+      cc1.setCell(p1, cc2, p2)
+      cc2.setCell(p2, cc1, p1)
+      if((p1 & p2) < 0) ptw.createCut(cc1)
     }
 
     i = 0
-    while(i < freeWiresPorts.length) {
-      val fwp = freeWiresPorts(i)
-      val fw = short0(fwp)
-      if(fw >= 0) connectFreeToInternal(fw, short1(fwp), i)
-      else if(i < -1-fw) connectFreeToFree(i, -1-fw)
-      i += 1
+    if(hasSelf) {
+      while(i < freeWiresPorts.length) {
+        val fwp = freeWiresPorts(i)
+        val fw = short0(fwp)
+        if(fw >= 0) connectFreeToInternalSafe(fw, short1(fwp), i)
+        else if(i < -1-fw) connectFreeToFree(i, -1-fw)
+        i += 1
+      }
+    } else {
+      while(i < freeWiresPorts.length) {
+        val fwp = freeWiresPorts(i)
+        val fw = short0(fwp)
+        if(fw >= 0) connectFreeToInternal(fw, short1(fwp), i)
+        else if(i < -1-fw) connectFreeToFree(i, -1-fw)
+        i += 1
+      }
     }
 
     i = 0

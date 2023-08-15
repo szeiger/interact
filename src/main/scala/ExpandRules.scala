@@ -46,20 +46,24 @@ class ExpandRules(global: Global) extends Transform with Phase {
   private[this] def connectLastStatement(e: Expr, extraRhs: Vector[Ident]): Expr = e match {
     case e: Assignment => e
     case e: Tuple =>
-      assert(e.exprs.length == extraRhs.length)
+      if(e.exprs.length != extraRhs.length)
+        error(s"Expected return arity ${extraRhs.length} for reduction but got ${e.exprs.length}", e)
       Assignment(Tuple(extraRhs).setPos(extraRhs.head.pos), e).setPos(extraRhs.head.pos)
     case e: Apply =>
       val sym = globalSymbols(e.target.s)
       if(sym.returnArity == 0) e
       else {
-        assert(sym.returnArity == extraRhs.length)
+        if(sym.returnArity != extraRhs.length)
+          error(s"Expected return arity ${extraRhs.length} for reduction but got ${sym.returnArity}", e)
         Assignment(if(extraRhs.length == 1) extraRhs.head else Tuple(extraRhs).setPos(extraRhs.head.pos), e).setPos(extraRhs.head.pos)
       }
     case e: NatLit =>
-      assert(extraRhs.length == 1)
+      if(extraRhs.length != 1)
+        error(s"Expected return arity ${extraRhs.length} for reduction but got 1", e)
       Assignment(extraRhs.head, e).setPos(extraRhs.head.pos)
     case e: Ident =>
-      assert(extraRhs.length == 1)
+      if(extraRhs.length != 1)
+        error(s"Expected return arity ${extraRhs.length} for reduction but got 1", e)
       Assignment(extraRhs.head, e).setPos(e.pos)
   }
 

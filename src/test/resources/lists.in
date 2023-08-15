@@ -1,0 +1,64 @@
+# Natural numbers
+cons Z
+cons S(n)
+
+# Addition
+def _ + y = r
+  | Z    => y
+  | S(x) => x + S(y)
+
+# Lists
+cons Nil
+cons head :: tail = l
+
+def length(list) = r
+  | Nil     => Z
+  | x :: xs => erase(x); S(length(xs))
+
+def map(list, fi, fo) = r
+  | Nil     => erase(fi); erase(fo); Nil
+  | x :: xs => (x, fi2) = dup(fi)
+               (fo1, fo2) = dup(fo)
+               fo1 :: map(xs, fi2, fo2)
+
+def _ ::: ys = r
+  | Nil     => ys
+  | x :: xs => x :: (xs ::: ys)
+
+def flatMap(list, fi, fo) = r
+  | Nil     => erase(fi); erase(fo); Nil
+  | x :: xs => (x, fi2) = dup(fi)
+               (fo1, fo2) = dup(fo)
+               fo1 ::: flatMap(xs, fi2, fo2)
+
+# Example: List operations
+let l0 = 1n :: 2n :: 3n :: Nil
+    (l0a, l0b) = dup(l0)
+    l0_length = length(l0a)
+    l0_mapped = map(l0b, x, x + 2n)
+
+let listCons = (1n ::2n :: 3n :: Nil) ::: (4n :: 5n ::: Nil)
+
+let idMapped = map(1n :: 2n :: 3n :: Nil, y, y)
+
+def mkList(_) = r
+  | Z    => Z :: Z :: Nil
+  | S(x) => (s1, s2) = dup(S(x))
+            s1 + 1n :: s2 + 2n :: Nil
+
+let flatMapped =
+      flatMap(10n :: 20n :: 30n :: Nil, x, mkList(x))
+
+# Explicit lambdas
+cons in |> out
+def apply(l, in) = out
+  | i |> o => in = i; o
+
+# Example: List mapping with lambdas
+def map2(l, f) = r
+  | Nil     => erase(f); Nil
+  | x :: xs => (f1, f2) = dup(f)
+               apply(f1, x) :: map2(xs, f2)
+
+let l0 = 1n :: 2n :: 3n :: Nil
+    l0_mapped_lambda = map2(l0, x |> x + 2n)

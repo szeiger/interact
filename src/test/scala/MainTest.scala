@@ -16,7 +16,8 @@ class MainTest(spec: String) {
   def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1, addEraseDup: Boolean = true): Unit =
     for(i <- 1 to (if(SCALE == 0) 1 else SCALE * scaleFactor)) TestUtils.check(testName, spec, expectedSteps, addEraseDup)
 
-  @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 131)
+  @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 32)
+  @Test def testLists = check("lists")
   @Test def testParMult = check("par-mult")
   @Test def testReduceRHS = check("reduce-rhs", expectedSteps = 2, addEraseDup = false)
   @Test def testFib = check("fib")

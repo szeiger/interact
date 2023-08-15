@@ -192,9 +192,11 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
       shown += c1
       val sym = getSymbol(c1)
       def list(poss: IndexedSeq[Int]) = poss.map { p1 => val (c2, p2) = getConnected(c1, p1); (getSymbol(c2), nameOrSubst(c1, p1, c2, p2)) }
-      def needsParens(thisSym: Symbol, thisPre: Int, nestedSym: Symbol): Boolean = {
-        val nestedPre = Lexical.precedenceOf(nestedSym.id)
-        nestedPre > thisPre || (nestedPre >= 0 && (Lexical.isRightAssoc(thisSym.id) != Lexical.isRightAssoc(nestedSym.id)))
+      def needsParens(sym1: Symbol, pre1: Int, sym2: Symbol, sym2IsRight: Boolean): Boolean = {
+        val pre2 = Lexical.precedenceOf(sym2.id)
+        val r1 = Lexical.isRightAssoc(sym1.id)
+        val r2 = Lexical.isRightAssoc(sym2.id)
+        pre2 > pre1 || (pre2 >= 0 && (r1 != r2)) || (pre1 == pre2 && r1 != sym2IsRight && r2 != sym2IsRight)
       }
       val call = c1 match {
         case Nat(v) => s"${v}n"
@@ -212,7 +214,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
               s"$cYellow${sym.id}$cNormal[$s]"
           }
           if(pr1 >= 0 && sym.arity == 2) {
-            val as1 = as0.map { case (asym, s) => if(needsParens(sym, pr1, asym)) s"($s)" else s }
+            val as1 = as0.zipWithIndex.map { case ((asym, s), idx) => if(needsParens(sym, pr1, asym, idx == 1)) s"($s)" else s }
             s"${as1(0)} $nameAndValue ${as1(1)}"
           } else {
             val as = if(as0.isEmpty) "" else as0.iterator.map(_._2).mkString("(", ", ", ")")

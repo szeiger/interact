@@ -1,0 +1,6 @@
+  flatMapped = 11n :: 12n :: 21n :: 22n :: 31n :: 32n :: Nil
+  idMapped = 1n :: 2n :: 3n :: Nil
+  l0_length = 3n
+  l0_mapped = 3n :: 4n :: 5n :: Nil
+  l0_mapped_lambda = 3n :: 4n :: 5n :: Nil
+  listCons = 1n :: 2n :: 3n :: 4n :: 5n ::: Nil

@@ -1,6 +1,3 @@
   example_3_plus_5 = 8n
   example_3_times_2 = 6n
   foo_curry = 1n
-  l0_length = 3n
-  l0_mapped = 3n :: 4n :: 5n :: Nil
-  l0_mapped_lambda = 3n :: 4n :: 5n :: Nil

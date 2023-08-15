@@ -30,12 +30,14 @@ object Debug extends App {
     cuts = inter.scope.log(System.out, markCut = (c1, _) => inter.getRuleImpl(c1.pref) != null)
     if(cuts.isEmpty)
       println(s"${MaybeColors.cGreen}Irreducible after $steps reductions.${MaybeColors.cNormal}")
-    steps += 1
-    readLine() match {
-      case None => ()
-      case Some(idx) =>
-        inter.reduce1(cuts(idx).pref)
-        step()
+    else {
+      steps += 1
+      readLine() match {
+        case None => ()
+        case Some(idx) =>
+          inter.reduce1(cuts(idx).pref)
+          step()
+      }
     }
   }
 
