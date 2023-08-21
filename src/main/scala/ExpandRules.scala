@@ -75,7 +75,8 @@ class ExpandRules(global: Global) extends Transform with Phase {
         val connected = red.map { r =>
           r.copy(reduced = r.reduced.init :+ connectLastStatement(r.reduced.last, compl.asInstanceOf[Vector[Ident]])).setPos(r.pos)
         }
-        Vector(MatchRule(lid.sym, rid.sym, largs, rargs, lemb.map(_.asInstanceOf[Ident]), remb.map(_.asInstanceOf[Ident]), connected).setPos(pos))
+        val mr = MatchRule(lid, rid, largs, rargs, lemb.map(_.asInstanceOf[Ident]), remb.map(_.asInstanceOf[Ident]), connected).setPos(pos)
+        Vector(mr)
       case _ =>
         error(s"Invalid match", pos)
         Vector.empty

@@ -154,24 +154,28 @@ object Cells {
     case INT1  => new Cell1I(symId)
     case INT2  => new Cell2I(symId)
     case INTN  => new CellNI(symId, arity)
-    case REF0  => new Cell0L(symId)
-    case REF1  => new Cell1L(symId)
-    case REF2  => new Cell2L(symId)
-    case REFN  => new CellNL(symId, arity)
+    case REF0 | LABEL0 => new Cell0L(symId)
+    case REF1 | LABEL1 => new Cell1L(symId)
+    case REF2 | LABEL2 => new Cell2L(symId)
+    case REFN | LABELN => new CellNL(symId, arity)
   }
 
-  final val VOID0 = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
-  final val VOID1 = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
-  final val VOID2 = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
-  final val VOIDN = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
-  final val INT0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
-  final val INT1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
-  final val INT2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
-  final val INTN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
-  final val REF0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
-  final val REF1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
-  final val REF2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
-  final val REFN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val VOID0  = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val VOID1  = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val VOID2  = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val VOIDN  = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.VOID.value
+  final val INT0   = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val INT1   = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val INT2   = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val INTN   = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.INT.value
+  final val REF0   = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val REF1   = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val REF2   = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val REFN   = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.REF.value
+  final val LABEL0 = 0 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.LABEL.value
+  final val LABEL1 = 1 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.LABEL.value
+  final val LABEL2 = 2 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.LABEL.value
+  final val LABELN = 3 * PayloadType.PAYLOAD_TYPES_COUNT + PayloadType.LABEL.value
 
   def cellKind(arity: Int, payloadType: PayloadType): Int = payloadType.value + math.min(arity, 3) * PayloadType.PAYLOAD_TYPES_COUNT
 }

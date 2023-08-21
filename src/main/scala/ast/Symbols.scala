@@ -1,10 +1,12 @@
 package de.szeiger.interact.ast
 
+import de.szeiger.interact.CompilerResult
+
 import scala.collection.mutable
 
 final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
     val isCons: Boolean = false, val isDef: Boolean = false,
-    val payloadType: PayloadType = PayloadType.VOID, val matchContinuationPort: Int = -2,
+    var payloadType: PayloadType = PayloadType.VOID, val matchContinuationPort: Int = -2,
     val isEmbedded: Boolean = false) {
   def callArity: Int = arity + 1 - returnArity
   def hasPayload: Boolean = payloadType != PayloadType.VOID
@@ -34,6 +36,7 @@ class Symbols(parent: Option[Symbols] = None) {
     define(id, isCons = true, isDef = true, arity = argLen + retLen - 1, returnArity = retLen, payloadType = payloadType)
   def getOrAdd(id: Ident): Symbol = get(id).getOrElse(define(id.s))
   def contains(id: Ident): Boolean = get(id).isDefined
+  def containsLocal(id: Ident): Boolean = syms.contains(id.s)
   def get(id: Ident): Option[Symbol] = get(id.s)
   def get(id: String): Option[Symbol] = syms.get(id).orElse(parent.flatMap(_.get(id)))
   def apply(id: Ident): Symbol = apply(id.s)
@@ -44,21 +47,43 @@ class Symbols(parent: Option[Symbols] = None) {
   override def toString: String = s"Symbols(${syms.map { case (_, v) => s"$v"}.mkString(", ")})"
 }
 
-class RefsMap {
+class RefsMap(parent: Option[RefsMap] = None) {
   private[this] val data = mutable.Map.empty[Symbol, Int]
-  private[this] var hasErr: Boolean = false
+  private[this] val hasErr = mutable.Set.empty[Symbol]
   def inc(s: Symbol): Unit = data.update(s, {
     val c = apply(s) + 1
-    if(c == 3) hasErr = true
+    if(c == 3) {
+      if(!s.isEmbedded || !s.payloadType.canCopy) hasErr += s
+    }
     c
   })
-  def apply(s: Symbol): Int = data.getOrElse(s, 0)
-  def free: Iterator[Symbol] = data.iterator.filter(_._2 == 1).map(_._1)
-  def linear: Iterator[Symbol] = data.iterator.filter(_._2 == 2).map(_._1)
-  def err: Iterator[Symbol] = data.iterator.filter(_._2 > 2).map(_._1)
-  def hasError: Boolean = hasErr
+  def local: Iterator[(Symbol, Int)] = data.iterator.map {case (s, c) =>
+    (s, c - parent.map(_(s)).getOrElse(0))
+  }.filter(_._2 > 0)
+  def iterator: Iterator[(Symbol, Int)] = parent match {
+    case Some(r) => r.iterator.filter(t => !data.contains(t._1)) ++ data.iterator
+    case None => data.iterator
+  }
+  def apply(s: Symbol): Int = data.getOrElse(s, parent match {
+    case Some(r) => r(s)
+    case None => 0
+  })
+  def free: Iterator[Symbol] = iterator.filter(_._2 == 1).map(_._1)
+  def linear: Iterator[Symbol] = iterator.filter(_._2 == 2).map(_._1)
+  def err: Iterator[Symbol] = parent match {
+    case Some(r) => r.err ++ hasErr.iterator
+    case None => hasErr.iterator
+  }
+  def nonFree: Iterator[Symbol] = iterator.filter(_._2 > 1).map(_._1)
+  def hasNonFree: Boolean = hasErr.nonEmpty || linear.hasNext || parent.exists(_.hasNonFree)
+  def hasError: Boolean = hasErr.nonEmpty || parent.exists(_.hasError)
   def collect(n: Node): Unit = n match {
-    case n: Ident => if(!n.sym.isCons) inc(n.sym)
+    case n: Ident => if(!n.sym.isEmpty && !n.sym.isCons) inc(n.sym)
     case n => n.nodeChildren.foreach(collect)
   }
+  def sub(): RefsMap = parent match {
+    case Some(r) if data.isEmpty => r.sub()
+    case _ => new RefsMap(Some(this))
+  }
+  def allSymbols: Iterator[Symbol] = iterator.map(_._1).filter(_.isDefined)
 }

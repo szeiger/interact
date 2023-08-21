@@ -21,4 +21,6 @@ object Intrinsics {
   def eq(a: Any, b: Any): Boolean = a == b
   def intAdd(a: Int, b: Int): Int = a + b
   def intSub(a: Int, b: Int): Int = a - b
+
+  def createLabel(r: RefBox): Unit = r.setValue(new AnyRef)
 }

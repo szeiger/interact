@@ -10,7 +10,8 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
   val phases: Vector[Phase] = Vector(
     new Prepare(global),
     new ExpandRules(global),
-    new Curry(global)
+    new Curry(global),
+    new CheckVariables(global)
   )
 
   val unit1 = if(addEraseDup) {

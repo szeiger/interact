@@ -55,7 +55,9 @@ trait EmbeddedSyntax { this: Parser =>
   def embeddedExpr[_: P]: P[EmbeddedExpr] = P(  positioned(embeddedOperatorExpr(MaxPrecedence))  )
 
   def embeddedAp[_: P]: P[EmbeddedApply] =
-    P(  identExpr.rep(2, ".").map(_.toVector) ~ "(" ~ embeddedExpr.rep(0, ",").map(_.toVector) ~ ")"  ).map(EmbeddedApply.tupled)
+    P(  identExpr.rep(1, ".").map(_.toVector) ~ "(" ~ embeddedExpr.rep(0, ",").map(_.toVector) ~ ")"  ).map { case (method, args) =>
+      EmbeddedApply(method, args, false)
+    }
 
   def bracketedEmbeddedExpr[_: P]: P[EmbeddedExpr] =
     P(  "[" ~ embeddedExpr ~ "]"  )
@@ -72,11 +74,11 @@ trait EmbeddedSyntax { this: Parser =>
       case (e, ts) =>
         val right = ts.count(_._1.s.endsWith(":"))
         if(right == 0)
-          ts.foldLeft(e) { case (z, (o, a)) => EmbeddedApply(Vector(o), Vector(z, a)).setPos(o.pos) }
+          ts.foldLeft(e) { case (z, (o, a)) => EmbeddedApply(Vector(o), Vector(z, a), true).setPos(o.pos) }
         else if(right == ts.length) {
           val e2 = ts.last._2
           val ts2 = ts.map(_._1).zip(e +: ts.map(_._2).init)
-          ts2.foldRight(e2) { case ((o, a), z) => EmbeddedApply(Vector(o), Vector(a, z)).setPos(o.pos) }
+          ts2.foldRight(e2) { case ((o, a), z) => EmbeddedApply(Vector(o), Vector(a, z), true).setPos(o.pos) }
         } else sys.error("Chained binary operators must have the same associativity")
     }
   }
@@ -138,12 +140,16 @@ trait Syntax { this: Parser =>
   def deriving[_ : P]: P[Vector[Ident]] =
     P(  kw("deriving") ~/ "(" ~ identExpr.rep(0, sep=",").map(_.toVector) ~ ")" )
 
+  def payloadType[_: P]: P[PayloadType] =
+    P(ident).map {
+      case "int" => (PayloadType.INT)
+      case "ref" => (PayloadType.REF)
+      case "label" => (PayloadType.LABEL)
+      case tpe => sys.error(s"Illegal payload type: $tpe")
+    }
+
   def embeddedSpecOpt[_: P]: P[(PayloadType, Option[Ident])] =
-  P(  ("[" ~ ident ~ identExpr.? ~ "]"  ).?  ).map(_.map {
-    case ("int", name) => (PayloadType.INT, name)
-    case ("ref", name) => (PayloadType.REF, name)
-    case (tpe, _) => sys.error(s"Illegal payload type: $tpe")
-  }.getOrElse((PayloadType.VOID, None)))
+  P(  ("[" ~ payloadType ~ identExpr.? ~ "]"  ).?  ).map(_.getOrElse((PayloadType.VOID, None)))
 
   def cons[_: P]: P[Cons] =
     P(  kw("cons") ~/ (operatorDef | namedCons) ~ ("=" ~ identExpr).? ~ deriving.?  ).map(Cons.tupled)

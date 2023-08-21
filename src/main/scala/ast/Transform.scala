@@ -74,7 +74,7 @@ abstract class Transform {
     val m2 = mapC(n.methodQNIds)(apply)
     val args2 = mapC(n.args)(apply)
     if((m2 eq n.methodQNIds) && (args2 eq n.args)) n
-    else EmbeddedApply(m2, args2).setPos(n.pos)
+    else EmbeddedApply(m2, args2, n.op).setPos(n.pos)
   }
 
   def apply(n: EmbeddedExpr): EmbeddedExpr = n match {
@@ -134,13 +134,15 @@ abstract class Transform {
   def apply(n: DerivedRule): Vector[Statement] = Vector(n)
 
   def apply(n: MatchRule): Vector[Statement] = Vector({
+    val i1 = apply(n.id1)
+    val i2 = apply(n.id1)
     val a12 = mapC(n.args1)(apply)
     val a22 = mapC(n.args2)(apply)
     val emb12 = mapC(n.emb1)(apply)
     val emb22 = mapC(n.emb2)(apply)
     val red2 = mapC(n.reduction)(apply)
-    if((a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.reduction)) n
-    else MatchRule(n.sym1, n.sym2, a12, a22, emb12, emb22, red2).setPos(n.pos)
+    if((i1 eq n.id1) && (i2 eq n.id2) && (a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.reduction)) n
+    else MatchRule(i1, i2, a12, a22, emb12, emb22, red2).setPos(n.pos)
   })
 
   def apply(n: CompilationUnit): CompilationUnit = {

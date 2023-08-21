@@ -6,6 +6,7 @@ import de.szeiger.interact.ast._
 import java.lang.invoke.{MethodHandle, MethodHandles}
 import java.lang.reflect.Modifier
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters._
 
 case class Connection(c1: Idx, c2: Idx) { def str = s"${c1.str} <-> ${c2.str}" }
@@ -15,7 +16,7 @@ case class CellIdx(idx: Int, port: Int) extends Idx { def str = s"c$idx:$port" }
 case class FreeIdx(rhs: Boolean, idx: Int) extends Idx { def str = if(rhs) s"rhs:$idx" else s"lhs:$idx" }
 
 trait IntBox { def getValue: Int; def setValue(i: Int): Unit }
-trait RefBox { def getValue: AnyRef; def setValue(o: AnyRef): Unit }
+trait RefBox { def getValue: AnyRef; def setValue(o: AnyRef): Unit } // Also used for Label
 trait LifecycleManaged { def erase(): Unit; def copy(): LifecycleManaged }
 
 sealed abstract class PayloadAssigner(val cellIdx: Int) {
@@ -37,6 +38,12 @@ class RefLHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(lhs.asInstanceOf[RefBox].getValue)
 }
 class RefRHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
+  def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(rhs.asInstanceOf[RefBox].getValue)
+}
+class LabelLHSAssigner(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
+  def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(lhs.asInstanceOf[RefBox].getValue)
+}
+class LabelRHSAssigner(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(rhs.asInstanceOf[RefBox].getValue)
 }
 class EmbeddedComputationAssigner(_cellIdx: Int, ec: EmbeddedComputation[Int]) extends PayloadAssigner(_cellIdx) {
@@ -104,8 +111,8 @@ object EmbeddedComputation {
     "-" -> (Intrinsics.getClass.getName, "intSub"),
   )
 
-  def apply[A](cl: ClassLoader, e: EmbeddedExpr)(creator: => String)(handleArg: String => A): EmbeddedComputation[A] = e match {
-    case emb @ EmbeddedApply(_, args) =>
+  def apply[A](cl: ClassLoader, e: EmbeddedExpr)(creator: => String)(handleArg: Symbol => A): EmbeddedComputation[A] = e match {
+    case emb @ EmbeddedApply(_, args, op) =>
       val consts = mutable.ArrayBuffer.empty[(Int, Any)]
       val argIndices = mutable.ArrayBuffer.empty[A]
       var offset = 0
@@ -117,18 +124,16 @@ object EmbeddedComputation {
         case (StringLit(v), i) =>
           consts += ((i-offset, v))
           offset += 1
-        case (Ident(id), _) =>
-          argIndices += handleArg(id)
+        case (id: Ident, _) =>
+          argIndices += handleArg(id.sym)
         case (a: EmbeddedApply, i) =>
           if(subComps == null) subComps = new Array(args.length)
           val sub = apply(cl, a)(creator)(handleArg)
           subComps(i) = sub
           argIndices ++= sub.argIndices
       }
-      val (cln, mn) = emb.methodQN match {
-        case Seq(op) => operators(op)
-        case _ => (emb.className, emb.methodName)
-      }
+      val (cln, mn) =
+        if(op) operators(emb.methodQN.head) else (emb.className, emb.methodName)
       new EmbeddedMethodApplication(cl, cln, mn, consts, argIndices, subComps)
     case _ => sys.error(s"Embedded computation must be a method call in $creator")
   }
@@ -200,15 +205,12 @@ object GenericRuleBranch {
     val lhsEmbId = cr.emb1.map(_.asInstanceOf[Ident].s).orNull
     val rhsEmbId = cr.emb2.map(_.asInstanceOf[Ident].s).orNull
     val embIdsUsed = mutable.HashSet.empty[String]
-    val cellEmbIds = mutable.HashMap.empty[String, Int]
-    val shouldUseEmbIds = mutable.HashSet.empty[String]
+    val cellEmbIds = mutable.HashMap.empty[String, ArrayBuffer[Int]]
     val lhsPayloadType = cr.sym1.payloadType
     val rhsPayloadType = cr.sym2.payloadType
-    if(lhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(lhsEmbId != null) lhsEmbId else "$unnamedLHS")
-    if(rhsPayloadType == PayloadType.REF) shouldUseEmbIds += (if(rhsEmbId != null) rhsEmbId else "$unnamedRHS")
-    if(lhsEmbId != null) cellEmbIds.put(lhsEmbId, -1)
-    if(rhsEmbId != null) cellEmbIds.put(rhsEmbId, -2)
-    def payloadTypeForIdent(s: String): PayloadType = cellEmbIds(s) match {
+    if(lhsEmbId != null) cellEmbIds.put(lhsEmbId, ArrayBuffer(-1))
+    if(rhsEmbId != null) cellEmbIds.put(rhsEmbId, ArrayBuffer(-2))
+    def payloadTypeForIdent(s: String): PayloadType = cellEmbIds(s).head match {
       case -1 => lhsPayloadType
       case -2 => rhsPayloadType
       case i => cells(i).payloadType
@@ -218,7 +220,6 @@ object GenericRuleBranch {
         if(sym.isCons) {
           val cellIdx = cells.length
           cells += sym
-          var embId: String = null
           emb match {
             case Some(IntLit(i)) => assigners += new IntConstAssigner(cellIdx, i)
             case Some(StringLit(s)) => assigners += new RefConstAssigner(cellIdx, s)
@@ -229,6 +230,7 @@ object GenericRuleBranch {
                   if(embIdsUsed.contains(lhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
                   embIdsUsed += lhsEmbId
                   new RefLHSMover(cellIdx)
+                case PayloadType.LABEL => new LabelLHSAssigner(cellIdx)
               })
             case Some(e @ Ident(id)) if id == rhsEmbId =>
               assigners += (sym.payloadType match {
@@ -237,20 +239,25 @@ object GenericRuleBranch {
                   if(embIdsUsed.contains(rhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
                   embIdsUsed += rhsEmbId
                   new RefRHSMover(cellIdx)
+                case PayloadType.LABEL => new LabelRHSAssigner(cellIdx)
               })
             case Some(e @ Ident(id)) =>
-              embId = id
-              if(cellEmbIds.put(id, cellIdx).isDefined)
-                sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Duplicate use of variable")
+              cellEmbIds.get(id) match {
+                case Some(cells) =>
+                  sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Duplicate use of variable")
+                case None =>
+                  assert(e.sym.payloadType.canCopy)
+                  cellEmbIds.put(id, ArrayBuffer(cellIdx))
+              }
             case Some(e: EmbeddedApply) =>
               val ec = EmbeddedComputation[Int](cl, e)(cr.show) { a =>
-                if(a == lhsEmbId) {
+                if(a.id == lhsEmbId) {
                   if(lhsPayloadType == PayloadType.REF) {
                     if(embIdsUsed.contains(lhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
                     embIdsUsed += lhsEmbId
                   }
                   -1
-                } else if(a == rhsEmbId) {
+                } else if(a.id == rhsEmbId) {
                   if(rhsPayloadType == PayloadType.REF) {
                     if(embIdsUsed.contains(rhsEmbId)) sys.error(s"Invalid payload expression ${e.show} in ${cr.show}: Value can only be moved, not copied")
                     embIdsUsed += rhsEmbId
@@ -262,9 +269,7 @@ object GenericRuleBranch {
             case Some(e) =>
               sys.error(s"Invalid payload expression ${e.show} in ${cr.show}")
             case None =>
-              embId = "$unnamedCell" + cellIdx
           }
-          if(sym.payloadType == PayloadType.REF && embId != null) shouldUseEmbIds += embId
           cellIdx
         } else freeLookup(sym)
       }
@@ -281,16 +286,14 @@ object GenericRuleBranch {
     sc.addExprs(red.reduced)
     val embComp = red.embRed.map { ee =>
       val as = mutable.ArrayBuffer.empty[String]
-      val ec = EmbeddedComputation(cl, ee)(cr.show) { a => as += a; cellEmbIds(a) }
+      val ec = EmbeddedComputation(cl, ee)(cr.show) { a => as += a.id; cellEmbIds(a.id).head }
       val refAs = as.filter(s => payloadTypeForIdent(s) == PayloadType.REF)
       if((refAs.distinct.length != refAs.length) || refAs.exists(embIdsUsed.contains))
         sys.error(s"Non-linear use of ref in embedded expression ${ee.show} in rule ${cr.show}")
       embIdsUsed ++= refAs
       ec
     }
-    val cond = red.cond.map { ee => EmbeddedComputation(cl, ee)(cr.show)(cellEmbIds(_)) }
-    val unusedEmbIds = shouldUseEmbIds -- embIdsUsed
-    if(unusedEmbIds.nonEmpty) sys.error(s"Unused ref(s) ${unusedEmbIds.mkString(", ")} in rule ${cr.show}")
+    val cond = red.cond.map { ee => EmbeddedComputation(cl, ee)(cr.show)(s => cellEmbIds(s.id).head) }
     new GenericRuleBranch(cr.sym1.arity, cells.toArray, conns.toArray, fwp, assigners.toArray, embComp, cond)
   }
 }

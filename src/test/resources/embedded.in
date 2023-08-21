@@ -10,11 +10,11 @@ def _ + y = r
 
 # Explicit computation on payloads
 def intAdd[int a](_) = r
-  | Int[b] => [de.szeiger.interact.Intrinsics.add(a, b, c)]; Int[c]
+  | Int[b] => [add(a, b, c)]; Int[c]
 
 # Value-returning method call instead of out parameter
 def strlen(_) = r
-  | String[s] => Int[de.szeiger.interact.Intrinsics.strlen(s)]
+  | String[s] => Int[strlen(s)]
 
 let simple = Int[42]
     x = Int[5]; y = Int[3]; sum = x + y
@@ -27,7 +27,7 @@ let simple = Int[42]
 
 # Currying
 def _ * _ = r
-  | Int[a], Int[b] => [de.szeiger.interact.Intrinsics.mult(a, b, c)]; Int[c]
+  | Int[a], Int[b] => [mult(a, b, c)]; Int[c]
 
 let mult = Int[3] * Int[2]
 

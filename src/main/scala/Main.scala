@@ -4,9 +4,11 @@ import de.szeiger.interact.ast.ShowableNode
 
 object Main extends App {
   def handleRes(res: CompilerResult, full: Boolean): Unit = {
-    res.notices.foreach(println)
-    if(full) res.printStackTrace()
-    else println(res.summary)
+    if(full) res.printStackTrace(System.out)
+    else {
+      res.notices.foreach(println)
+      println(res.summary)
+    }
     if(res.hasErrors) sys.exit(1)
   }
   try {

@@ -1,7 +1,7 @@
 package de.szeiger.interact.ast
 
 import java.io.{OutputStreamWriter, PrintWriter}
-import de.szeiger.interact.{ConvenientParserInput, MaybeColors}
+import de.szeiger.interact.{ConvenientParserInput, Intrinsics, MaybeColors}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -72,10 +72,10 @@ final case class StringLit(s: String) extends EmbeddedExpr {
   def show = s"\"$s\""
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
-final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr]) extends EmbeddedExpr {
+final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr], op: Boolean) extends EmbeddedExpr {
   lazy val methodQN = methodQNIds.map(_.s)
   def show = args.map(_.show).mkString(s"${methodQN.mkString(".")}(", ", ", ")")
-  def className = methodQN.init.mkString(".")
+  def className = if(methodQN.length ==1) Intrinsics.getClass.getName else methodQN.init.mkString(".")
   def methodName = methodQN.last
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (methodQNIds, "method") += (args, "args")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(methodQN.mkString("."))
@@ -173,8 +173,10 @@ final case class DerivedRule(sym1: Symbol, sym2: Symbol) extends CheckedRule {
   def show = s"$sym1 . $sym2 = <derived>"
 }
 
-final case class MatchRule(sym1: Symbol, sym2: Symbol, args1: Vector[Expr], args2: Vector[Expr],
+final case class MatchRule(id1: Ident, id2: Ident, args1: Vector[Expr], args2: Vector[Expr],
     emb1: Option[EmbeddedExpr], emb2: Option[EmbeddedExpr], reduction: Vector[Branch]) extends CheckedRule {
+  def sym1 = id1.sym
+  def sym2 = id2.sym
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (args1, "args1:") += (args2, "args2:") += (emb1, "emb1") += (emb2, "emb2") += (reduction, "red")
   def show: String = {
@@ -200,18 +202,29 @@ object IdentOrTuple {
 }
 
 final class PayloadType(val value: Int) extends AnyVal {
+  import PayloadType._
   override def toString: String = value match {
     case 0 => "void"
     case 1 => "int"
     case 2 => "ref"
+    case 3 => "label"
   }
-  def isDefined: Boolean = value != 0
+  def isEmpty: Boolean = !isDefined
+  def isDefined: Boolean = this != VOID
+  def canCopy: Boolean = this != REF
+  def canCreate: Boolean = this == LABEL
+  def canErase: Boolean = this != REF
 }
 object PayloadType {
-  final val VOID = new PayloadType(0)
-  final val INT  = new PayloadType(1)
-  final val REF  = new PayloadType(2)
-  final val PAYLOAD_TYPES_COUNT = 3
+  final val VOID  = new PayloadType(0)
+  final val INT   = new PayloadType(1)
+  final val REF   = new PayloadType(2)
+  final val LABEL = new PayloadType(3)
+  final val PAYLOAD_TYPES_COUNT = 4
+}
+
+final class Label(s: String) {
+  override def toString: String = s"<$s @ ${System.identityHashCode(this)}>"
 }
 
 final class Position(val offset: Int, val file: String, val input: ConvenientParserInput) {

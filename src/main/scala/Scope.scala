@@ -3,8 +3,9 @@ package de.szeiger.interact
 import java.io.PrintStream
 import scala.annotation.tailrec
 import scala.collection.mutable
-
 import de.szeiger.interact.ast._
+
+import scala.collection.mutable.ArrayBuffer
 
 abstract class Scope[Cell] { self =>
   val freeWires = mutable.HashSet.empty[Cell]
@@ -19,34 +20,46 @@ abstract class Scope[Cell] { self =>
     val catchEmb: Scope[Cell] = new Scope[Cell] {
       override def createCell(sym: Symbol, payload: Option[EmbeddedExpr]): Cell = {
         val c = self.createCell(sym, None)
-        payload.foreach(emb => createEmb += ((sym, emb, c)))
+        payload match {
+          case Some(emb) => createEmb += ((sym, emb, c))
+          case None if sym.payloadType.isDefined => createEmb += ((sym, null, c))
+          case _ =>
+        }
         c
       }
       override def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = self.connectCells(c1, p1, c2, p2)
     }
     catchEmb.addExprs(data.defs)
     freeWires ++= catchEmb.freeWires
-    val foundEmbIds = mutable.HashMap.empty[String, Cell]
+    val foundEmbIds = mutable.HashMap.empty[Symbol, ArrayBuffer[Cell]]
+    val defaultLabel = new Label("let")
     createEmb.foreach { case (sym, e, c) =>
       e match {
+        case null =>
+          assert(sym.payloadType == PayloadType.LABEL)
+          c.asInstanceOf[RefBox].setValue(defaultLabel)
         case IntLit(v) =>
           assert(sym.payloadType == PayloadType.INT)
           c.asInstanceOf[IntBox].setValue(v)
         case StringLit(v) =>
           assert(sym.payloadType == PayloadType.REF)
           c.asInstanceOf[RefBox].setValue(v)
-        case Ident(id) =>
-          if(foundEmbIds.put(id, c).isDefined)
-            sys.error(s"Invalid payload expression ${e.show} in ${data.show}: Duplicate use of variable")
+        case id: Ident =>
+          foundEmbIds.get(id.sym) match {
+            case None => foundEmbIds.put(id.sym, ArrayBuffer(c))
+            case Some(cells) =>
+              assert(id.sym.payloadType.canCopy)
+              cells += c
+          }
         case _ => sys.error(s"Invalid payload expression ${e.show} in data ${data.show}")
       }
     }
     val embComp = data.embDefs.map { ee =>
-      val as = mutable.HashMap.empty[String, Int]
-      val ec = EmbeddedComputation.apply(getClass.getClassLoader, ee)(data.show) { a =>
+      val as = mutable.HashMap.empty[Symbol, Int]
+      val ec = EmbeddedComputation[Cell](getClass.getClassLoader, ee)(data.show) { a =>
         as.put(a, as.getOrElse(a, 0) + 1)
         foundEmbIds.remove(a) match {
-          case Some(s) => s
+          case Some(s) => s.head
           case None => sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
         }
       }
@@ -54,7 +67,11 @@ abstract class Scope[Cell] { self =>
         sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
       ec
     }
-    if(foundEmbIds.nonEmpty) sys.error(s"Non-linear variable use of ${foundEmbIds.mkString(", ")} in data ${data.show}")
+    foundEmbIds.foreach { case (s, cs) =>
+      if(s.payloadType == PayloadType.LABEL)
+        cs.foreach(_.asInstanceOf[RefBox].setValue(s)) // use the Symbol as the label value
+      else sys.error(s"Non-linear variable use of ${s} in data ${data.show}")
+    }
     embComp.foreach { e => e.invoke(e.argIndices) }
   }
 
@@ -239,6 +256,47 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
       }
     }
     cuts
+  }
+
+  def toDot(out: PrintStream): Unit = {
+    var lastIdx = 0
+    def mk(): String = { lastIdx += 1; s"n$lastIdx" }
+    val cells = reachableCells.map(c => (c, mk())).toMap
+    out.println("graph G {")
+    out.println("  node [shape=plain];")
+    cells.foreachEntry { (c, l) =>
+      val sym = getSymbol(c)
+      if(sym.arity == 0)
+        out.println(
+          s"""  $l [shape=circle label=<${sym.id}>];""".stripMargin
+        )
+      else {
+        val ports = (sym.arity to 1 by -1).map(i => s"""<td port="$i"></td>""").mkString
+        out.println(
+          s"""  $l [shape=plain label=<<table border="0" cellborder="1" cellspacing="0">
+             |      <tr><td border="0"></td><td port="0"></td><td border="0"></td></tr>
+             |      <tr><td colspan="3">${sym.id}</td></tr>
+             |      <tr><td colspan="3" cellpadding="0" border="0"><table border="0" cellspacing="0" cellborder="1"><tr>$ports</tr></table></td></tr>
+             |    </table>>];""".stripMargin
+        )
+      }
+    }
+    val done = mutable.HashSet.empty[(Cell, Int)]
+    cells.foreachEntry { (c1, l1) =>
+      getAllConnected(c1).zipWithIndex.foreach { case ((c2, _p2), p1) =>
+        if(!done.contains((c1, p1))) {
+          val p2 = _p2 + 1
+          val l2 = cells(c2)
+          val st =
+            if(p1 == 0 && p2 == 0) " [style=bold]"
+            else if(p1 != 0 && p2 != 0) " [style=dashed]"
+            else ""
+          out.println(s"""  $l1:$p1 -- $l2:$p2$st;""")
+          done += ((c2, p2))
+        }
+      }
+    }
+    out.println("}")
   }
 }
 

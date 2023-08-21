@@ -84,8 +84,8 @@ class CompilerResult(val notices: IndexedSeq[Notice], parent: Throwable = null) 
   }
   override def getMessage: String = {
     import Notice._
-    val b = new StringBuilder
-    notices.foreach(n => b.append(n.formatted).append(eol))
+    val b = (new StringBuilder).append(eol)
+    notices.foreach(n => b.append(n.formatted).append(eol).append(eol))
     b.append(summary).result()
   }
 }
@@ -94,4 +94,7 @@ object CompilerResult {
     throw new CompilerResult(Vector(new Notice("Internal error: "+e, at, Severity.Fatal)), e)
   }
   def tryInternal[T](at: Node)(f: => T): T = tryInternal(at.pos)(f)
+
+  def fail(msg: String, at: Position): Nothing =
+    throw new CompilerResult(Vector(new Notice(msg, at, Severity.Fatal)))
 }

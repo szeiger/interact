@@ -26,8 +26,10 @@ class Curry(global: Global) extends Transform with Phase {
     }
   }
 
-  private[this] def createCurriedDef(ls: Symbol, rs: Symbol, idx: Int, rhs: Boolean, at: Position): (Symbol, Vector[CheckedRule]) = {
-    val curryId = Ident(s"${ls.id}$$${if(rhs) "ac" else "nc"}$$${rs.id}")
+  private[this] def createCurriedDef(lid: Ident, rid: Ident, idx: Int, rhs: Boolean, at: Position): (Ident, Vector[CheckedRule]) = {
+    val ls = lid.sym
+    val rs = rid.sym
+    val curryId = Ident(s"${ls.id}$$${if(rhs) "ac" else "nc"}$$${rs.id}").setPos(lid.pos)
     val rules = globalSymbols.get(curryId) match {
       case Some(sym) =>
         if(sym.matchContinuationPort != idx) error(s"Port mismatch in curried ${ls.id} -> ${rs.id} match", at)
@@ -38,8 +40,8 @@ class Curry(global: Global) extends Transform with Phase {
         Vector.empty
       case None =>
         val curriedPtp = if(ls.hasPayload) ls.payloadType else rs.payloadType
-        val emb1 = if(ls.hasPayload) Some(Ident("$l")) else None
-        val emb2 = if(rs.hasPayload) Some(Ident("$r")) else None
+        val emb1 = if(ls.hasPayload) Some(mkLocalId("$l").setPos(lid.pos)) else None
+        val emb2 = if(rs.hasPayload) Some(mkLocalId("$r").setPos(rid.pos)) else None
         curryId.sym = globalSymbols.define(curryId.s, isCons = true, arity = ls.arity + rs.arity - 1, payloadType = curriedPtp, matchContinuationPort = idx)
         val largs = (0 until ls.callArity).map(i => mkLocalId(s"$$l$i")).toVector
         val rargs = (0 until rs.callArity).map(i => mkLocalId(s"$$r$i")).toVector
@@ -47,9 +49,9 @@ class Curry(global: Global) extends Transform with Phase {
         val curryArgs = keepArgs ++ splitArgs.zipWithIndex.filter(_._2 != idx).map(_._1)
         val der = derivedRules(defaultDeriveSyms, curryId.sym, Position.unknown)
         val fwd = Assignment(Apply(curryId, emb1.orElse(emb2), curryArgs), splitArgs(idx))
-        der :+ MatchRule(ls, rs, largs, rargs, emb1, emb2, Vector(Branch(None, Vector.empty, Vector(fwd)).setPos(at))).setPos(at)
+        der :+ MatchRule(lid, rid, largs, rargs, emb1, emb2, Vector(Branch(None, Vector.empty, Vector(fwd)).setPos(at))).setPos(at)
     }
-    (curryId.sym, rules)
+    (curryId, rules)
   }
 
   private[this] def curry(mr: MatchRule): Vector[Statement] = mr.args1.indexWhere(e => !e.isInstanceOf[Ident]) match {
@@ -64,16 +66,16 @@ class Curry(global: Global) extends Transform with Phase {
           }
           Vector(mr)
         case idx =>
-          val (currySym, curryRules) = createCurriedDef(mr.sym1, mr.sym2, idx, false, mr.pos)
+          val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, false, mr.pos)
           val ApplyCons(cid, cemb, crargs) = mr.args2(idx)
           val clargs = mr.args1 ++ mr.args2.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-          curryRules ++ curry(MatchRule(currySym, cid.sym, clargs, crargs, mr.emb1.orElse(mr.emb2), cemb, mr.reduction).setPos(mr.pos))
+          curryRules ++ curry(MatchRule(curryId, cid, clargs, crargs, mr.emb1.orElse(mr.emb2), cemb, mr.reduction).setPos(mr.pos))
       }
     case idx =>
-      val (currySym, curryRules) = createCurriedDef(mr.sym1, mr.sym2, idx, true, mr.pos)
+      val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, true, mr.pos)
       val ApplyCons(cid, cemb, clargs) = mr.args1(idx)
       val crargs = mr.args2 ++ mr.args1.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-      curryRules ++ curry(new MatchRule(currySym, cid.sym, crargs, clargs, mr.emb1.orElse(mr.emb2), cemb, mr.reduction).setPos(mr.pos))
+      curryRules ++ curry(new MatchRule(curryId, cid, crargs, clargs, mr.emb1.orElse(mr.emb2), cemb, mr.reduction).setPos(mr.pos))
   }
 
   override def apply(n: Statement): Vector[Statement] = n match {
