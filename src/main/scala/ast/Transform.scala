@@ -6,7 +6,10 @@ abstract class Transform {
     case n: DefRule => apply(n)
     case n: Expr => apply(n)
     case n: EmbeddedExpr => apply(n)
-    case n: Statement => apply(n)
+    case n: Statement =>
+      val v = apply(n: Statement)
+      assert(v.length == 1)
+      v.head
     case n: CompilationUnit => apply(n)
   }
 
@@ -74,7 +77,14 @@ abstract class Transform {
     val m2 = mapC(n.methodQNIds)(apply)
     val args2 = mapC(n.args)(apply)
     if((m2 eq n.methodQNIds) && (args2 eq n.args)) n
-    else EmbeddedApply(m2, args2, n.op).setPos(n.pos)
+    else EmbeddedApply(m2, args2, n.op, n.embTp).setPos(n.pos)
+  }
+
+  def apply(n: EmbeddedAssignment): EmbeddedAssignment = {
+    val l2 = apply(n.lhs)
+    val r2 = apply(n.rhs)
+    if((l2 eq n.lhs) && (r2 eq n.rhs)) n
+    else EmbeddedAssignment(l2, r2).setPos(n.pos)
   }
 
   def apply(n: EmbeddedExpr): EmbeddedExpr = n match {
@@ -82,6 +92,7 @@ abstract class Transform {
     case n: IntLit => apply(n)
     case n: Ident => apply(n)
     case n: EmbeddedApply => apply(n)
+    case n: EmbeddedAssignment => apply(n)
   }
 
   def apply(n: Match): Vector[Statement] = Vector({

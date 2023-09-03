@@ -38,3 +38,40 @@ def fib(_) = r
            else         => fib(Int[i-1]) + fib(Int[i-2])
 
 let fib10 = fib(Int[10])
+
+
+
+
+cons Z
+cons S(x)
+
+cons Func(x, fx)
+
+def apply(l, in) = out
+  | Func(i, o) => in = i; o
+
+cons Pair(a, b)
+
+let f = Func(x, Pair(x1, x2))
+    (x1, x2) = dup1[l1](x)
+    (f1, f2) = dup1[l2](f)
+    r1 = apply(f1, 1n)
+    r2 = apply(f2, 2n)
+
+def dup1[label l](_) = (x1, x2)
+  | dup1[l2](_) = (y1, y2)
+      if [l == l2] =>
+        (y1, y2)
+      else =>
+        dup1[l2](x1) = (b1, b2)
+        dup1[l2](x2) = (a1, a2)
+        dup1[l](y1) = (b1, a1)
+        dup1[l](y2) = (b2, a2)
+  | Pair(a, b) => (a1, a2) = dup1[l](a)
+                  (b1, b2) = dup1[l](b)
+                  (Pair(a1, b1), Pair(a2, b2))
+  | Func(a, b) => (a1, a2) = dup1[l](a)
+                  (b1, b2) = dup1[l](b)
+                  (Func(a1, b1), Func(a2, b2))
+  | Z          => (Z, Z)
+  | S(x)       => (a1, a2) = dup1[l](x); (S(a1), S(a2))

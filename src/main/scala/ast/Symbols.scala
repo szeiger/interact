@@ -1,7 +1,5 @@
 package de.szeiger.interact.ast
 
-import de.szeiger.interact.CompilerResult
-
 import scala.collection.mutable
 
 final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
@@ -18,6 +16,20 @@ final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
 
 object Symbol {
   val NoSymbol = new Symbol("<NoSymbol>")
+}
+
+class SymbolGen(prefix: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID) {
+  private[this] var last = 0
+  def apply(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType): Symbol = {
+    last += 1
+    new Symbol(prefix+last, isEmbedded = isEmbedded, payloadType = payloadType)
+  }
+  def id(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType): Ident = {
+    val s = apply(isEmbedded, payloadType)
+    val i = Ident(s.id)
+    i.sym = s
+    i
+  }
 }
 
 class Symbols(parent: Option[Symbols] = None) {

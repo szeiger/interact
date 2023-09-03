@@ -206,7 +206,7 @@ cons S(n)
 
 ### Embedded Values
 
-A cell (`cons` or `def`) can optionally contain a primitive JVM value of type `int` or `ref` (`java.lang.Object`). The type is placed in square brackets after the constructor name:
+A cell (`cons` or `def`) can optionally contain a primitive JVM value of type `int`, `ref` (`java.lang.Object`) or `label`. The type is placed in square brackets after the constructor name:
 
 ```
 cons Int[int]
@@ -220,7 +220,7 @@ def _ + y = r
   | Int[i] => intAdd[i](y)
 ```
 
-`int` values can also be copied or deleted implicitly by using the variable assigned to them in the match more or less than once in the expansion. `ref` values can only be moved implicitly.
+`int` and `label` values can also be copied or deleted implicitly by using the variable assigned to them in the match more or less than once in the expansion. `ref` values can only be moved implicitly.
 
 A static JVM method (or a method in a Scala object) can be invoked to perform a computation on embedded values by calling the method with its fully qualified name in an embedded expression in square brackets:
 ```

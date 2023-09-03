@@ -2,6 +2,7 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast._
 
+import java.io.{PrintWriter, StringWriter}
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
@@ -13,6 +14,8 @@ final class Global(
 
   private[this] var hasErrors: Boolean = false
   private[this] val accumulated = ArrayBuffer.empty[Notice]
+
+  def dependencyLoader: ClassLoader = getClass.getClassLoader
 
   def warning(msg: String, at: Node): Unit = error(msg, at.pos)
   def warning(msg: String, at: Position): Unit =
@@ -30,24 +33,29 @@ final class Global(
     throw getCompilerResult()
   }
 
-  def mkLocalId(name: String): Ident = {
+  def internalError(msg: String, at: Position, parent: Throwable = null, atNode: Node = null): Unit = {
+    accumulated += new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal = true)
+    throw getCompilerResult(parent)
+  }
+
+  def mkLocalId(name: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID): Ident = {
     val i = Ident(name)
-    i.sym = new Symbol(name)
+    i.sym = new Symbol(name, isEmbedded = isEmbedded, payloadType = payloadType)
     i
   }
 
-  def getCompilerResult(): CompilerResult = new CompilerResult(accumulated.toIndexedSeq)
+  def getCompilerResult(parent: Throwable = null): CompilerResult = new CompilerResult(accumulated.toIndexedSeq, parent)
 
   def checkThrow(): Unit =
     if(hasErrors) throw getCompilerResult()
 }
 
-class Notice(msg: String, at: Position, severity: Severity) {
+class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode = null, internal: Boolean = false) {
   def formatted: String = {
     import MaybeColors._
     import Notice._
     val b = new StringBuilder
-    val sev = if(isError) s"${cRed}Error" else s"${cYellow}Warning"
+    val sev = if(internal) s"${cRed}Internal Error" else if(isError) s"${cRed}Error" else s"${cYellow}Warning"
     if(at.isDefined) {
       val (line, col) = at.input.find(at.offset)
       b.append(s"$sev: $cNormal${at.file}$cCyan:${line+1}:${col+1}$cNormal: $msg$eol")
@@ -55,6 +63,13 @@ class Notice(msg: String, at: Position, severity: Severity) {
       b.append(s"$cBlue| $cGreen${at.input.getCaret(col)}$cNormal")
     } else {
       b.append(s"$sev: $cNormal $msg$eol")
+    }
+    if(internal && atNode != null) {
+      val out = new StringWriter()
+      val outw = new PrintWriter(out)
+      outw.print(s"\n$cBlue| ${cRed}AST Context:$cNormal\n")
+      ShowableNode.print(atNode, outw, prefix = s"$cBlue|   ")
+      b.append(out.toString)
     }
     b.result()
   }
@@ -90,11 +105,12 @@ class CompilerResult(val notices: IndexedSeq[Notice], parent: Throwable = null) 
   }
 }
 object CompilerResult {
-  def tryInternal[T](at: Position)(f: => T): T = try f catch { case NonFatal(e) =>
-    throw new CompilerResult(Vector(new Notice("Internal error: "+e, at, Severity.Fatal)), e)
+  def tryInternal[T](at: Position)(f: => T): T = try f catch {
+    case e: CompilerResult => throw e
+    case NonFatal(e) => throw new CompilerResult(Vector(new Notice(e.toString, at, Severity.Fatal, internal = true)), e)
   }
   def tryInternal[T](at: Node)(f: => T): T = tryInternal(at.pos)(f)
 
-  def fail(msg: String, at: Position): Nothing =
-    throw new CompilerResult(Vector(new Notice(msg, at, Severity.Fatal)))
+  def fail(msg: String, at: Position = null, parent: Throwable = null, atNode: Node = null, internal: Boolean = true): Nothing =
+    throw new CompilerResult(Vector(new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal)))
 }

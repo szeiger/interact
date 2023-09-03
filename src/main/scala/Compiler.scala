@@ -11,7 +11,7 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
     new Prepare(global),
     new ExpandRules(global),
     new Curry(global),
-    new CheckVariables(global)
+    new CleanEmbedded(global)
   )
 
   val unit1 = if(addEraseDup) {
@@ -22,6 +22,7 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
 
   val unit2 = phases.foldLeft(unit1) { case (u, p) =>
     val u2 = p(u)
+    //ShowableNode.print(u2, name = s"After phase $p")
     checkThrow()
     u2
   }
@@ -67,4 +68,6 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
   }
 }
 
-trait Phase extends (CompilationUnit => CompilationUnit)
+trait Phase extends (CompilationUnit => CompilationUnit) {
+  override def toString(): String = getClass.getName.replaceAll(".*\\.", "")
+}

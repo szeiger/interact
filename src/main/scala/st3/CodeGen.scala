@@ -12,8 +12,8 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val MAX_SPEC_CELL = 2
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")
-  private val cellNT = tp.c(s"$interpreterPackage/CellN")
-  private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell$i"))
+  private val cellNT = tp.c(s"$interpreterPackage/CellNV")
+  private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell${i}V"))
   private val cell_symId = cellT.method("symId", tp.m().I)
   private val cell_symIdSetter = cellT.method("symId_$eq", tp.m(tp.I).V)
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))

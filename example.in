@@ -1,4 +1,4 @@
-# Church numerals
+# Natural numbers
 cons Z
 cons S(n)
 
@@ -17,7 +17,7 @@ def _ * y = r
   | Z    => erase(y); Z
   | S(x) => (y1, y2) = dup(y); x * y1 + y2
 
-# Example: Computations on church numerals
+# Example: Computations on natural numbers
 let y = 5n
     x = 3n
     example_3_plus_5 = x + y

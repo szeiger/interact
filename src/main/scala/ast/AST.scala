@@ -64,6 +64,15 @@ sealed trait IdentOrWildcard extends Expr {
   def isWildcard: Boolean
 }
 
+final case class EmbeddedAssignment(lhs: Ident, rhs: EmbeddedExpr) extends EmbeddedExpr {
+  def show = s"${lhs.show} = ${rhs.show}"
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (lhs, "lhs") += (rhs, "rhs")
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+}
+final case class CreateLabels(base: Symbol, labels: Vector[Symbol]) extends EmbeddedExpr {
+  def show = s"<createLabels $base -> ${labels.mkString(", ")}>"
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+}
 final case class IntLit(i: Int) extends EmbeddedExpr {
   def show = i.toString
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
@@ -72,13 +81,13 @@ final case class StringLit(s: String) extends EmbeddedExpr {
   def show = s"\"$s\""
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
-final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr], op: Boolean) extends EmbeddedExpr {
+final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr], op: Boolean, embTp: EmbeddedType) extends EmbeddedExpr {
   lazy val methodQN = methodQNIds.map(_.s)
   def show = args.map(_.show).mkString(s"${methodQN.mkString(".")}(", ", ", ")")
   def className = if(methodQN.length ==1) Intrinsics.getClass.getName else methodQN.init.mkString(".")
   def methodName = methodQN.last
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (methodQNIds, "method") += (args, "args")
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(methodQN.mkString("."))
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"${methodQN.mkString(".")}, op=$op, embTp=$embTp")
 }
 
 final case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
@@ -105,13 +114,28 @@ final case class Tuple(exprs: Vector[Expr]) extends Expr {
   def show = exprs.map(_.show).mkString("(", ", ", ")")
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += exprs
 }
-final case class Apply(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends Expr {
+sealed trait AnyApply extends Expr {
+  def target: Ident
+  def embedded: Option[EmbeddedExpr]
+  def args: Vector[Expr]
+  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args): AnyApply
+}
+object AnyApply {
+  def unapply(e: AnyApply): Some[(Ident, Option[EmbeddedExpr], Vector[Expr], Boolean)] = e match {
+    case Apply(t, e, as) => Some((t, e, as, false))
+    case ApplyCons(t, e, as) => Some((t, e, as, true))
+  }
+}
+
+final case class Apply(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends AnyApply {
   def show = args.iterator.map(_.show).mkString(s"${target.show}${embedded.map(s => s"[${s.show}]").getOrElse("")}(", ", ", ")")
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
+  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args) = Apply(target, embedded, args)
 }
-final case class ApplyCons(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends Expr {
+final case class ApplyCons(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends AnyApply {
   def show = args.iterator.map(_.show).mkString(s"<${target.show}>${embedded.map(s => s"[$s]").getOrElse("")}(", ", ", ")")
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
+  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args) = Apply(target, embedded, args)
 }
 final case class NatLit(i: Int) extends Expr {
   var sSym, zSym: Symbol = Symbol.NoSymbol
@@ -178,7 +202,7 @@ final case class MatchRule(id1: Ident, id2: Ident, args1: Vector[Expr], args2: V
   def sym1 = id1.sym
   def sym2 = id2.sym
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (args1, "args1:") += (args2, "args2:") += (emb1, "emb1") += (emb2, "emb2") += (reduction, "red")
+    n += (args1, "args1") += (args2, "args2") += (emb1, "emb1") += (emb2, "emb2") += (reduction, "red")
   def show: String = {
     def on(n: Symbol, e: Option[EmbeddedExpr], as: Vector[Expr]): String =
       s"$n${e.map(s => s"[${s.show}]").getOrElse("")}(${as.map(_.show).mkString(", ")})"
@@ -212,8 +236,8 @@ final class PayloadType(val value: Int) extends AnyVal {
   def isEmpty: Boolean = !isDefined
   def isDefined: Boolean = this != VOID
   def canCopy: Boolean = this != REF
-  def canCreate: Boolean = this == LABEL
   def canErase: Boolean = this != REF
+  def canCreate: Boolean = this == LABEL
 }
 object PayloadType {
   final val VOID  = new PayloadType(0)
@@ -221,6 +245,14 @@ object PayloadType {
   final val REF   = new PayloadType(2)
   final val LABEL = new PayloadType(3)
   final val PAYLOAD_TYPES_COUNT = 4
+}
+
+sealed trait EmbeddedType
+object EmbeddedType {
+  final case object Unknown extends EmbeddedType
+  final case class Cell(payloadType: PayloadType) extends EmbeddedType
+  final case class Method(ret: PayloadType, args:Vector[(PayloadType, Boolean /* out */)]) extends EmbeddedType
+  final case object Bool extends EmbeddedType
 }
 
 final class Label(s: String) {

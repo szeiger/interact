@@ -52,15 +52,22 @@ trait EmbeddedSyntax { this: Parser =>
 
   def identExpr[_: P]: P[Ident] = positioned(ident.map(Ident))
 
-  def embeddedExpr[_: P]: P[EmbeddedExpr] = P(  positioned(embeddedOperatorExpr(MaxPrecedence))  )
+  def embeddedExpr[_: P]: P[EmbeddedExpr] =
+    P(  positioned(embeddedOperatorExpr(MaxPrecedence))  )
+
+  def embeddedAssignment[_: P]: P[EmbeddedAssignment] =
+    P(  positioned((identExpr ~ "=" ~ embeddedExpr).map { case (id, ee) => EmbeddedAssignment(id, ee) })  )
+
+  def embeddedExprOrAssignment[_: P]: P[EmbeddedExpr] =
+    P(  embeddedAssignment | embeddedExpr  )
 
   def embeddedAp[_: P]: P[EmbeddedApply] =
     P(  identExpr.rep(1, ".").map(_.toVector) ~ "(" ~ embeddedExpr.rep(0, ",").map(_.toVector) ~ ")"  ).map { case (method, args) =>
-      EmbeddedApply(method, args, false)
+      EmbeddedApply(method, args, false, EmbeddedType.Unknown)
     }
 
   def bracketedEmbeddedExpr[_: P]: P[EmbeddedExpr] =
-    P(  "[" ~ embeddedExpr ~ "]"  )
+    P(  "[" ~ embeddedExprOrAssignment ~ "]"  )
 
   def simpleEmbeddedExpr[_: P]: P[EmbeddedExpr] =
     P(  embeddedAp | identExpr | intLit.map(IntLit) | stringLit.map(StringLit) | ("(" ~ embeddedExpr ~ ")")  )
@@ -74,11 +81,11 @@ trait EmbeddedSyntax { this: Parser =>
       case (e, ts) =>
         val right = ts.count(_._1.s.endsWith(":"))
         if(right == 0)
-          ts.foldLeft(e) { case (z, (o, a)) => EmbeddedApply(Vector(o), Vector(z, a), true).setPos(o.pos) }
+          ts.foldLeft(e) { case (z, (o, a)) => EmbeddedApply(Vector(o), Vector(z, a), true, EmbeddedType.Unknown).setPos(o.pos) }
         else if(right == ts.length) {
           val e2 = ts.last._2
           val ts2 = ts.map(_._1).zip(e +: ts.map(_._2).init)
-          ts2.foldRight(e2) { case ((o, a), z) => EmbeddedApply(Vector(o), Vector(a, z), true).setPos(o.pos) }
+          ts2.foldRight(e2) { case ((o, a), z) => EmbeddedApply(Vector(o), Vector(a, z), true, EmbeddedType.Unknown).setPos(o.pos) }
         } else sys.error("Chained binary operators must have the same associativity")
     }
   }
