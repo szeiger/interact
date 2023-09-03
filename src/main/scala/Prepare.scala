@@ -127,7 +127,7 @@ class Prepare(global: Global) extends Phase {
     case n: Ident =>
       assert(n.sym.isEmpty)
       n.sym = define(n, scope, true)
-    case EmbeddedApply(_, args, _) =>
+    case EmbeddedApply(_, args, _, _) =>
       args.foreach(assign(_, scope))
     case n => n.nodeChildren.foreach {
       case ch: EmbeddedExpr => assign(ch, scope)

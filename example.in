@@ -1,59 +1,48 @@
-# Church numerals
 cons Z
-cons S(n)
-
-# Erasure and Duplication
-# def erase(_)
-# def dup(_) = (a, b)
-#   | dup(_) = (c, d) => (c, d)
-
-# Addition
-def _ + y = r
-  | Z    => y
-  | S(x) => x + S(y)
-
-# Multiplication
-def _ * y = r
-  | Z    => erase(y); Z
-  | S(x) => (y1, y2) = dup(y); x * y1 + y2
-
-# Example: Computations on church numerals
-let y = 5n
-    x = 3n
-    example_3_plus_5 = x + y
-
-let example_3_times_2 = 3n * 2n
-
-# Lists
-cons Nil
-cons head :: tail = l
-
-def length(list) = r
-  | Nil => Z
-  | x :: xs => erase(x); S(length(xs))
-
-def map(list, fi, fo) = r
-  | Nil => erase(fi); erase(fo); Nil
-  | x :: xs => (x, fi2) = dup(fi)
-               (fo1, fo2) = dup(fo)
-               fo1 :: map(xs, fi2, fo2)
-
-# Example: List operations
-let l0 = 1n :: 2n :: 3n :: Nil
-    (l0a, l0b) = dup(l0)
-    l0_length = length(l0a)
-    l0_mapped = map(l0b, x, x + 2n)
+cons S(x)
 
 # Explicit lambdas
-cons in |> out
-def apply(l, in) = out
-  | i |> o => in = i; o
+#cons in |> out
+#def apply(l, in) = out
+#  | i |> o => in = i; o
 
 # Example: List mapping with lambdas
-def map2(l, f) = r
-  | Nil     => erase(f); Nil
-  | x :: xs => (f1, f2) = dup(f)
-               apply(f1, x) :: map2(xs, f2)
+#def map2(l, f) = r
+#  | Nil     => erase(f); Nil
+#  | x :: xs => (f1, f2) = dup(f)
+#               apply(f1, x) :: map2(xs, f2)
 
-let l0 = 1n :: 2n :: 3n :: Nil
-    l0_mapped_lambda = map2(l0, x |> x + 2n)
+#let res = map2(Z :: Nil, y |> y1 :: y2 :: Nil)
+#    (y1, y2) = dup(y)
+
+
+cons Func(x, fx)
+
+def apply(l, in) = out
+  | Func(i, o) => in = i; o
+
+cons Pair(a, b)
+
+let f = Func(x, Pair(x1, x2))
+    (x1, x2) = dup1[l1](x)
+    (f1, f2) = dup1[l2](f)
+    #r1 = apply(f1, 1n)
+    #r2 = apply(f2, 2n)
+
+def dup1[label l](_) = (x1, x2)
+  | dup1[l2](_) = (y1, y2)
+      if [l == l2] =>
+        (y1, y2)
+      else =>
+        dup1[l2](x1) = (b1, b2)
+        dup1[l2](x2) = (a1, a2)
+        dup1[l](y1) = (b1, a1)
+        dup1[l](y2) = (b2, a2)
+  | Pair(a, b) => (a1, a2) = dup1[l](a)
+                  (b1, b2) = dup1[l](b)
+                  (Pair(a1, b1), Pair(a2, b2))
+  | Func(a, b) => (a1, a2) = dup1[l](a)
+                  (b1, b2) = dup1[l](b)
+                  (Func(a1, b1), Func(a2, b2))
+  | Z          => (Z, Z)
+  | S(x)       => (a1, a2) = dup1[l](x); (S(a1), S(a2))

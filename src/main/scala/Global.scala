@@ -14,6 +14,8 @@ final class Global(
   private[this] var hasErrors: Boolean = false
   private[this] val accumulated = ArrayBuffer.empty[Notice]
 
+  def dependencyLoader: ClassLoader = getClass.getClassLoader
+
   def warning(msg: String, at: Node): Unit = error(msg, at.pos)
   def warning(msg: String, at: Position): Unit =
     accumulated += new Notice(msg, at, Severity.Warning)
@@ -30,9 +32,9 @@ final class Global(
     throw getCompilerResult()
   }
 
-  def mkLocalId(name: String): Ident = {
+  def mkLocalId(name: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID): Ident = {
     val i = Ident(name)
-    i.sym = new Symbol(name)
+    i.sym = new Symbol(name, isEmbedded = isEmbedded, payloadType = payloadType)
     i
   }
 

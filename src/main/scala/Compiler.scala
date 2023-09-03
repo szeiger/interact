@@ -11,7 +11,7 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
     new Prepare(global),
     new ExpandRules(global),
     new Curry(global),
-    new CheckVariables(global)
+    new CleanEmbedded(global)
   )
 
   val unit1 = if(addEraseDup) {

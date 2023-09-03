@@ -112,7 +112,7 @@ object EmbeddedComputation {
   )
 
   def apply[A](cl: ClassLoader, e: EmbeddedExpr)(creator: => String)(handleArg: Symbol => A): EmbeddedComputation[A] = e match {
-    case emb @ EmbeddedApply(_, args, op) =>
+    case emb @ EmbeddedApply(_, args, op, _) =>
       val consts = mutable.ArrayBuffer.empty[(Int, Any)]
       val argIndices = mutable.ArrayBuffer.empty[A]
       var offset = 0
