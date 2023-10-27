@@ -69,6 +69,10 @@ final case class EmbeddedAssignment(lhs: Ident, rhs: EmbeddedExpr) extends Embed
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (lhs, "lhs") += (rhs, "rhs")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
+final case class CreateLabels(base: Symbol, labels: Vector[Symbol]) extends EmbeddedExpr {
+  def show = s"<createLabels $base -> ${labels.mkString(", ")}>"
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+}
 final case class IntLit(i: Int) extends EmbeddedExpr {
   def show = i.toString
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
@@ -198,7 +202,7 @@ final case class MatchRule(id1: Ident, id2: Ident, args1: Vector[Expr], args2: V
   def sym1 = id1.sym
   def sym2 = id2.sym
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (args1, "args1:") += (args2, "args2:") += (emb1, "emb1") += (emb2, "emb2") += (reduction, "red")
+    n += (args1, "args1") += (args2, "args2") += (emb1, "emb1") += (emb2, "emb2") += (reduction, "red")
   def show: String = {
     def on(n: Symbol, e: Option[EmbeddedExpr], as: Vector[Expr]): String =
       s"$n${e.map(s => s"[${s.show}]").getOrElse("")}(${as.map(_.show).mkString(", ")})"

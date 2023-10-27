@@ -23,11 +23,11 @@ def apply(l, in) = out
 
 cons Pair(a, b)
 
-let f = Func(x, Pair(x1, x2))
-    (x1, x2) = dup1[l1](x)
-    (f1, f2) = dup1[l2](f)
-    #r1 = apply(f1, 1n)
-    #r2 = apply(f2, 2n)
+#let f = Func(x, Pair(x1, x2))
+#    (x1, x2) = dup1[l1](x)
+#    (f1, f2) = dup1[l2](f)
+#    #r1 = apply(f1, 1n)
+#    #r2 = apply(f2, 2n)
 
 def dup1[label l](_) = (x1, x2)
   | dup1[l2](_) = (y1, y2)
@@ -46,3 +46,10 @@ def dup1[label l](_) = (x1, x2)
                   (Func(a1, b1), Func(a2, b2))
   | Z          => (Z, Z)
   | S(x)       => (a1, a2) = dup1[l](x); (S(a1), S(a2))
+
+let (x1, x2, x3, x4) = g(Z)
+    (y1, y2, y3, y4) = g(Z)
+
+def g(_) = (r1, r2, r3, r4)
+  | Z => dup1(Z) = (r1, r2)
+         dup1(Z) = (r3, r4)

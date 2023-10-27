@@ -52,8 +52,8 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
       val (es, ees) = transformReduction(b.reduced, b.embRed, patPayloads)
       b.copy(reduced = es, embRed = ees).setPos(b.pos)
     }
-    Vector(mr)
-    //Vector(mr.copy(reduction = branches).setPos(mr.pos))
+    //Vector(mr)
+    Vector(mr.copy(reduction = branches).setPos(mr.pos))
   }
 
   override def apply(l: Let): Vector[Statement] = {
@@ -136,9 +136,10 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
       override def apply(n: EmbeddedExpr): EmbeddedExpr = n // skip
     }
     val es2 = es.map(tr(_))
-    val embComps = (extraComps.iterator ++ ees.iterator).map { ee =>
-      ee
-    }.toVector
+    aliasedLabels.foreach { case (base, syms) =>
+      extraComps += CreateLabels(base, syms.toVector)
+    }
+    val embComps = (extraComps.iterator ++ ees.iterator).toVector
 
     println(s"**** implicitLabel = $implicitLabel")
     println(s"     aliasedLabels = $aliasedLabels")

@@ -71,6 +71,14 @@ abstract class EmbeddedComputation[A](val argIndices: scala.collection.Seq[A]) {
   def argArity: Int = argIndices.length
 }
 
+final class EmbeddedCreateLabels[A](name: String, _argIndices: scala.collection.Seq[A]) extends EmbeddedComputation[A](_argIndices) {
+  def invoke(args: scala.collection.Seq[Any]): Any = {
+    val label = new Label(name)
+    args.foreach(_.asInstanceOf[RefBox].setValue(label))
+    label
+  }
+}
+
 final class EmbeddedMethodApplication[A](cl: ClassLoader, cls: String, method: String, consts: Iterable[(Int, Any)],
   _argIndices: scala.collection.IndexedSeq[A], subComps: Array[EmbeddedComputation[A]]) extends EmbeddedComputation(_argIndices) {
   private val mh: MethodHandle = {
@@ -135,6 +143,8 @@ object EmbeddedComputation {
       val (cln, mn) =
         if(op) operators(emb.methodQN.head) else (emb.className, emb.methodName)
       new EmbeddedMethodApplication(cl, cln, mn, consts, argIndices, subComps)
+    case CreateLabels(base, labels) =>
+      new EmbeddedCreateLabels[A](base.id, labels.map(handleArg))
     case _ => sys.error(s"Embedded computation must be a method call in $creator")
   }
 }

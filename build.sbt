@@ -4,12 +4,9 @@
 
 scalacOptions ++= Seq("-feature")
 
-fork in Test := true
-fork in run := true
+Test / fork := true
+run / fork := true
 connectInput in run := true
-
-Global / resolvers += "scala-integration" at
-  "https://scala-ci.typesafe.com/artifactory/scala-integration/"
 
 Global / scalaVersion := "2.13.11"
 
