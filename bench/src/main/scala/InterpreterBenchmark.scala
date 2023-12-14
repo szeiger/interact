@@ -15,9 +15,8 @@ import java.util.concurrent.TimeUnit
 class InterpreterBenchmark {
 
   @Param(Array(
-    //"st2.i", "st2.c",
-    "st3.i",
-    //"st3.c",
+    "st.i",
+    //"st.c",
     //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
     //"mt0.c", //"mt1.c", "mt8.c",

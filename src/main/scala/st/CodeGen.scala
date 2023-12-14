@@ -1,4 +1,4 @@
-package de.szeiger.interact.st3
+package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.AbstractCodeGen
 import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule}
@@ -8,7 +8,7 @@ import org.objectweb.asm.Label
 
 import scala.collection.mutable
 
-class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st3", genPackage, logGenerated) {
+class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st", genPackage, logGenerated) {
   private val MAX_SPEC_CELL = 2
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")

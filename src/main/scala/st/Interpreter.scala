@@ -1,4 +1,4 @@
-package de.szeiger.interact.st3
+package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._

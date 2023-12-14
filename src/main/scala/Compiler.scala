@@ -42,21 +42,15 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
     debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
     new mt.Interpreter(globalSymbols, checkedRules.values, numThreads, compile, debugLog, debugBytecode, collectStats)
 
-  def createST2Interpreter(compile: Boolean = true, debugLog: Boolean = false,
-    debugBytecode: Boolean = false, collectStats: Boolean = false) : st2.Interpreter =
-    new st2.Interpreter(globalSymbols, checkedRules.values, compile, debugLog, debugBytecode, collectStats)
-
-  def createST3Interpreter(compile: Boolean = true, debugLog: Boolean = false,
-    debugBytecode: Boolean = false, collectStats: Boolean = false) : st3.Interpreter =
-    new st3.Interpreter(globalSymbols, checkedRules.values, compile, debugLog, debugBytecode, collectStats)
+  def createSTInterpreter(compile: Boolean = true, debugLog: Boolean = false,
+    debugBytecode: Boolean = false, collectStats: Boolean = false) : st.Interpreter =
+    new st.Interpreter(globalSymbols, checkedRules.values, compile, debugLog, debugBytecode, collectStats)
 
   def createInterpreter(spec: String, debugLog: Boolean = false,
       debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {
     spec match {
-      case s"st2.i" => createST2Interpreter(compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"st2.c" => createST2Interpreter(compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"st3.i" => createST3Interpreter(compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"st3.c" => createST3Interpreter(compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st.i" => createSTInterpreter(compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st.c" => createSTInterpreter(compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
       case s"mt${mode}.i" => createMTInterpreter(mode.toInt, compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
       case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
     }
