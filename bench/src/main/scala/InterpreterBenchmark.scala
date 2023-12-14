@@ -5,12 +5,12 @@ import org.openjdk.jmh.infra._
 
 import java.util.concurrent.TimeUnit
 
-@BenchmarkMode(Array(Mode.AverageTime))
-@Fork(value = 1, jvmArgsAppend = Array("-Xmx16g", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
+@BenchmarkMode(Array(Mode.Throughput))
+@Fork(value = 1, jvmArgsAppend = Array("-Xmx16g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
 @Threads(1)
 @Warmup(iterations = 20)
 @Measurement(iterations = 20)
-@OutputTimeUnit(TimeUnit.MILLISECONDS)
+@OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
 
@@ -28,20 +28,20 @@ class InterpreterBenchmark {
   private val prelude =
     """cons Z
       |cons S(n)
-      |def add(_, y): r
+      |def add(_, y) = r
       |  | Z => y
       |  | S(x) => add(x, S(y))
       |""".stripMargin
 
   private val mult1Src =
-    """def mult(_, y): r
+    """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
       |let res = mult(100n, 100n)
       |""".stripMargin
 
   private val mult2Src =
-    """def mult(_, y): r
+    """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
       |let res1 = mult(100n, 100n)
@@ -51,33 +51,33 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   private val mult3Src =
-    """def mult(_, y): r
+    """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (a, b) = dup(y); add(b, mult(x, a))
       |let res = mult(1000n, 1000n)
       |""".stripMargin
 
   private val fib22Src =
-    """def add2(_, y): r
+    """def add2(_, y) = r
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
-      |def fib(_): r
+      |def fib(_) = r
       |  | Z    => 1n
       |  | S(n) => fib2(n)
-      |def fib2(_): r
+      |def fib2(_) = r
       |  | Z    => 1n
       |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
       |let res = fib(22n)
       |""".stripMargin
 
   private val fib29Src =
-    """def add2(_, y): r
+    """def add2(_, y) = r
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
-      |def fib(_): r
+      |def fib(_) = r
       |  | Z    => 1n
       |  | S(n) => fib2(n)
-      |def fib2(_): r
+      |def fib2(_) = r
       |  | Z    => 1n
       |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
       |let res = fib(29n)
@@ -85,9 +85,9 @@ class InterpreterBenchmark {
 
   class PreparedInterpreter(source: String) {
     val model: Compiler = new Compiler(Parser.parse(source))
-    val inter = model.createInterpreter(spec)
+    val inter = model.createInterpreter(spec, collectStats = false)
     def setup(): BaseInterpreter = {
-      model.setDataIn(inter)
+      model.setDataIn(inter.scope)
       inter
     }
   }
@@ -108,22 +108,27 @@ class InterpreterBenchmark {
   }
 
   @Benchmark
+  @OperationsPerInvocation(505402)
   def mult1(bh: Blackhole): Unit =
     bh.consume(mult1Inter.setup().reduce())
 
   @Benchmark
+  @OperationsPerInvocation(2021608)
   def mult2(bh: Blackhole): Unit =
     bh.consume(mult2Inter.setup().reduce())
 
   @Benchmark
+  @OperationsPerInvocation(2004002)
   def mult3(bh: Blackhole): Unit =
     bh.consume(mult3Inter.setup().reduce())
 
   @Benchmark
+  @OperationsPerInvocation(478658)
   def fib22(bh: Blackhole): Unit =
     bh.consume(fib22Inter.setup().reduce())
 
   @Benchmark
+  @OperationsPerInvocation(16503015)
   def fib29(bh: Blackhole): Unit =
     bh.consume(fib29Inter.setup().reduce())
 
