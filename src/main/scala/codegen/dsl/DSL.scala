@@ -74,7 +74,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
 
   private[this] def store(v: VarIdx, desc: ValDesc): VarIdx = {
     desc.desc.charAt(0) match {
-      case 'L' => astore(v)
+      case 'L' | '[' => astore(v)
       case 'I' => istore(v)
       case _ => ???
     }
@@ -165,6 +165,11 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def iload(varIdx: VarIdx): this.type = varInsn(ILOAD, varIdx)
   def istore(varIdx: VarIdx): this.type = { varInsn(ISTORE, varIdx); stored(varIdx); this }
 
+  def aaload: this.type = insn(AALOAD)
+  def aastore: this.type = insn(AASTORE)
+  def iaload: this.type = insn(IALOAD)
+  def iastore: this.type = insn(IASTORE)
+
   def return_ : this.type = insn(RETURN)
   def areturn : this.type = insn(ARETURN)
   def ireturn : this.type = insn(IRETURN)
@@ -218,6 +223,10 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def ifThenElseI_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPNE, cont, skip)
   def ifThenElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPEQ, cont, skip)
   def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
+  def ifThenA_== (cont: => Unit): this.type = ifThen(IF_ACMPNE, cont)
+  def ifThenA_!= (cont: => Unit): this.type = ifThen(IF_ACMPEQ, cont)
+  def ifThenElseA_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPNE, cont, skip)
+  def ifThenElseA_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPEQ, cont, skip)
 
   def putfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(PUTFIELD, owner, name, desc)
   def getfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(GETFIELD, owner, name, desc)

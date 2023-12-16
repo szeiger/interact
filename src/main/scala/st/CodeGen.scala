@@ -1,7 +1,7 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule, Idx}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -37,6 +37,8 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     (0 until a).map(p => cellSpecTs(a).method(s"aport${p}_$$eq", tp.m(tp.I).V))
   }
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT).V)
+  private val ptw_cutCacheCells = ptwT.method("cutCacheCells", tp.m()(cellT.a))
+  private val ptw_cutCachePorts = ptwT.method("cutCachePorts", tp.m()(tp.I.a))
   private val new_CellN_II = cellNT.constr(tp.m(tp.I, tp.I).V)
   private val new_CellSpec = cellSpecTs.zipWithIndex.map { case (t, a) =>
     val params = Seq(tp.I) ++ (0 to a).flatMap(_ => Seq(cellT, tp.I))
@@ -91,6 +93,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       (best1, best2, (skipConn1 ++ skipConn2).toSet)
     }
 
+//    val (reuse1, reuse2, skipConns) = (-1, -1, Set.empty[Connection])
     val (reuse1, reuse2, skipConns) = {
       val (r1, r2, skip) = bestReuse2
       (r1.map(_._2).getOrElse(-1), r2.map(_._2).getOrElse(-1), skip)
@@ -145,76 +148,86 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     val cLeft = storeCastCell("cLeft", g.arity1, start = l1)
     m.label(l1)
 
-    val lhs = (0 until g.arity1).map { idx =>
-      m.aload(cLeft).dup
-      val c = getCell(g.arity1, idx).storeLocal(s"lhsc$idx", cellT, Acc.FINAL)
-      val p = getPort(g.arity1, idx).storeLocal(s"lhsp$idx", tp.I, Acc.FINAL)
-      (c, p)
+    val cccells = m.aload(ptw).invokevirtual(ptw_cutCacheCells).storeLocal("cccells", cellT.a)
+    val ccports = m.aload(ptw).invokevirtual(ptw_cutCachePorts).storeLocal("ccports", tp.I.a)
+    (0 until g.arity1).foreach { idx =>
+      m.aload(cccells).iconst(idx).aload(cLeft); getCell(g.arity1, idx).aastore
+      m.aload(ccports).iconst(idx).aload(cLeft); getPort(g.arity1, idx).iastore
     }
-    val rhs = (0 until g.arity2).map { idx =>
-      m.aload(cRight).dup
-      val c = getCell(g.arity2, idx).storeLocal(s"rhsc$idx", cellT, Acc.FINAL)
-      val p = getPort(g.arity2, idx).storeLocal(s"rhsp$idx", tp.I, Acc.FINAL)
-      (c, p)
+    (0 until g.arity2).foreach { idx =>
+      m.aload(cccells).iconst(idx + g.arity1).aload(cRight); getCell(g.arity2, idx).aastore
+      m.aload(ccports).iconst(idx + g.arity1).aload(cRight); getPort(g.arity2, idx).iastore
     }
+    val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
+    def ldCell(idx: Idx) = idx match {
+      case FreeIdx(rhs, i) => m.aload(cccells).iconst(if(rhs) i + g.arity1 else i).aaload
+      case CellIdx(i, p) => m.aload(cells(i))
+    }
+    def ldPort(idx: Idx) = idx match {
+      case FreeIdx(rhs, i) => m.aload(ccports).iconst(if(rhs) i + g.arity1 else i).iaload
+      case CellIdx(i, p) => m.iconst(p)
+    }
+    def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
 
-    val cells: mutable.ArraySeq[VarIdx] = {
-      val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
-      def createCell(sym: Symbol, cellIdx: Int): m.type = {
-        if(sym.arity < new_CellSpec.length) {
-          m.newInitDup(new_CellSpec(sym.arity)) {
-            m.aload(m.receiver).getfield(sidFields(sids(sym)))
-            branch.cellConns(cellIdx).map {
-              case CellIdx(ci, p) =>
-                if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
-                m.iconst(p)
-              case FreeIdx(r, idx) =>
-                val (c2, p2) = if(r) rhs(idx) else lhs(idx)
-                m.aload(c2).iload(p2)
-            }
-          }
-        } else {
-          m.newInitDup(new_CellN_II) {
-            m.aload(m.receiver).getfield(sidFields(sids(sym)))
-            m.iconst(sym.arity)
+    def createCell(sym: Symbol, cellIdx: Int): m.type = {
+      if(sym.arity < new_CellSpec.length) {
+        m.newInitDup(new_CellSpec(sym.arity)) {
+          m.aload(m.receiver).getfield(sidFields(sids(sym)))
+          branch.cellConns(cellIdx).foreach {
+            case CellIdx(ci, p) =>
+              if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
+              m.iconst(p)
+            case f: FreeIdx => ldBoth(f)
           }
         }
-      }
-      def updateSym(cell: VarIdx, sym: Symbol): Unit =
-        m.aload(cell).aload(m.receiver).getfield(sidFields(sids(sym))).invokevirtual(cell_symIdSetter)
-      for(idx <- cells.indices) {
-        cells(idx) = branch.cells(idx) match {
-          case sym if idx == reuse1 =>
-            if(sym != g.sym1) updateSym(cLeft, sym)
-            cLeft
-          case sym if idx == reuse2 =>
-            if(sym != g.sym2) updateSym(cRight, sym)
-            cRight
-          case sym =>
-            cellAllocations += 1
-            createCell(sym, idx).storeLocal(s"c$idx", cellT, Acc.FINAL)
+      } else {
+        m.newInitDup(new_CellN_II) {
+          m.aload(m.receiver).getfield(sidFields(sids(sym)))
+          m.iconst(sym.arity)
         }
       }
-      cells
+    }
+    def updateSym(cell: VarIdx, sym: Symbol): Unit =
+      m.aload(cell).aload(m.receiver).getfield(sidFields(sids(sym))).invokevirtual(cell_symIdSetter)
+    for(idx <- cells.indices) {
+      cells(idx) = branch.cells(idx) match {
+        case sym if idx == reuse1 =>
+          if(sym != g.sym1) updateSym(cLeft, sym)
+          cLeft
+        case sym if idx == reuse2 =>
+          if(sym != g.sym2) updateSym(cRight, sym)
+          cRight
+        case sym =>
+          cellAllocations += 1
+          createCell(sym, idx).storeLocal(s"c$idx", cellT, Acc.FINAL)
+      }
     }
 
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
-      val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
       if(isReuse(c1)) {
         m.aload(cells(c1))
-        setCell(branch.cells(c1).arity, p1)(m.aload(c2))(m.iload(p2))
+        setCell(branch.cells(c1).arity, p1)(ldCell(ct2))(ldPort(ct2))
       }
-      m.aload(c2).iload(p2).aload(cells(c1)).iconst(p1).invokevirtual(cell_setCell)
-      if(p1 < 0)
-        m.iload(p2).iconst(0).ifThenI_< { m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut) }
+      ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setCell)
+      ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setCell)
+      if(p1 < 0) {
+        ldPort(ct2).iconst(0).ifThenI_< { m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut) }
+      }
+//      m.aload(c2).aload(cut1).ifThenElseA_== {
+//        m.aload(cells(c1)).astore(lhs(p2)._1)
+//        m.iconst(p1).istore(lhs(p2)._2)
+//      } {
+//        m.aload(c2).aload(cut2).ifThenA_== {
+//          m.aload(cells(c1)).astore(rhs(p2)._1)
+//          m.iconst(p1).istore(rhs(p2)._2)
+//        }
+//      }
     }
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
-      val (c1, p1) = if(ct1.rhs) rhs(ct1.idx) else lhs(ct1.idx)
-      val (c2, p2) = if(ct2.rhs) rhs(ct2.idx) else lhs(ct2.idx)
-      m.aload(c1).iload(p1).aload(c2).iload(p2).invokevirtual(cell_setCell)
-      m.aload(c2).iload(p2).aload(c1).iload(p1).invokevirtual(cell_setCell)
-      m.iload(p1).iload(p2).iand.iconst(0).ifThenI_< { m.aload(ptw).aload(c1).invokevirtual(ptw_createCut) }
+      ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setCell)
+      ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setCell)
+      ldPort(ct1); ldPort(ct2).iand.iconst(0).ifThenI_< { m.aload(ptw); ldCell(ct1).invokevirtual(ptw_createCut) }
     }
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)

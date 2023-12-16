@@ -4,10 +4,12 @@ import scala.reflect.ClassTag
 
 trait Desc { def desc: String }
 trait MethodDesc extends Desc
-trait ValDesc extends Desc
+trait ValDesc extends Desc {
+  def a: ValDesc = new Desc.ValDescImpl("["+desc)
+}
 
 object Desc {
-  private[this] class ValDescImpl(val desc: String) extends ValDesc
+  private[dsl] class ValDescImpl(val desc: String) extends ValDesc
   private[this] class MethodDescImpl(val desc: String) extends MethodDesc
   class MethodArgs private[Desc] (params: Seq[ValDesc]) {
     private[this] def d = params.iterator.map(_.desc).mkString("(", "", ")")

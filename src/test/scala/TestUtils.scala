@@ -29,7 +29,7 @@ object TestUtils {
       //println("---- Actual ----")
       //println(s.trim)
       //println("---- End ----")
-      assertEquals(check.trim, s.trim)
+      assertEquals(check.trim.replaceAll("\r", ""), s.trim.replaceAll("\r", ""))
     }
     if(expectedSteps >= 0) assertEquals(expectedSteps, steps)
   }

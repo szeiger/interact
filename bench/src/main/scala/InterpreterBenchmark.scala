@@ -6,10 +6,10 @@ import org.openjdk.jmh.infra._
 import java.util.concurrent.TimeUnit
 
 @BenchmarkMode(Array(Mode.Throughput))
-@Fork(value = 1, jvmArgsAppend = Array("-Xmx16g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
+@Fork(value = 1, jvmArgsAppend = Array("-Xmx12g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
 @Threads(1)
-@Warmup(iterations = 20)
-@Measurement(iterations = 20)
+@Warmup(iterations = 10, time = 1)
+@Measurement(iterations = 10, time = 1)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
@@ -126,10 +126,10 @@ class InterpreterBenchmark {
   def fib22(bh: Blackhole): Unit =
     bh.consume(fib22Inter.setup().reduce())
 
-  @Benchmark
-  @OperationsPerInvocation(16503015)
-  def fib29(bh: Blackhole): Unit =
-    bh.consume(fib29Inter.setup().reduce())
+//  @Benchmark
+//  @OperationsPerInvocation(16503015)
+//  def fib29(bh: Blackhole): Unit =
+//    bh.consume(fib29Inter.setup().reduce())
 
 //  @Benchmark
 //  def createInterpreter(bh: Blackhole): Unit = {
