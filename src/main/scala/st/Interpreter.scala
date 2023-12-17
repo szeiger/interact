@@ -180,8 +180,8 @@ object Cells {
   def cellKind(arity: Int, payloadType: PayloadType): Int = payloadType.value + math.min(arity, 3) * PayloadType.PAYLOAD_TYPES_COUNT
 }
 
-class WireCell(final val sym: Symbol, _symId: Int) extends Cell0V(_symId) {
-  override def toString = s"WireCell($sym, $symId, ${allPorts.map { w => s"(${if(w == null) "null" else "_"})" }.mkString(", ") })"
+class WireCell(final val sym: Symbol, _symId: Int) extends Cell1V(0) {
+  override def toString = s"WireCell($sym, $symId)"
 }
 
 abstract class RuleImpl {
@@ -371,11 +371,13 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
     val detected = mutable.HashSet.empty[Cell]
     val buf = new CutBuffer(16)
     scope.reachableCells.foreach { c =>
-      val ri = ruleImpls(mkRuleKey(c))
-      if(ri != null) {
-        if(c.pport < 0 && c.pcell.pport < 0 && !detected.contains(c.pcell)) {
-          detected.addOne(c)
-          buf.addOne(c, ri)
+      if(!scope.isFreeWire(c)) {
+        val ri = ruleImpls(mkRuleKey(c))
+        if(ri != null) {
+          if(c.pport < 0 && c.pcell.pport < 0 && !detected.contains(c.pcell)) {
+            detected.addOne(c)
+            buf.addOne(c, ri)
+          }
         }
       }
     }

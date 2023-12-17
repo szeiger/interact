@@ -113,7 +113,7 @@ abstract class Scope[Cell] { self =>
         assert(s.isDefined)
         refs(s) match {
           case 0 => cellRet(s, createCell(s, None))
-          case 1 => val c = createCell(s, None); freeWires.addOne(c); cellRet(s, c)
+          case 1 => val c = createCell(s, None); freeWires.addOne(c); Seq((c, 0))
           case 2 => Seq((bind.getOrElseUpdate(s, new TempWire), -1))
           case _ => sys.error(s"Non-linear use of ${i.show} in data")
         }
@@ -151,7 +151,9 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
 
   def symbolName(c: Cell): String = getSymbol(c).id
   def getArity(c: Cell): Int = getSymbol(c).arity
-  def getAllConnected(c: Cell): Iterator[(Cell, Int)] = (-1 until getArity(c)).iterator.map(getConnected(c, _))
+  def getAllConnected(c: Cell): Iterator[(Cell, Int)] =
+    if(isFreeWire(c)) Iterator(getConnected(c, 0))
+    else (-1 until getArity(c)).iterator.map(getConnected(c, _))
 
   def validate(): Unit =
     reachableCells.flatMap { c1 => getAllConnected(c1).zipWithIndex.map(t => (c1, t)) }.foreach { case (c1, ((c2, p2), p1)) =>
@@ -185,11 +187,11 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     import colors._
     val cuts = mutable.ArrayBuffer.empty[Cell]
     def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
-    val stack = mutable.Stack.from(freeWires.toIndexedSeq.sortBy(c => getSymbol(c).id).map(c => getConnected(c, -1)._1))
+    val stack = mutable.Stack.from(freeWires.toIndexedSeq.sortBy(c => getSymbol(c).id).map(c => getConnected(c, 0)._1))
     val shown = mutable.HashSet.empty[Cell]
     var lastTmp = 0
     def tmp(): String = { lastTmp += 1; s"$$s$lastTmp" }
-    val subst = mutable.HashMap.from(freeWires.iterator.map(c1 => ((c1, -1), getSymbol(c1).id)))
+    val subst = mutable.HashMap.from(freeWires.iterator.map(c1 => ((c1, 0), getSymbol(c1).id)))
     def nameOrSubst(c1: Cell, p1: Int, c2: Cell, p2: Int): String = subst.get(c2, p2) match {
       case Some(s) => s
       case None =>
