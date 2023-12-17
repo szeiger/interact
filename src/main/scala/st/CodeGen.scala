@@ -36,7 +36,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val cell_aportSetter = (0 to MAX_SPEC_CELL).map { a =>
     (0 until a).map(p => cellSpecTs(a).method(s"aport${p}_$$eq", tp.m(tp.I).V))
   }
-  private val ptw_createCut = ptwT.method("createCut", tp.m(cellT).V)
+  private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
   private val ptw_cutCacheCells = ptwT.method("cutCacheCells", tp.m()(cellT.a))
   private val ptw_cutCachePorts = ptwT.method("cutCachePorts", tp.m()(tp.I.a))
   private val new_CellN_II = cellNT.constr(tp.m(tp.I, tp.I).V)
@@ -212,7 +212,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setCell)
       ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setCell)
       if(p1 < 0) {
-        ldPort(ct2).iconst(0).ifThenI_< { m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut) }
+        ldPort(ct2).iconst(0).ifThenI_< {
+          m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+        }
       }
 //      m.aload(c2).aload(cut1).ifThenElseA_== {
 //        m.aload(cells(c1)).astore(lhs(p2)._1)
@@ -227,7 +229,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
       ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setCell)
       ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setCell)
-      ldPort(ct1); ldPort(ct2).iand.iconst(0).ifThenI_< { m.aload(ptw); ldCell(ct1).invokevirtual(ptw_createCut) }
+      ldPort(ct1); ldPort(ct2).iand.iconst(0).ifThenI_< {
+        m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+      }
     }
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
@@ -240,7 +244,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         m.aload(cells(c2))
         setCell(branch.cells(c2).arity, p2, !isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
       }
-      if(p1 < 0 && p2 < 0) m.aload(ptw).aload(cells(c1)).invokevirtual(ptw_createCut)
+      if(p1 < 0 && p2 < 0) {
+        m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+      }
     }
     allConns.foreach {
       case c if skipConns.contains(c) => ()

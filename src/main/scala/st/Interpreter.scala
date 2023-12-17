@@ -265,7 +265,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val p2 = ccports(ct2)
       cc1.setCell(p1, cc2, p2)
       cc2.setCell(p2, cc1, p1)
-      if((p1 & p2) < 0) ptw.createCut(cc1)
+      if((p1 & p2) < 0) ptw.createCut(cc1, cc2)
     }
 
     @inline def connectFreeToFree(ct1: Int, ct2: Int): Unit = {
@@ -275,7 +275,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val p2 = ccports(ct2)
       cc1.setCell(p1, cc2, p2)
       cc2.setCell(p2, cc1, p1)
-      if((p1 & p2) < 0) ptw.createCut(cc1)
+      if((p1 & p2) < 0) ptw.createCut(cc1, cc2)
     }
 
     i = 0
@@ -296,7 +296,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val p2 = byte3(conn)
       c1.setCell(p1, c2, p2)
       c2.setCell(p2, c1, p1)
-      if((p1 & p2) < 0) ptw.createCut(c1)
+      if((p1 & p2) < 0) ptw.createCut(c1, c2)
       i += 1
     }
   }
@@ -376,7 +376,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
         if(ri != null) {
           if(c.pport < 0 && c.pcell.pport < 0 && !detected.contains(c.pcell)) {
             detected.addOne(c)
-            buf.addOne(c, ri)
+            buf.addOne(c, c.pcell)
           }
         }
       }
@@ -388,16 +388,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   def getRuleImpl(c: Cell): RuleImpl = ruleImpls(mkRuleKey(c))
   def reduce1(c: Cell): Unit = {
     val w = new PerThreadWorker(this) {
-      protected[this] override def enqueueCut(c: Cell, ri: RuleImpl): Unit = ()
+      protected[this] override def enqueueCut(c1: Cell, c2: Cell): Unit = ()
     }
-    w.setNext(c, getRuleImpl(c))
+    w.setNext(c, c.pcell)
     w.processNext()
   }
 
   def reduce(): Int = {
     val initial = detectInitialCuts
     val w = new PerThreadWorker(this) {
-      protected[this] override def enqueueCut(c: Cell, ri: RuleImpl): Unit = initial.addOne(c, ri)
+      protected[this] override def enqueueCut(c1: Cell, c2: Cell): Unit = initial.addOne(c1, c2)
     }
     while(initial.nonEmpty) {
       val (wr, ri) = initial.pop()
@@ -411,65 +411,64 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
 }
 
 final class CutBuffer(initialSize: Int) {
-  private[this] var wrs = new Array[Cell](initialSize)
-  private[this] var ris = new Array[RuleImpl](initialSize)
+  private[this] var pairs = new Array[Cell](initialSize*2)
   private[this] var len = 0
-  @inline def addOne(wr: Cell, ri: RuleImpl): Unit = {
-    if(len == wrs.length) {
-      wrs = Arrays.copyOf(wrs, wrs.length*2)
-      ris = Arrays.copyOf(ris, ris.length*2)
-    }
-    wrs(len) = wr
-    ris(len) = ri
-    len += 1
+  @inline def addOne(c1: Cell, c2: Cell): Unit = {
+    if(len == pairs.length)
+      pairs = Arrays.copyOf(pairs, pairs.length*2)
+    pairs(len) = c1
+    pairs(len+1) = c2
+    len += 2
   }
   @inline def nonEmpty: Boolean = len != 0
-  @inline def pop(): (Cell, RuleImpl) = {
-    len -= 1
-    val wr = wrs(len)
-    val ri = ris(len)
-    wrs(len) = null
-    (wr, ri)
+  @inline def pop(): (Cell, Cell) = {
+    len -= 2
+    val c1 = pairs(len)
+    val c2 = pairs(len+1)
+    pairs(len) = null
+    pairs(len+1) = null
+    (c1, c2)
   }
 }
 
 abstract class PerThreadWorker(final val inter: Interpreter) {
   final val tempCells = inter.createTempCells()
   final val (cutCacheCells, cutCachePorts) = inter.createCutCache()
-  private[this] final var nextCut: Cell = _
-  private[this] final var nextRule: RuleImpl = _
+  private[this] final var nextCut1, nextCut2: Cell = _
   private[this] final val collectStats = inter.collectStats
   var steps, cellAllocations = 0
 
-  protected[this] def enqueueCut(c: Cell, ri: RuleImpl): Unit
+  protected[this] def enqueueCut(c1: Cell, c2: Cell): Unit
 
-  final def createCut(c: Cell): Unit = {
-    val ri = inter.ruleImpls(inter.mkRuleKey(c))
-    if(ri != null) {
-      if(nextCut == null) { nextCut = c; nextRule = ri }
-      else enqueueCut(c, ri)
-    }
+  final def createCut(c1: Cell, c2: Cell): Unit = {
+    if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 }
+    else enqueueCut(c1, c2)
   }
 
-  final def setNext(c: Cell, ri: RuleImpl): Unit = {
-    this.nextCut = c
-    this.nextRule = ri
+  final def setNext(c1: Cell, c2: Cell): Unit = {
+    this.nextCut1 = c1
+    this.nextCut2 = c2
   }
 
   final def processNext(): Unit = {
-    val c = nextCut
-    val ri = nextRule
-    nextCut = null
-    ri.reduce(c, this)
-    if(collectStats) {
-      steps += 1
-      cellAllocations += ri.cellAllocationCount
+    val c1 = nextCut1
+    val c2 = nextCut2
+    nextCut1 = null
+    nextCut2 = null
+    assert(c1.pcell eq c2) //--
+    val ri = inter.ruleImpls(inter.mkRuleKey(c1))
+    if(ri != null) {
+      ri.reduce(c1, this)
+      if(collectStats) {
+        steps += 1
+        cellAllocations += ri.cellAllocationCount
+      }
     }
   }
 
   @tailrec
   final def processAll(): Unit = {
     processNext()
-    if(nextCut != null) processAll()
+    if(nextCut1 != null) processAll()
   }
 }
