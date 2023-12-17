@@ -143,7 +143,9 @@ abstract class Scope[Cell] { self =>
   }
 }
 
-abstract class Analyzer[Cell] extends Scope[Cell] { self =>
+trait Analyzer[Cell] { self =>
+  def rootCells: IterableOnce[Cell]
+
   def getSymbol(c: Cell): Symbol
   def getConnected(c: Cell, port: Int): (Cell, Int)
   def isFreeWire(c: Cell): Boolean
@@ -151,16 +153,12 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
 
   def symbolName(c: Cell): String = getSymbol(c).id
   def getArity(c: Cell): Int = getSymbol(c).arity
-  def getAllConnected(c: Cell): Iterator[(Cell, Int)] =
+
+  private[this] def getAllConnected(c: Cell): Iterator[(Cell, Int)] =
     if(isFreeWire(c)) Iterator(getConnected(c, 0))
     else (-1 until getArity(c)).iterator.map(getConnected(c, _))
 
-  def validate(): Unit =
-    reachableCells.flatMap { c1 => getAllConnected(c1).zipWithIndex.map(t => (c1, t)) }.foreach { case (c1, ((c2, p2), p1)) =>
-      assert(getConnected(c2, p2) == (c1, p1-1))
-    }
-
-  object Nat {
+  private[this] object Nat {
     def unapply(c: Cell): Option[Int] = unapply(c, 0)
     @tailrec private[this] def unapply(c: Cell, acc: Int): Option[Int] = (symbolName(c), getArity(c)) match {
       case ("Z", 0) => Some(acc)
@@ -172,8 +170,9 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
   }
 
   def reachableCells: Iterator[Cell] = {
+    val freeWires = rootCells.iterator.filter(isFreeWire).toVector
     val s = mutable.HashSet.empty[Cell]
-    val q = mutable.ArrayBuffer.from(freeWires.flatMap(getAllConnected(_).map(_._1)))
+    val q = mutable.ArrayBuffer.from(freeWires.flatMap(getAllConnected(_).filter(_ != null).map(_._1)))
     while(q.nonEmpty) {
       val w = q.last
       q.dropRightInPlace(1)
@@ -182,12 +181,36 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     s.iterator
   }
 
-  def log(out: PrintStream, prefix: String = "  ", markCut: (Cell, Cell) => Boolean = (_, _) => false, color: Boolean = true): mutable.ArrayBuffer[Cell] = {
+  def allConnections(): (mutable.HashMap[(Cell, Int), (Cell, Int)], mutable.HashSet[Cell]) = {
+    val m = mutable.HashMap.empty[(Cell, Int), (Cell, Int)]
+    val s = mutable.HashSet.empty[Cell]
+    val q = mutable.ArrayBuffer.from(rootCells)
+    while(q.nonEmpty) {
+      val c1 = q.last
+      q.dropRightInPlace(1)
+      if(s.add(c1)) {
+        val conn = getAllConnected(c1).toVector
+        conn.zipWithIndex.foreach {
+          case (null, _) =>
+          case ((c2, p2), _p1) =>
+            val p1 = _p1 - 1
+            m.put((c1, p1), (c2, p2))
+            m.put((c2, p2), (c1, p1))
+        }
+        q.addAll(conn.iterator.filter(_ != null).map(_._1))
+      }
+    }
+    (m, s)
+  }
+
+  def log(out: PrintStream, prefix: String = "  ", markCut: (Cell, Cell) => Boolean = (_, _) => false, color: Boolean = true): mutable.ArrayBuffer[(Cell, Cell)] = {
     val colors = if(color) MaybeColors else NoColors
     import colors._
-    val cuts = mutable.ArrayBuffer.empty[Cell]
+    val cuts = mutable.ArrayBuffer.empty[(Cell, Cell)]
     def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
-    val stack = mutable.Stack.from(freeWires.toIndexedSeq.sortBy(c => getSymbol(c).id).map(c => getConnected(c, 0)._1))
+    val freeWires = rootCells.iterator.filter(isFreeWire).toVector
+    val stack = mutable.Stack.from(freeWires.sortBy(c => getSymbol(c).id).map(c => getConnected(c, 0)._1))
+    val all = allConnections()._1
     val shown = mutable.HashSet.empty[Cell]
     var lastTmp = 0
     def tmp(): String = { lastTmp += 1; s"$$s$lastTmp" }
@@ -196,7 +219,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
       case Some(s) => s
       case None =>
         val mark = if(p1 == -1 && p2 == -1 && markCut(c1, c2)) {
-          cuts.addOne(c1)
+          cuts.addOne((c1, c2))
           s"${cBlue}<${cuts.length-1}>${cNormal}"
         } else ""
         if(singleRet(getSymbol(c2)) == p2) mark + show(c2, false)
@@ -210,7 +233,12 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
     def show(c1: Cell, withRet: Boolean): String = {
       shown += c1
       val sym = getSymbol(c1)
-      def list(poss: IndexedSeq[Int]) = poss.map { p1 => val (c2, p2) = getConnected(c1, p1); (getSymbol(c2), nameOrSubst(c1, p1, c2, p2)) }
+      def list(poss: IndexedSeq[Int]) = poss.map { p1 =>
+        all.get(c1, p1) match {
+          case Some((c2, p2)) => (getSymbol(c2), nameOrSubst(c1, p1, c2, p2))
+          case None => (Symbol.NoSymbol, "?")
+        }
+      }
       def needsParens(sym1: Symbol, pre1: Int, sym2: Symbol, sym2IsRight: Boolean): Boolean = {
         val pre2 = Lexical.precedenceOf(sym2.id)
         val r1 = Lexical.isRightAssoc(sym1.id)
@@ -263,7 +291,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
   def toDot(out: PrintStream): Unit = {
     var lastIdx = 0
     def mk(): String = { lastIdx += 1; s"n$lastIdx" }
-    val cells = reachableCells.map(c => (c, mk())).toMap
+    val cells = allConnections()._2.map(c => (c, mk())).toMap
     out.println("graph G {")
     out.println("  node [shape=plain];")
     cells.foreachEntry { (c, l) =>

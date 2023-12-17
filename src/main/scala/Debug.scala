@@ -12,7 +12,7 @@ object Debug extends App {
   inter.setData(model)
 
   var steps = 0
-  var cuts: mutable.ArrayBuffer[Cell] = _
+  var cuts: mutable.ArrayBuffer[(Cell, Cell)] = _
 
   @tailrec
   def readLine(): Option[Int] = {
@@ -27,7 +27,7 @@ object Debug extends App {
 
   @tailrec def step(): Unit = {
     println(s"${MaybeColors.cGreen}At step $steps:${MaybeColors.cNormal}")
-    cuts = inter.getAnalyzer.log(System.out, markCut = (c1, _) => inter.getRuleImpl(c1) != null)
+    cuts = inter.getAnalyzer.log(System.out, markCut = (c1, c2) => inter.getRuleImpl(c1, c2) != null)
     if(cuts.isEmpty)
       println(s"${MaybeColors.cGreen}Irreducible after $steps reductions.${MaybeColors.cNormal}")
     else {
@@ -35,7 +35,7 @@ object Debug extends App {
       readLine() match {
         case None => ()
         case Some(idx) =>
-          inter.reduce1(cuts(idx), cuts(idx).pcell)
+          inter.reduce1(cuts(idx)._1, cuts(idx)._2)
           step()
       }
     }

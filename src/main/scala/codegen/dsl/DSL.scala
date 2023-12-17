@@ -223,6 +223,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def ifThenElseI_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPNE, cont, skip)
   def ifThenElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPEQ, cont, skip)
   def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
+  def ifThenI_>= (cont: => Unit): this.type = ifThen(IF_ICMPLT, cont)
   def ifThenA_== (cont: => Unit): this.type = ifThen(IF_ACMPNE, cont)
   def ifThenA_!= (cont: => Unit): this.type = ifThen(IF_ACMPEQ, cont)
   def ifThenElseA_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPNE, cont, skip)

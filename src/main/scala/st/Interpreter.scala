@@ -9,22 +9,16 @@ import java.util.Arrays
 import scala.annotation.{switch, tailrec}
 import scala.collection.mutable
 
-abstract class Cell(final var symId: Int, _pcell: Cell, _pport: Int) {
-  final var pcell: Cell = _pcell
-  final var pport: Int = _pport
-
+abstract class Cell(final var symId: Int) {
   def arity: Int
   def auxCell(p: Int): Cell
   def auxPort(p: Int): Int
   def setAux(p: Int, c2: Cell, p2: Int): Unit
-  def setCell(p: Int, c2: Cell, p2: Int): Unit
-  def getCell(p: Int): Cell
-  def getPort(p: Int): Int
   def getGenericPayload: Any
   def setGenericPayload(v: Any): Unit
 
-  final def allPorts: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (getCell(i), getPort(i)))
-  override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${allPorts.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
+  final def auxPortsIterator: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (auxCell(i), auxPort(i)))
+  override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${auxPortsIterator.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
 }
 
 trait IntCell extends IntBox {
@@ -47,47 +41,35 @@ trait VoidCell {
   def getGenericPayload: Any = ()
 }
 
-abstract class Cell0(_symId: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
+abstract class Cell0(_symId: Int) extends Cell(_symId) {
   final def arity: Int = 0
   final def auxCell(p: Int): Cell = null
   final def auxPort(p: Int): Int = 0
   final def setAux(p: Int, c2: Cell, p2: Int): Unit = ()
-  final def setCell(p: Int, c2: Cell, p2: Int): Unit = { pcell = c2; pport = p2 }
-  final def getCell(p: Int): Cell = pcell
-  final def getPort(p: Int): Int = pport
 }
-class Cell0V(_symId: Int, _pcell: Cell, _pport: Int) extends Cell0(_symId, _pcell, _pport) with VoidCell {
-  def this(_symId: Int) = this(_symId, null, 0)
-}
-class Cell0I(_symId: Int, _pcell: Cell, _pport: Int) extends Cell0(_symId, _pcell, _pport) with IntCell {
-  def this(_symId: Int) = this(_symId, null, 0)
-}
-class Cell0L(_symId: Int, _pcell: Cell, _pport: Int) extends Cell0(_symId, _pcell, _pport) with RefCell {
-  def this(_symId: Int) = this(_symId, null, 0)
-}
+class Cell0V(_symId: Int) extends Cell0(_symId) with VoidCell
+class Cell0I(_symId: Int) extends Cell0(_symId) with IntCell
+class Cell0L(_symId: Int) extends Cell0(_symId) with RefCell
 
-abstract class Cell1(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell(_symId, _pcell, _pport) {
+abstract class Cell1(_symId: Int, _acell0: Cell, _aport0: Int) extends Cell(_symId) {
   final var acell0: Cell = _acell0
   final var aport0: Int = _aport0
   final def arity: Int = 1
   final def auxCell(p: Int): Cell = acell0
   final def auxPort(p: Int): Int = aport0
   final def setAux(p: Int, c2: Cell, p2: Int): Unit = { acell0 = c2; aport0 = p2 }
-  final def setCell(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { pcell = c2; pport = p2 }
-  final def getCell(p: Int): Cell = if(p == 0) acell0 else pcell
-  final def getPort(p: Int): Int = if(p == 0) aport0 else pport
 }
-class Cell1V(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _pcell, _pport, _acell0, _aport0) with VoidCell {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+class Cell1V(_symId: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _acell0, _aport0) with VoidCell {
+  def this(_symId: Int) = this(_symId, null, 0)
 }
-class Cell1I(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _pcell, _pport, _acell0, _aport0) with IntCell {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+class Cell1I(_symId: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _acell0, _aport0) with IntCell {
+  def this(_symId: Int) = this(_symId, null, 0)
 }
-class Cell1L(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _pcell, _pport, _acell0, _aport0) with RefCell {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0)
+class Cell1L(_symId: Int, _acell0: Cell, _aport0: Int) extends Cell1(_symId, _acell0, _aport0) with RefCell {
+  def this(_symId: Int) = this(_symId, null, 0)
 }
 
-abstract class Cell2(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell(_symId, _pcell, _pport) {
+abstract class Cell2(_symId: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell(_symId) {
   final var acell0: Cell = _acell0
   final var aport0: Int = _aport0
   final var acell1: Cell = _acell1
@@ -96,53 +78,27 @@ abstract class Cell2(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _apo
   final def auxCell(p: Int): Cell = if(p == 0) acell0 else acell1
   final def auxPort(p: Int): Int = if(p == 0) aport0 else aport1
   final def setAux(p: Int, c2: Cell, p2: Int): Unit = if(p == 0) { acell0 = c2; aport0 = p2 } else { acell1 = c2; aport1 = p2 }
-  final def setCell(p: Int, c2: Cell, p2: Int): Unit = (p: @switch) match {
-    case 0 => acell0 = c2; aport0 = p2
-    case 1 => acell1 = c2; aport1 = p2
-    case _ => pcell = c2; pport = p2
-  }
-  final def getCell(p: Int): Cell = (p: @switch) match {
-    case 0 => acell0
-    case 1 => acell1
-    case _ => pcell
-  }
-  final def getPort(p: Int): Int = (p: @switch) match {
-    case 0 => aport0
-    case 1 => aport1
-    case _ => pport
-  }
 }
-class Cell2V(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _pcell, _pport, _acell0, _aport0, _acell1, _aport1) with VoidCell {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+class Cell2V(_symId: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _acell0, _aport0, _acell1, _aport1) with VoidCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
 }
-class Cell2I(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _pcell, _pport, _acell0, _aport0, _acell1, _aport1) with IntCell {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+class Cell2I(_symId: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _acell0, _aport0, _acell1, _aport1) with IntCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
 }
-class Cell2L(_symId: Int, _pcell: Cell, _pport: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _pcell, _pport, _acell0, _aport0, _acell1, _aport1) with RefCell {
-  def this(_symId: Int) = this(_symId, null, 0, null, 0, null, 0)
+class Cell2L(_symId: Int, _acell0: Cell, _aport0: Int, _acell1: Cell, _aport1: Int) extends Cell2(_symId, _acell0, _aport0, _acell1, _aport1) with RefCell {
+  def this(_symId: Int) = this(_symId, null, 0, null, 0)
 }
 
-abstract class CellN(_symId: Int, val arity: Int, _pcell: Cell, _pport: Int) extends Cell(_symId, _pcell, _pport) {
-  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
+abstract class CellN(_symId: Int, val arity: Int) extends Cell(_symId) {
   private[this] final val auxCells = new Array[Cell](arity)
   private[this] final val auxPorts = new Array[Int](arity)
   final def auxCell(p: Int): Cell = auxCells(p)
   final def auxPort(p: Int): Int = auxPorts(p)
   final def setAux(p: Int, c2: Cell, p2: Int): Unit = { auxCells(p) = c2; auxPorts(p) = p2 }
-  final def setCell(p: Int, c2: Cell, p2: Int): Unit =
-    if(p < 0) { pcell = c2; pport = p2 } else { auxCells(p) = c2; auxPorts(p) = p2 }
-  final def getCell(p: Int): Cell = if(p < 0) pcell else auxCells(p)
-  final def getPort(p: Int): Int = if(p < 0) pport else auxPorts(p)
 }
-class CellNV(_symId: Int, _arity: Int, _pcell: Cell, _pport: Int) extends CellN(_symId, _arity, _pcell, _pport) with VoidCell {
-  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
-}
-class CellNI(_symId: Int, _arity: Int, _pcell: Cell, _pport: Int) extends CellN(_symId, _arity, _pcell, _pport) with IntCell {
-  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
-}
-class CellNL(_symId: Int, _arity: Int, _pcell: Cell, _pport: Int) extends CellN(_symId, _arity, _pcell, _pport) with RefCell {
-  def this(_symId: Int, _arity: Int) = this(_symId, _arity, null, 0)
-}
+class CellNV(_symId: Int, _arity: Int) extends CellN(_symId, _arity) with VoidCell
+class CellNI(_symId: Int, _arity: Int) extends CellN(_symId, _arity) with IntCell
+class CellNL(_symId: Int, _arity: Int) extends CellN(_symId, _arity) with RefCell
 
 object Cells {
   def mk(symId: Int, arity: Int, payloadKind: Int): Cell = (payloadKind: @switch) match {
@@ -186,7 +142,7 @@ class WireCell(final val sym: Symbol, _symId: Int) extends Cell1V(0) {
 
 abstract class RuleImpl {
   var rule: GenericRule = _
-  def reduce(cut: Cell, ptw: PerThreadWorker): Unit
+  def reduce(c1: Cell, c2: Cell, ptw: PerThreadWorker): Unit
   def cellAllocationCount: Int
 }
 
@@ -200,8 +156,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     while(System.nanoTime() < end) Thread.onSpinWait()
   }
 
-  def reduce(cell: Cell, ptw: PerThreadWorker): Unit = {
-    val (c1, c2) = if(cell.symId == s1id) (cell, cell.pcell) else (cell.pcell, cell)
+  def reduce(_c1: Cell, _c2: Cell, ptw: PerThreadWorker): Unit = {
+    val (c1, c2) = if(_c1.symId == s1id) (_c1, _c2) else (_c2, _c1)
 
     if(condComp != null) {
       var i = 0
@@ -214,7 +170,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
         i += 1
       }
       val b = condComp.invoke(args).asInstanceOf[Boolean]
-      if(!b) return next.reduce(cell, ptw)
+      if(!b) return next.reduce(_c1, _c2, ptw)
     }
 
     val cells = ptw.tempCells
@@ -263,8 +219,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val cc1 = cells(ct1)
       val cc2 = cccells(ct2)
       val p2 = ccports(ct2)
-      cc1.setCell(p1, cc2, p2)
-      cc2.setCell(p2, cc1, p1)
+      if(p1 >= 0) cc1.setAux(p1, cc2, p2)
+      if(p2 >= 0) cc2.setAux(p2, cc1, p1)
       if((p1 & p2) < 0) ptw.createCut(cc1, cc2)
     }
 
@@ -273,8 +229,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val p1 = ccports(ct1)
       val cc2 = cccells(ct2)
       val p2 = ccports(ct2)
-      cc1.setCell(p1, cc2, p2)
-      cc2.setCell(p2, cc1, p1)
+      if(p1 >= 0) cc1.setAux(p1, cc2, p2)
+      if(p2 >= 0) cc2.setAux(p2, cc1, p1)
       if((p1 & p2) < 0) ptw.createCut(cc1, cc2)
     }
 
@@ -294,8 +250,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val p1 = byte1(conn)
       val c2 = cells(byte2(conn))
       val p2 = byte3(conn)
-      c1.setCell(p1, c2, p2)
-      c2.setCell(p2, c1, p1)
+      if(p1 >= 0) c1.setAux(p1, c2, p2)
+      if(p2 >= 0) c2.setAux(p2, c1, p1)
       if((p1 & p2) < 0) ptw.createCut(c1, c2)
       i += 1
     }
@@ -312,24 +268,30 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
   final val (ruleImpls, maxRuleCells, maxArity) = createRuleImpls()
-  final val cutBuffer = new CutBuffer(16)
+  final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
 
-  val getAnalyzer: Analyzer[Cell] = new Analyzer[Cell] {
-    override val freeWires: mutable.HashSet[Cell] = self.freeWires
-    def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = ???
-    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = ???
+  def getAnalyzer: Analyzer[Cell] = new Analyzer[Cell] {
+    def rootCells = (self.freeWires.iterator ++ (cutBuffer.iterator ++ principals.iterator).flatMap { case (c1, c2) => Seq(c1, c2) }).filter(_ != null).toSet
+    val principals = mutable.HashMap.empty[Cell, Cell]
+    (cutBuffer.iterator ++ irreducible.iterator).foreach { case (c1, c2) =>
+      principals.put(c1, c2)
+      principals.put(c2, c1)
+    }
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
     def getPayload(c: Cell): Any = c.getGenericPayload
-    def getConnected(c: Cell, port: Int): (Cell, Int) = (c.getCell(port), c.getPort(port))
+    def getConnected(c: Cell, port: Int): (Cell, Int) =
+      if(port == -1) principals.get(c).map((_, -1)).getOrElse(null)
+      else (c.auxCell(port), c.auxPort(port))
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
 
   def setData(comp: Compiler): Unit = {
     cutBuffer.clear()
+    irreducible.clear()
     freeWires.clear()
     val pairs = mutable.HashSet.empty[(Cell, Cell)]
     val scope = new Scope[Cell] {
@@ -337,8 +299,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
       def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell =
         if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity, Cells.cellKind(sym.arity, sym.payloadType)) else new WireCell(sym, 0)
       def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
-        c1.setCell(p1, c2, p2)
-        c2.setCell(p2, c1, p1)
+        if(p1 >= 0) c1.setAux(p1, c2, p2)
+        if(p2 >= 0) c2.setAux(p2, c1, p1)
         if(p1 == -1 && p2 == -1 && !pairs.contains((c2, c1)) && pairs.add((c1, c2))) cutBuffer.addOne(c1, c2)
       }
     }
@@ -380,17 +342,19 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
     (ris, maxC.get, maxA.get)
   }
 
-  @inline def mkRuleKey(c: Cell): Int = mkRuleKey(c.symId, c.pcell.symId)
+  @inline def mkRuleKey(c1: Cell, c2: Cell): Int = mkRuleKey(c1.symId, c2.symId)
 
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
   // Used by the debugger
-  def getRuleImpl(c: Cell): RuleImpl = ruleImpls(mkRuleKey(c))
+  def getRuleImpl(c1: Cell, c2: Cell): RuleImpl = ruleImpls(mkRuleKey(c1, c2))
   def reduce1(c1: Cell, c2: Cell): Unit = {
     val w = new PerThreadWorker(this)
     w.setNext(c1, c2)
     w.processNext()
+    val (d1, d2) = w.getNext()
+    if(d1 != null) cutBuffer.addOne(d1, d2)
   }
 
   def reduce(): Int = {
@@ -450,20 +414,21 @@ final class PerThreadWorker(final val inter: Interpreter) {
     this.nextCut2 = c2
   }
 
+  final def getNext(): (Cell, Cell) = (nextCut1, nextCut2)
+
   final def processNext(): Unit = {
     val c1 = nextCut1
     val c2 = nextCut2
     nextCut1 = null
     nextCut2 = null
-    assert(c1.pcell eq c2) //--
-    val ri = inter.ruleImpls(inter.mkRuleKey(c1))
+    val ri = inter.ruleImpls(inter.mkRuleKey(c1, c2))
     if(ri != null) {
-      ri.reduce(c1, this)
+      ri.reduce(c1, c2, this)
       if(collectStats) {
         steps += 1
         cellAllocations += ri.cellAllocationCount
       }
-    }
+    } else inter.irreducible.addOne(c1, c2)
   }
 
   @tailrec

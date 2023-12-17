@@ -1,7 +1,7 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule, Idx}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule, GenericRuleBranch, Idx}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -19,11 +19,6 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
-  private val cell_setCell = cellT.method("setCell", tp.m(tp.I, cellT, tp.I).V)
-  private val cell_pcell = cellT.method("pcell", tp.m()(cellT))
-  private val cell_pport = cellT.method("pport", tp.m()(tp.I))
-  private val cell_pcellSetter = cellT.method("pcell_$eq", tp.m(cellT).V)
-  private val cell_pportSetter = cellT.method("pport_$eq", tp.m(tp.I).V)
   private val cell_acell = (0 to MAX_SPEC_CELL).map { a =>
     (0 until a).map(p => cellSpecTs(a).method(s"acell$p", tp.m()(cellT)))
   }
@@ -41,16 +36,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val ptw_cutCachePorts = ptwT.method("cutCachePorts", tp.m()(tp.I.a))
   private val new_CellN_II = cellNT.constr(tp.m(tp.I, tp.I).V)
   private val new_CellSpec = cellSpecTs.zipWithIndex.map { case (t, a) =>
-    val params = Seq(tp.I) ++ (0 to a).flatMap(_ => Seq(cellT, tp.I))
+    val params = Seq(tp.I) ++ (0 until a).flatMap(_ => Seq(cellT, tp.I))
     t.constr(tp.m(params: _*).V)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRule): Unit = {
-    assert(g.branches.length == 1)
-    val branch = g.branches.head
-    val allConns = branch.wireConnsDistinct ++ branch.internalConns
-    var cellAllocations = 0
-
+  private def findReuse(rule: GenericRule, branch: GenericRuleBranch): (Int, Int, Set[Connection]) = {
     // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
     def countReuseConnections(cellIdx: Int, rhs: Boolean): Int =
       reuseSkip(cellIdx, rhs).length
@@ -66,11 +56,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     // Find cellIdx/sym/quality of best reuse candidate for rhs/lhs
     // - Prefer max. reuse first, then same symbol
     def bestReuse(candidates: Array[(Symbol, Int)], rhs: Boolean): Option[(Symbol, Int, Int)] =
-      candidates.map { case (s, i) => (s, i, 2*countReuseConnections(i, rhs) + (if(s == g.symFor(rhs)) 1 else 0)) }
+      candidates.map { case (s, i) => (s, i, 2*countReuseConnections(i, rhs) + (if(s == rule.symFor(rhs)) 1 else 0)) }
         .sortBy { case (s, i, q) => -q }.headOption
     // Find sym/cellIdx of cells with same arity as rhs/lhs
     def reuseCandidates(rhs: Boolean): Array[(Symbol, Int)] =
-      branch.cells.zipWithIndex.filter { case (sym, _) => sym.arity == g.symFor(rhs).arity }
+      branch.cells.zipWithIndex.filter { case (sym, _) => sym.arity == rule.symFor(rhs).arity }
     // Find best reuse combination for both sides
     def bestReuse2: (Option[(Symbol, Int, Int)], Option[(Symbol, Int, Int)], Set[Connection]) = {
       var cand1 = reuseCandidates(false)
@@ -93,35 +83,47 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       (best1, best2, (skipConn1 ++ skipConn2).toSet)
     }
 
-//    val (reuse1, reuse2, skipConns) = (-1, -1, Set.empty[Connection])
-    val (reuse1, reuse2, skipConns) = {
-      val (r1, r2, skip) = bestReuse2
-      (r1.map(_._2).getOrElse(-1), r2.map(_._2).getOrElse(-1), skip)
-    }
-    def isReuse(cellIdx: Int): Boolean = cellIdx == reuse1 || cellIdx == reuse2
+    val (r1, r2, skip) = bestReuse2
+    (r1.map(_._2).getOrElse(-1), r2.map(_._2).getOrElse(-1), skip)
+  }
 
-    val m = c.method(Acc.PUBLIC, "reduce", tp.m(cellT, ptwT).V)
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], rule: GenericRule): Unit = {
+    assert(rule.branches.length == 1)
+    val branch = rule.branches.head
+    val allConns = branch.wireConnsDistinct ++ branch.internalConns
+    var cellAllocations = 0
+    val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
+    //val (reuse1, reuse2, skipConns) = (-1, -1, Set.empty[Connection])
+    def isReuse(cellIdx: Int): Boolean = cellIdx == reuse1 || cellIdx == reuse2
+    def reuseAny = reuse1 != -1 || reuse2 != -1
+    val m = c.method(Acc.PUBLIC, "reduce", tp.m(cellT, cellT, ptwT).V)
     val cut1 = m.param("cut1", cellT, Acc.FINAL)
+    val cut2 = m.param("cut2", cellT, Acc.FINAL)
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
 
-    def getCell(a: Int, p: Int): m.type = {
-      if(p < 0) m.invokevirtual(cell_pcell)
-      else if(a < cell_acell.length) m.invokevirtual(cell_acell(a)(p))
+    // Determine lhs and rhs
+    def storeCastCell(name: String, arity: Int, start: Label = null): VarIdx = {
+      if(arity < cellSpecTs.length) m.checkcast(cellSpecTs(arity))
+      val v = m.storeLocal(name, cellT, Acc.FINAL, start = start)
+      v
+    }
+    m.aload(cut1).invokevirtual(cell_symId)
+    m.aload(m.receiver).getfield(sidFields(0))
+    m.ifThenElseI_== { m.aload(cut1).aload(cut2) } { m.aload(cut2).aload(cut1) }
+    val l1 = m.newLabel
+    val cRight = storeCastCell("cRight", rule.arity2, start = l1)
+    val cLeft = storeCastCell("cLeft", rule.arity1, start = l1)
+    m.label(l1)
+
+    // Helper methods
+    def getAuxCell(a: Int, p: Int): m.type =
+      if(a < cell_acell.length) m.invokevirtual(cell_acell(a)(p))
       else m.iconst(p).invokevirtual(cell_auxCell)
-    }
-    def getPort(a: Int, p: Int): m.type = {
-      if(p < 0) m.invokevirtual(cell_pport)
-      else if(a < cell_aport.length) m.invokevirtual(cell_aport(a)(p))
+    def getAuxPort(a: Int, p: Int): m.type =
+      if(a < cell_aport.length) m.invokevirtual(cell_aport(a)(p))
       else m.iconst(p).invokevirtual(cell_auxPort)
-    }
-    def setCell(a: Int, p: Int, skipPort: Boolean = false)(loadC2: => Unit)(loadP2: => Unit): m.type = {
-      if(p < 0) {
-        if(!skipPort) {
-          m.dup
-          loadP2; m.invokevirtual(cell_pportSetter)
-        }
-        loadC2; m.invokevirtual(cell_pcellSetter)
-      } else if(a < cell_acell.length) {
+    def setAux(a: Int, p: Int, skipPort: Boolean = false)(loadC2: => Unit)(loadP2: => Unit): m.type = {
+      if(a < cell_acell.length) {
         if(!skipPort) {
           m.dup
           loadP2; m.invokevirtual(cell_aportSetter(a)(p))
@@ -133,47 +135,26 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         m.invokevirtual(cell_setAux)
       }
     }
-    def storeCastCell(name: String, arity: Int, start: Label = null): VarIdx = {
-      if(arity < cellSpecTs.length) m.checkcast(cellSpecTs(arity))
-      val v = m.storeLocal(name, cellT, Acc.FINAL, start = start)
-      v
-    }
 
-    val cut2 = m.aload(cut1).invokevirtual(cell_pcell).storeLocal("cut2", cellT, Acc.FINAL)
-    m.aload(cut1).invokevirtual(cell_symId)
-    m.aload(m.receiver).getfield(sidFields(0))
-    m.ifThenElseI_== { m.aload(cut1).aload(cut2) } { m.aload(cut2).aload(cut1) }
-    val l1 = m.newLabel
-    val cRight = storeCastCell("cRight", g.arity2, start = l1)
-    val cLeft = storeCastCell("cLeft", g.arity1, start = l1)
-    m.label(l1)
-
+    // Copy cached cells
     val cccells = m.aload(ptw).invokevirtual(ptw_cutCacheCells).storeLocal("cccells", cellT.a)
     val ccports = m.aload(ptw).invokevirtual(ptw_cutCachePorts).storeLocal("ccports", tp.I.a)
-    (0 until g.arity1).foreach { idx =>
-      m.aload(cccells).iconst(idx).aload(cLeft); getCell(g.arity1, idx).aastore
-      m.aload(ccports).iconst(idx).aload(cLeft); getPort(g.arity1, idx).iastore
+    (0 until rule.arity1).foreach { idx =>
+      m.aload(cccells).iconst(idx).aload(cLeft); getAuxCell(rule.arity1, idx).aastore
+      m.aload(ccports).iconst(idx).aload(cLeft); getAuxPort(rule.arity1, idx).iastore
     }
-    (0 until g.arity2).foreach { idx =>
-      m.aload(cccells).iconst(idx + g.arity1).aload(cRight); getCell(g.arity2, idx).aastore
-      m.aload(ccports).iconst(idx + g.arity1).aload(cRight); getPort(g.arity2, idx).iastore
+    (0 until rule.arity2).foreach { idx =>
+      m.aload(cccells).iconst(idx + rule.arity1).aload(cRight); getAuxCell(rule.arity2, idx).aastore
+      m.aload(ccports).iconst(idx + rule.arity1).aload(cRight); getAuxPort(rule.arity2, idx).iastore
     }
-    val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
-    def ldCell(idx: Idx) = idx match {
-      case FreeIdx(rhs, i) => m.aload(cccells).iconst(if(rhs) i + g.arity1 else i).aaload
-      case CellIdx(i, p) => m.aload(cells(i))
-    }
-    def ldPort(idx: Idx) = idx match {
-      case FreeIdx(rhs, i) => m.aload(ccports).iconst(if(rhs) i + g.arity1 else i).iaload
-      case CellIdx(i, p) => m.iconst(p)
-    }
-    def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
 
+    // Create new cells & update symbols of reused cells
+    val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     def createCell(sym: Symbol, cellIdx: Int): m.type = {
       if(sym.arity < new_CellSpec.length) {
         m.newInitDup(new_CellSpec(sym.arity)) {
           m.aload(m.receiver).getfield(sidFields(sids(sym)))
-          branch.cellConns(cellIdx).foreach {
+          branch.cellConns(cellIdx).tail.foreach {
             case CellIdx(ci, p) =>
               if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
               m.iconst(p)
@@ -192,10 +173,10 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     for(idx <- cells.indices) {
       cells(idx) = branch.cells(idx) match {
         case sym if idx == reuse1 =>
-          if(sym != g.sym1) updateSym(cLeft, sym)
+          if(sym != rule.sym1) updateSym(cLeft, sym)
           cLeft
         case sym if idx == reuse2 =>
-          if(sym != g.sym2) updateSym(cRight, sym)
+          if(sym != rule.sym2) updateSym(cRight, sym)
           cRight
         case sym =>
           cellAllocations += 1
@@ -203,14 +184,27 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       }
     }
 
+    // Cell accessors
+    def ldCell(idx: Idx) = idx match {
+      case FreeIdx(rhs, i) => m.aload(cccells).iconst(if(rhs) i + rule.arity1 else i).aaload
+      case CellIdx(i, p) => m.aload(cells(i))
+    }
+    def ldPort(idx: Idx) = idx match {
+      case FreeIdx(rhs, i) => m.aload(ccports).iconst(if(rhs) i + rule.arity1 else i).iaload
+      case CellIdx(i, p) => m.iconst(p)
+    }
+    def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
+
+    // Connect remaining wires
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
       if(isReuse(c1)) {
         m.aload(cells(c1))
-        setCell(branch.cells(c1).arity, p1)(ldCell(ct2))(ldPort(ct2))
+        if(p1 >= 0) setAux(branch.cells(c1).arity, p1)(ldCell(ct2))(ldPort(ct2))
       }
-      ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setCell)
-      ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setCell)
+      ldPort(ct2).iconst(0).ifThenI_>= {
+        ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
+      }
       if(p1 < 0) {
         ldPort(ct2).iconst(0).ifThenI_< {
           m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
@@ -227,8 +221,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
 //      }
     }
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
-      ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setCell)
-      ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setCell)
+      ldPort(ct1).iconst(0).ifThenI_>= {
+        ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setAux)
+      }
+      ldPort(ct2).iconst(0).ifThenI_>= {
+        ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
+      }
       ldPort(ct1); ldPort(ct2).iand.iconst(0).ifThenI_< {
         m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
       }
@@ -238,11 +236,13 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       val (c2, p2) = (ct2.idx, ct2.port)
       if(c2 >= c1 || isReuse(c1)) {
         m.aload(cells(c1))
-        setCell(branch.cells(c1).arity, p1, !isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
+        if(p1 >= 0)
+          setAux(branch.cells(c1).arity, p1, !isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
       }
       if(c1 >= c2 || isReuse(c2)) {
         m.aload(cells(c2))
-        setCell(branch.cells(c2).arity, p2, !isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
+        if(p2 >= 0)
+          setAux(branch.cells(c2).arity, p2, !isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
       }
       if(p1 < 0 && p2 < 0) {
         m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
