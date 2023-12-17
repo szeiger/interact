@@ -306,13 +306,19 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 
 final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
   debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
-  final val scope: Analyzer[Cell] = new Analyzer[Cell] {
-    def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell =
-      if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity, Cells.cellKind(sym.arity, sym.payloadType)) else new WireCell(sym, 0)
-    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
-      c1.setCell(p1, c2, p2)
-      c2.setCell(p2, c1, p1)
-    }
+
+  private[this] final val allSymbols = globals.symbols
+  private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
+  private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
+  private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
+  final val (ruleImpls, maxRuleCells, maxArity) = createRuleImpls()
+  final val cutBuffer = new CutBuffer(16)
+  final val freeWires = mutable.HashSet.empty[Cell]
+
+  val getAnalyzer: Analyzer[Cell] = new Analyzer[Cell] {
+    override val freeWires: mutable.HashSet[Cell] = self.freeWires
+    def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = ???
+    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = ???
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
@@ -321,11 +327,23 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
     def getConnected(c: Cell, port: Int): (Cell, Int) = (c.getCell(port), c.getPort(port))
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
-  private[this] final val allSymbols = globals.symbols
-  private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
-  private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
-  private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
-  final val (ruleImpls, maxRuleCells, maxArity) = createRuleImpls()
+
+  def setData(comp: Compiler): Unit = {
+    cutBuffer.clear()
+    freeWires.clear()
+    val pairs = mutable.HashSet.empty[(Cell, Cell)]
+    val scope = new Scope[Cell] {
+      override val freeWires: mutable.HashSet[Cell] = self.freeWires
+      def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell =
+        if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity, Cells.cellKind(sym.arity, sym.payloadType)) else new WireCell(sym, 0)
+      def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
+        c1.setCell(p1, c2, p2)
+        c2.setCell(p2, c1, p1)
+        if(p1 == -1 && p2 == -1 && !pairs.contains((c2, c1)) && pairs.add((c1, c2))) cutBuffer.addOne(c1, c2)
+      }
+    }
+    comp.getData.foreach(scope.addData(_))
+  }
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
   def getSymbolId(name: String): Int = getSymbolId(globals(name))
@@ -367,40 +385,18 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   @inline def mkRuleKey(s1: Int, s2: Int): Int =
     if(s1 < s2) (s1 << symBits) | s2 else (s2 << symBits) | s1
 
-  def detectInitialCuts: CutBuffer = {
-    val detected = mutable.HashSet.empty[Cell]
-    val buf = new CutBuffer(16)
-    scope.reachableCells.foreach { c =>
-      if(!scope.isFreeWire(c)) {
-        val ri = ruleImpls(mkRuleKey(c))
-        if(ri != null) {
-          if(c.pport < 0 && c.pcell.pport < 0 && !detected.contains(c.pcell)) {
-            detected.addOne(c)
-            buf.addOne(c, c.pcell)
-          }
-        }
-      }
-    }
-    buf
-  }
-
   // Used by the debugger
   def getRuleImpl(c: Cell): RuleImpl = ruleImpls(mkRuleKey(c))
-  def reduce1(c: Cell): Unit = {
-    val w = new PerThreadWorker(this) {
-      protected[this] override def enqueueCut(c1: Cell, c2: Cell): Unit = ()
-    }
-    w.setNext(c, c.pcell)
+  def reduce1(c1: Cell, c2: Cell): Unit = {
+    val w = new PerThreadWorker(this)
+    w.setNext(c1, c2)
     w.processNext()
   }
 
   def reduce(): Int = {
-    val initial = detectInitialCuts
-    val w = new PerThreadWorker(this) {
-      protected[this] override def enqueueCut(c1: Cell, c2: Cell): Unit = initial.addOne(c1, c2)
-    }
-    while(initial.nonEmpty) {
-      val (wr, ri) = initial.pop()
+    val w = new PerThreadWorker(this)
+    while(cutBuffer.nonEmpty) {
+      val (wr, ri) = cutBuffer.pop()
       w.setNext(wr, ri)
       w.processAll()
     }
@@ -429,20 +425,24 @@ final class CutBuffer(initialSize: Int) {
     pairs(len+1) = null
     (c1, c2)
   }
+  def clear(): Unit =
+    if(len > 0) {
+      new Array[Cell](initialSize * 2)
+      len = 0
+    }
+  def iterator: Iterator[(Cell, Cell)] = pairs.iterator.take(len*2).grouped(2).map { case Seq(c1, c2) => (c1, c2) }
 }
 
-abstract class PerThreadWorker(final val inter: Interpreter) {
+final class PerThreadWorker(final val inter: Interpreter) {
   final val tempCells = inter.createTempCells()
   final val (cutCacheCells, cutCachePorts) = inter.createCutCache()
   private[this] final var nextCut1, nextCut2: Cell = _
   private[this] final val collectStats = inter.collectStats
   var steps, cellAllocations = 0
 
-  protected[this] def enqueueCut(c1: Cell, c2: Cell): Unit
-
   final def createCut(c1: Cell, c2: Cell): Unit = {
     if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 }
-    else enqueueCut(c1, c2)
+    else inter.cutBuffer.addOne(c1, c2)
   }
 
   final def setNext(c1: Cell, c2: Cell): Unit = {

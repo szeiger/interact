@@ -29,12 +29,12 @@ object Main extends App {
 
     ShowableNode.print(model.unit2)
     val inter = model.createSTInterpreter(compile = false, collectStats = true)
-    model.setDataIn(inter.scope)
+    inter.setData(model)
     println("Initial state:")
-    inter.scope.log(System.out)
+    inter.getAnalyzer.log(System.out)
     val steps = inter.reduce()
     println(s"Irreducible after $steps reductions.")
-    inter.scope.log(System.out)
+    inter.getAnalyzer.log(System.out)
     handleRes(model.global.getCompilerResult(), false)
   } catch { case ex: CompilerResult => handleRes(ex, true) }
 }

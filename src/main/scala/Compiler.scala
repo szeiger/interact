@@ -38,6 +38,8 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
   }
   checkThrow()
 
+  def getData: Iterable[Let] = data
+
   def createMTInterpreter(numThreads: Int, compile: Boolean = true, debugLog: Boolean = false,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
     new mt.Interpreter(globalSymbols, checkedRules.values, numThreads, compile, debugLog, debugBytecode, collectStats)
@@ -54,11 +56,6 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
       case s"mt${mode}.i" => createMTInterpreter(mode.toInt, compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
       case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
     }
-  }
-
-  def setDataIn(scope: Scope[_]): Unit = {
-    scope.clear()
-    data.foreach(scope.addData(_))
   }
 }
 

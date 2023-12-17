@@ -303,6 +303,7 @@ abstract class Analyzer[Cell] extends Scope[Cell] { self =>
 }
 
 trait BaseInterpreter {
-  def scope: Analyzer[_]
+  def getAnalyzer: Analyzer[_]
+  def setData(comp: Compiler): Unit
   def reduce(): Int
 }

@@ -9,7 +9,7 @@ object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Compiler(statements)
   val inter = model.createSTInterpreter(compile = false)
-  model.setDataIn(inter.scope)
+  inter.setData(model)
 
   var steps = 0
   var cuts: mutable.ArrayBuffer[Cell] = _
@@ -27,7 +27,7 @@ object Debug extends App {
 
   @tailrec def step(): Unit = {
     println(s"${MaybeColors.cGreen}At step $steps:${MaybeColors.cNormal}")
-    cuts = inter.scope.log(System.out, markCut = (c1, _) => inter.getRuleImpl(c1) != null)
+    cuts = inter.getAnalyzer.log(System.out, markCut = (c1, _) => inter.getRuleImpl(c1) != null)
     if(cuts.isEmpty)
       println(s"${MaybeColors.cGreen}Irreducible after $steps reductions.${MaybeColors.cNormal}")
     else {
@@ -35,7 +35,7 @@ object Debug extends App {
       readLine() match {
         case None => ()
         case Some(idx) =>
-          inter.reduce1(cuts(idx))
+          inter.reduce1(cuts(idx), cuts(idx).pcell)
           step()
       }
     }
