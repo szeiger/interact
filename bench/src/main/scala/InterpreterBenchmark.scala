@@ -8,15 +8,15 @@ import java.util.concurrent.TimeUnit
 @BenchmarkMode(Array(Mode.Throughput))
 @Fork(value = 1, jvmArgsAppend = Array("-Xmx12g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
 @Threads(1)
-@Warmup(iterations = 10, time = 1)
-@Measurement(iterations = 10, time = 1)
+@Warmup(iterations = 15, time = 1)
+@Measurement(iterations = 15, time = 1)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
 
   @Param(Array(
-    "st.i",
-    //"st.c",
+    //"st.i",
+    "st.c",
     //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
     //"mt0.c", //"mt1.c", "mt8.c",
@@ -86,7 +86,7 @@ class InterpreterBenchmark {
     val model: Compiler = new Compiler(Parser.parse(source))
     val inter = model.createInterpreter(spec, collectStats = false)
     def setup(): BaseInterpreter = {
-      model.setDataIn(inter.scope)
+      inter.setData(model)
       inter
     }
   }

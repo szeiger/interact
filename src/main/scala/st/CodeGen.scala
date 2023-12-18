@@ -15,7 +15,6 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val cellNT = tp.c(s"$interpreterPackage/CellNV")
   private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell${i}V"))
   private val cell_symId = cellT.method("symId", tp.m().I)
-  private val cell_symIdSetter = cellT.method("symId_$eq", tp.m(tp.I).V)
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
@@ -53,22 +52,21 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
           case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
         }
       }
-    // Find cellIdx/sym/quality of best reuse candidate for rhs/lhs
-    // - Prefer max. reuse first, then same symbol
-    def bestReuse(candidates: Array[(Symbol, Int)], rhs: Boolean): Option[(Symbol, Int, Int)] =
-      candidates.map { case (s, i) => (s, i, 2*countReuseConnections(i, rhs) + (if(s == rule.symFor(rhs)) 1 else 0)) }
-        .sortBy { case (s, i, q) => -q }.headOption
-    // Find sym/cellIdx of cells with same arity as rhs/lhs
+    // Find cellIdx/quality of best reuse candidate for rhs/lhs
+    def bestReuse(candidates: Array[(Symbol, Int)], rhs: Boolean): Option[(Int, Int)] =
+      candidates.map { case (s, i) => (i, countReuseConnections(i, rhs)) }
+        .sortBy { case (i, q) => -q }.headOption
+    // Find sym/cellIdx of cells with same symbol as rhs/lhs
     def reuseCandidates(rhs: Boolean): Array[(Symbol, Int)] =
-      branch.cells.zipWithIndex.filter { case (sym, _) => sym.arity == rule.symFor(rhs).arity }
+      branch.cells.zipWithIndex.filter { case (sym, _) => sym == rule.symFor(rhs) }
     // Find best reuse combination for both sides
-    def bestReuse2: (Option[(Symbol, Int, Int)], Option[(Symbol, Int, Int)], Set[Connection]) = {
+    def bestReuse2: (Option[(Int, Int)], Option[(Int, Int)], Set[Connection]) = {
       var cand1 = reuseCandidates(false)
       var cand2 = reuseCandidates(true)
       var best1 = bestReuse(cand1, false)
       var best2 = bestReuse(cand2, true)
       (best1, best2) match {
-        case (Some((s1, ci1, q1)), Some((si2, ci2, q2))) if ci1 == ci2 =>
+        case (Some((ci1, q1)), Some((ci2, q2))) if ci1 == ci2 =>
           if(q1 >= q2) { // redo best2
             cand2 = cand2.filter { case (s, i) => i != ci1 }
             best2 = bestReuse(cand2, true)
@@ -78,13 +76,13 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
           }
         case _ =>
       }
-      val skipConn1 = best1.iterator.flatMap { case (_, ci, _) => reuseSkip(ci, false) }
-      val skipConn2 = best2.iterator.flatMap { case (_, ci, _) => reuseSkip(ci, true) }
+      val skipConn1 = best1.iterator.flatMap { case (ci, _) => reuseSkip(ci, false) }
+      val skipConn2 = best2.iterator.flatMap { case (ci, _) => reuseSkip(ci, true) }
       (best1, best2, (skipConn1 ++ skipConn2).toSet)
     }
 
     val (r1, r2, skip) = bestReuse2
-    (r1.map(_._2).getOrElse(-1), r2.map(_._2).getOrElse(-1), skip)
+    (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
   }
 
   protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], rule: GenericRule): Unit = {
@@ -168,16 +166,10 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         }
       }
     }
-    def updateSym(cell: VarIdx, sym: Symbol): Unit =
-      m.aload(cell).aload(m.receiver).getfield(sidFields(sids(sym))).invokevirtual(cell_symIdSetter)
     for(idx <- cells.indices) {
       cells(idx) = branch.cells(idx) match {
-        case sym if idx == reuse1 =>
-          if(sym != rule.sym1) updateSym(cLeft, sym)
-          cLeft
-        case sym if idx == reuse2 =>
-          if(sym != rule.sym2) updateSym(cRight, sym)
-          cRight
+        case sym if idx == reuse1 => cLeft
+        case sym if idx == reuse2 => cRight
         case sym =>
           cellAllocations += 1
           createCell(sym, idx).storeLocal(s"c$idx", cellT, Acc.FINAL)
