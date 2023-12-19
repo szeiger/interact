@@ -27,7 +27,7 @@ object Main extends App {
     //model.data.foreach(r => println(s"  ${r.show}"))
     //ShowableNode.print(model.unit)
 
-    ShowableNode.print(model.unit2)
+    ShowableNode.print(model.unit)
     val inter = model.createSTInterpreter(compile = false, collectStats = true)
     inter.setData(model)
     println("Initial state:")

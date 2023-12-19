@@ -4,10 +4,10 @@ import de.szeiger.interact.ast._
 
 import scala.collection.mutable
 
-class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
+class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
   import global._
 
-  val phases: Vector[Phase] = Vector(
+  private[this] val phases: Vector[Phase] = Vector(
     new Prepare(global),
     new ExpandRules(global),
     new Curry(global),
@@ -15,13 +15,13 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
     new PlanRules(global)
   )
 
-  val unit1 = if(addEraseDup) {
+  private[this] val unit1 = if(addEraseDup) {
     val erase = globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
     val dup = globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2)
-    unit.copy(statements = Vector(DerivedRule(erase, erase), DerivedRule(erase, dup), DerivedRule(dup, dup)) ++ unit.statements).setPos(unit.pos)
-  } else unit
+    unit0.copy(statements = Vector(DerivedRule(erase, erase), DerivedRule(erase, dup), DerivedRule(dup, dup)) ++ unit0.statements).setPos(unit0.pos)
+  } else unit0
 
-  val unit2 = phases.foldLeft(unit1) { case (u, p) =>
+  val unit = phases.foldLeft(unit1) { case (u, p) =>
     val u2 = p(u)
     //ShowableNode.print(u2, name = s"After phase $p")
     checkThrow()
@@ -38,7 +38,7 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
 
   private[this] val rulePlans = mutable.Map.empty[RuleKey, RulePlan]
   private[this] val data = mutable.ArrayBuffer.empty[Let]
-  unit2.statements.foreach {
+  unit.statements.foreach {
     case l: Let => data += l
     case g: RulePlan =>
       val key = new RuleKey(g.sym1, g.sym2)

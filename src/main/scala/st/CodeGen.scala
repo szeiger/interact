@@ -53,11 +53,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         }
       }
     // Find cellIdx/quality of best reuse candidate for rhs/lhs
-    def bestReuse(candidates: Array[(Symbol, Int)], rhs: Boolean): Option[(Int, Int)] =
+    def bestReuse(candidates: Vector[(Symbol, Int)], rhs: Boolean): Option[(Int, Int)] =
       candidates.map { case (s, i) => (i, countReuseConnections(i, rhs)) }
         .sortBy { case (i, q) => -q }.headOption
     // Find sym/cellIdx of cells with same symbol as rhs/lhs
-    def reuseCandidates(rhs: Boolean): Array[(Symbol, Int)] =
+    def reuseCandidates(rhs: Boolean): Vector[(Symbol, Int)] =
       branch.cells.zipWithIndex.filter { case (sym, _) => sym == rule.symFor(rhs) }
     // Find best reuse combination for both sides
     def bestReuse2: (Option[(Int, Int)], Option[(Int, Int)], Set[Connection]) = {
@@ -91,7 +91,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     var cellAllocations = 0
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
     //val (reuse1, reuse2, skipConns) = (-1, -1, Set.empty[Connection])
-    val conns = (branch.wireConnsDistinct ++ branch.internalConns).filterNot(skipConns.contains)
+    val conns = (branch.wireConnsDistinct ++ branch.internalConnsDistinct).filterNot(skipConns.contains)
     def isReuse(cellIdx: Int): Boolean = cellIdx == reuse1 || cellIdx == reuse2
     def reuseAny = reuse1 != -1 || reuse2 != -1
     val m = c.method(Acc.PUBLIC, "reduce", tp.m(cellT, cellT, ptwT).V)

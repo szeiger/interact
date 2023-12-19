@@ -271,7 +271,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
         else {
           maxW.max(g.maxWires)
           maxC.max(g.maxCells)
-          new InterpretedRuleImpl(getSymbolId(g.sym1), branch.cells.map(s => intOfShorts(getSymbolId(s), s.arity)), branch.freeWiresPacked1, branch.freWiresPacked2, branch.connectionsPacked)
+          new InterpretedRuleImpl(getSymbolId(g.sym1), branch.cells.iterator.map(s => intOfShorts(getSymbolId(s), s.arity)).toArray, branch.freeWiresPacked1, branch.freWiresPacked2, branch.connectionsPacked)
         }
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri
     }

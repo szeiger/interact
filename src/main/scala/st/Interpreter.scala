@@ -314,7 +314,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], compile: Bo
   def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
 
   def createInterpretedRuleImpl(g: RulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
-    val pcs = b.cells.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType)))
+    val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType))).toArray
     val embArgs = b.embeddedComps.map(_.argIndices)
     val condArgs = b.condition.map(_.argIndices)
     new InterpretedRuleImpl(getSymbolId(g.sym1), pcs, b.freeWiresPacked, b.connectionsPacked, b.assigners,

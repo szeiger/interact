@@ -40,7 +40,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: RulePlan): Unit = {
     assert(g.branches.length == 1)
     val branch = g.branches.head
-    val internalConns = branch.internalConns.toArray
+    val internalConns = branch.internalConnsDistinct.toArray
     val allConns = (branch.wireConnsDistinct ++ internalConns.iterator).toArray
     var cellAllocations, wireAllocations = 0
 
