@@ -3,6 +3,7 @@ package de.szeiger.interact.st
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.codegen.SymbolIdLookup
 import de.szeiger.interact.mt.BitOps._
 
 import java.util.Arrays
@@ -141,7 +142,7 @@ class WireCell(final val sym: Symbol, _symId: Int) extends Cell1V(0) {
 }
 
 abstract class RuleImpl {
-  var rule: GenericRule = _
+  var rule: RulePlan = _
   def reduce(c1: Cell, c2: Cell, ptw: PerThreadWorker): Unit
   def cellAllocationCount: Int
 }
@@ -260,8 +261,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def cellAllocationCount: Int = protoCells.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile: Boolean,
-  debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], compile: Boolean,
+  debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
@@ -312,7 +313,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
   def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
 
-  def createInterpretedRuleImpl(g: GenericRule, b: GenericRuleBranch, next: Option[RuleImpl]): RuleImpl = {
+  def createInterpretedRuleImpl(g: RulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
     val pcs = b.cells.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType)))
     val embArgs = b.embeddedComps.map(_.argIndices)
     val condArgs = b.condition.map(_.argIndices)
@@ -327,9 +328,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], compile:
       else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxA = new ParSupport.AtomicCounter
-    ParSupport.foreach(rules) { cr =>
-      val g = GenericRule(getClass.getClassLoader, cr)
-      if(debugLog) g.log()
+    ParSupport.foreach(rules) { g =>
       maxC.max(g.maxCells)
       maxA.max(g.arity1)
       maxA.max(g.arity2)

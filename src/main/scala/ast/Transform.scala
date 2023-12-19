@@ -1,5 +1,7 @@
 package de.szeiger.interact.ast
 
+import de.szeiger.interact.{RulePlan, BranchPlan}
+
 abstract class Transform {
   def apply(n: Node): Node = n match {
     case n: Branch => apply(n)
@@ -87,12 +89,15 @@ abstract class Transform {
     else EmbeddedAssignment(l2, r2).setPos(n.pos)
   }
 
+  def apply(n: CreateLabels): CreateLabels = n
+
   def apply(n: EmbeddedExpr): EmbeddedExpr = n match {
     case n: StringLit => apply(n)
     case n: IntLit => apply(n)
     case n: Ident => apply(n)
     case n: EmbeddedApply => apply(n)
     case n: EmbeddedAssignment => apply(n)
+    case n: CreateLabels => apply(n)
   }
 
   def apply(n: Match): Vector[Statement] = Vector({
@@ -135,6 +140,7 @@ abstract class Transform {
     case n: Let => apply(n)
     case n: Def => apply(n)
     case n: CheckedRule => apply(n)
+    case n: RulePlan => apply(n)
   }
 
   def apply(n: CheckedRule): Vector[Statement] = n match {
@@ -146,7 +152,7 @@ abstract class Transform {
 
   def apply(n: MatchRule): Vector[Statement] = Vector({
     val i1 = apply(n.id1)
-    val i2 = apply(n.id1)
+    val i2 = apply(n.id2)
     val a12 = mapC(n.args1)(apply)
     val a22 = mapC(n.args2)(apply)
     val emb12 = mapC(n.emb1)(apply)
@@ -155,6 +161,14 @@ abstract class Transform {
     if((i1 eq n.id1) && (i2 eq n.id2) && (a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.reduction)) n
     else MatchRule(i1, i2, a12, a22, emb12, emb22, red2).setPos(n.pos)
   })
+
+  def apply(n: RulePlan): Vector[Statement] = Vector({
+    val b2 = mapC(n.branches)(apply)
+    if(b2 eq n.branches) n
+    else RulePlan(n.sym1, n.sym2, b2).setPos(n.pos)
+  })
+
+  def apply(n: BranchPlan): BranchPlan = n
 
   def apply(n: CompilationUnit): CompilationUnit = {
     val st2 = flatMapC(n.statements)(apply)

@@ -15,7 +15,7 @@ object TestUtils {
     val statements = Parser.parse(Path.of(basePath+".in"))
     val global = new Global(addEraseDup = addEraseDup)
     val model = new Compiler(statements, global)
-    val inter = model.createInterpreter(spec, collectStats = true, debugLog = false, debugBytecode = false)
+    val inter = model.createInterpreter(spec, collectStats = true, debugBytecode = false)
     inter.setData(model)
     val steps = inter.reduce()
     val out = new ByteArrayOutputStream()

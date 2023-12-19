@@ -1,7 +1,7 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule, GenericRuleBranch, Idx}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, RulePlan, BranchPlan, Idx}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -39,7 +39,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     t.constr(tp.m(params: _*).V)
   }
 
-  private def findReuse(rule: GenericRule, branch: GenericRuleBranch): (Int, Int, Set[Connection]) = {
+  private def findReuse(rule: RulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
     // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
     def countReuseConnections(cellIdx: Int, rhs: Boolean): Int =
       reuseSkip(cellIdx, rhs).length
@@ -85,7 +85,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], rule: GenericRule): Unit = {
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], rule: RulePlan): Unit = {
     assert(rule.branches.length == 1)
     val branch = rule.branches.head
     var cellAllocations = 0

@@ -1,8 +1,9 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, GenericRule, Scope, SymbolIdLookup}
+import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, RulePlan, Scope}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Symbol, Symbols}
+import de.szeiger.interact.codegen.SymbolIdLookup
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 
 import java.util.Arrays
@@ -205,8 +206,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def wireAllocationCount: Int = connections.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThreads: Int, compile: Boolean,
-  debugLog: Boolean, debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads: Int, compile: Boolean,
+  debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
   private[this] final val scope: Scope[Cell] with Analyzer[Cell] = new Scope[Cell] with Analyzer[Cell] {
     def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
@@ -262,9 +263,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[CheckedRule], numThrea
       else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxW = new ParSupport.AtomicCounter
-    ParSupport.foreach(rules) { cr =>
-      val g = GenericRule(getClass.getClassLoader, cr)
-      if(debugLog) g.log()
+    ParSupport.foreach(rules) { g =>
       assert(g.branches.length == 1)
       val branch = g.branches.head
       val ri =

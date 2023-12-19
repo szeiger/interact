@@ -11,7 +11,8 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
     new Prepare(global),
     new ExpandRules(global),
     new Curry(global),
-    new CleanEmbedded(global)
+    new CleanEmbedded(global),
+    new PlanRules(global)
   )
 
   val unit1 = if(addEraseDup) {
@@ -27,34 +28,41 @@ class Compiler(val unit: CompilationUnit, val global: Global = new Global) {
     u2
   }
 
-  private[this] val checkedRules = mutable.Map.empty[(String, String), CheckedRule]
+  private[this] final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
+    override def equals(o: Any): Boolean = o match {
+      case o: RuleKey => o.sym1 == sym1 && o.sym2 == sym2 || o.sym1 == sym2 && o.sym2 == sym1
+      case _ => false
+    }
+    override def hashCode(): Int = sym1.hashCode() + sym2.hashCode()
+  }
+
+  private[this] val rulePlans = mutable.Map.empty[RuleKey, RulePlan]
   private[this] val data = mutable.ArrayBuffer.empty[Let]
   unit2.statements.foreach {
     case l: Let => data += l
-    case cr: CheckedRule =>
-      val key = if(cr.sym1.id <= cr.sym2.id) (cr.sym1.id, cr.sym2.id) else (cr.sym2.id, cr.sym1.id)
-      if(checkedRules.contains(key)) error(s"Duplicate rule ${cr.sym1} <-> ${cr.sym2}", cr)
-      checkedRules.put(key, cr)
+    case g: RulePlan =>
+      val key = new RuleKey(g.sym1, g.sym2)
+      if(rulePlans.put(key, g).isDefined) error(s"Duplicate rule ${g.sym1} <-> ${g.sym2}", g)
   }
   checkThrow()
 
   def getData: Iterable[Let] = data
 
-  def createMTInterpreter(numThreads: Int, compile: Boolean = true, debugLog: Boolean = false,
+  def createMTInterpreter(numThreads: Int, compile: Boolean = true,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
-    new mt.Interpreter(globalSymbols, checkedRules.values, numThreads, compile, debugLog, debugBytecode, collectStats)
+    new mt.Interpreter(globalSymbols, rulePlans.values, numThreads, compile, debugBytecode, collectStats)
 
-  def createSTInterpreter(compile: Boolean = true, debugLog: Boolean = false,
+  def createSTInterpreter(compile: Boolean = true,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st.Interpreter =
-    new st.Interpreter(globalSymbols, checkedRules.values, compile, debugLog, debugBytecode, collectStats)
+    new st.Interpreter(globalSymbols, rulePlans.values, compile, debugBytecode, collectStats)
 
-  def createInterpreter(spec: String, debugLog: Boolean = false,
+  def createInterpreter(spec: String,
       debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {
     spec match {
-      case s"st.i" => createSTInterpreter(compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"st.c" => createSTInterpreter(compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"mt${mode}.i" => createMTInterpreter(mode.toInt, compile = false, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugLog = debugLog, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st.i" => createSTInterpreter(compile = false, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st.c" => createSTInterpreter(compile = true, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"mt${mode}.i" => createMTInterpreter(mode.toInt, compile = false, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugBytecode = debugBytecode, collectStats = collectStats)
     }
   }
 }

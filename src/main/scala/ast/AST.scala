@@ -5,7 +5,7 @@ import de.szeiger.interact.{ConvenientParserInput, Intrinsics, MaybeColors}
 
 import scala.collection.mutable.ArrayBuffer
 
-sealed trait Node extends ShowableNode with Cloneable {
+trait Node extends ShowableNode with Cloneable {
   override protected def clone(): this.type = super.clone().asInstanceOf[this.type]
   private var _pos: Position = Position.unknown
   def pos: Position = _pos
@@ -36,7 +36,7 @@ sealed trait Node extends ShowableNode with Cloneable {
   protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder("")
 }
 
-sealed trait Statement extends Node
+trait Statement extends Node
 
 final case class CompilationUnit(statements: Vector[Statement]) extends Node {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += statements
@@ -51,7 +51,7 @@ final case class Cons(name: Ident, args: Vector[IdentOrWildcard], operator: Bool
     s"${name.show}$p$a$r$d"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (name, "name") += (args, "args") += (embeddedId, "embeddedId") += (ret, "ret") += (der.toSeq.flatten, "der")
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder("")
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 
 sealed trait AnyExpr extends Node {

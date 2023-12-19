@@ -9,6 +9,52 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters._
 
+/**
+ * Deconstruct rules into cells and wires for execution.
+ */
+class PlanRules(global: Global) extends Transform with Phase {
+  import global._
+
+  override def apply(n: MatchRule) =
+    Vector(RulePlan(n.sym1, n.sym2, n.reduction.map(r => BranchPlan(dependencyLoader, n, r))).setPos(n.pos))
+
+  override def apply(n: DerivedRule) = {
+    if(n.sym1.id == "erase") Vector(deriveErase(n.sym2, n.sym1))
+    else if(n.sym1.id == "dup") Vector(deriveDup(n.sym2, n.sym1))
+    else super.apply(n)
+  }
+
+  private[this] def deriveErase(sym: Symbol, eraseSym: Symbol): RulePlan = {
+    val cells = Array.fill(sym.arity)(eraseSym)
+    val fwp = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
+    val embComp = sym.payloadType match {
+      case PayloadType.REF => Seq(new EmbeddedMethodApplication(dependencyLoader, classOf[Intrinsics.type].getName, "eraseRef", Nil, Array(-2), null))
+      case _ => Nil
+    }
+    new RulePlan(eraseSym, sym, Vector(new BranchPlan(0, cells, Array.empty, fwp, Array(), embComp, None)))
+  }
+
+  private[this] def deriveDup(sym: Symbol, dupSym: Symbol): RulePlan = {
+    if(sym == dupSym)
+      new RulePlan(dupSym, sym, Vector(new BranchPlan(2, Array.empty, Array.empty, Array(checkedIntOfShorts(-3, -1), checkedIntOfShorts(-4, -1)), Array(), Nil, None)))
+    else {
+      val cells = Array.fill(sym.arity)(dupSym) ++ Array.fill(2)(sym)
+      val conns = new Array[Int](sym.arity*2)
+      for(i <- 0 until sym.arity) {
+        conns(i*2) = checkedIntOfBytes(i, 0, sym.arity, i)
+        conns(i*2+1) = checkedIntOfBytes(i, 1, sym.arity+1, i)
+      }
+      val fwp1 = Array[Int](checkedIntOfShorts(sym.arity, -1), checkedIntOfShorts(sym.arity+1, -1))
+      val fwp2 = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
+      val embComp = sym.payloadType match {
+        case PayloadType.REF => Seq(new EmbeddedMethodApplication(dependencyLoader, classOf[Intrinsics.type].getName, "dupRef", Nil, Array(-2, sym.arity, sym.arity+1), null))
+        case _ => Nil
+      }
+      new RulePlan(dupSym, sym, Vector(new BranchPlan(2, cells, conns, fwp1 ++ fwp2, Array(), embComp, None)))
+    }
+  }
+}
+
 case class Connection(c1: Idx, c2: Idx) { def str = s"${c1.str} <-> ${c2.str}" }
 
 sealed abstract class Idx { def str: String }
@@ -164,12 +210,12 @@ object EmbeddedComputation {
   }
 }
 
-final class GenericRuleBranch(arity1: Int,
+final class BranchPlan(arity1: Int,
   val cells: Array[Symbol], val connectionsPacked: Array[Int],
   val freeWiresPacked: Array[Int],
   val assigners: Array[PayloadAssigner],
   val embeddedComps: Seq[EmbeddedComputation[Int]],
-  val condition: Option[EmbeddedComputation[Int]]) {
+  val condition: Option[EmbeddedComputation[Int]]) extends Node {
 
   lazy val (freeWiresPacked1, freWiresPacked2) = freeWiresPacked.splitAt(arity1)
 
@@ -184,7 +230,7 @@ final class GenericRuleBranch(arity1: Int,
     Connection(mkIdx(byte0(i), byte1(i)), mkIdx(byte2(i), byte3(i)))
   }
 
-  lazy val wireConns: Array[Connection] = freeWiresPacked.zipWithIndex.map { case (fw, idx) =>
+  private[this] lazy val wireConns: Array[Connection] = freeWiresPacked.zipWithIndex.map { case (fw, idx) =>
     Connection(mkFreeIdx(idx), mkIdx(short0(fw), short1(fw)))
   }
 
@@ -218,9 +264,8 @@ final class GenericRuleBranch(arity1: Int,
   }
 }
 
-object GenericRuleBranch {
-  def apply[C](cl: ClassLoader, cr: MatchRule, red: Branch): GenericRuleBranch = CompilerResult.tryInternal(cr) {
-    //println(s"***** Preparing ${r.cut.show} = ${r.reduced.map(_.show).mkString(", ")}")
+object BranchPlan {
+  def apply[C](cl: ClassLoader, cr: MatchRule, red: Branch): BranchPlan = CompilerResult.tryInternal(cr) {
     val cells = mutable.ArrayBuffer.empty[Symbol]
     val conns = mutable.HashSet.empty[Int]
     val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (n.asInstanceOf[Ident].sym, -i-1) }.toMap
@@ -274,70 +319,17 @@ object GenericRuleBranch {
       ec
     }
     val cond = red.cond.map { ee => EmbeddedComputation(cl, ee)(cr.show)(s => cellEmbIds(s.id).head) }
-    new GenericRuleBranch(cr.sym1.arity, cells.toArray, conns.toArray, fwp, assigners.toArray, embComp, cond)
+    new BranchPlan(cr.sym1.arity, cells.toArray, conns.toArray, fwp, assigners.toArray, embComp, cond)
   }
 }
 
-final class GenericRule(val sym1: Symbol, val sym2: Symbol, val branches: Seq[GenericRuleBranch]) {
+final case class RulePlan(sym1: Symbol, sym2: Symbol, branches: Vector[BranchPlan]) extends Statement {
   def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
   def arity1: Int = sym1.arity
   def arity2: Int = sym2.arity
   def maxCells: Int = branches.iterator.map(_.cells.length).max
   def maxWires: Int = branches.iterator.map(b => b.connectionsPacked.length + b.freeWiresPacked.length).max
 
-  def log(): Unit = {
-    println(s"Rule ${sym1.id} ${sym2.id}")
-    branches.foreach(_.log())
-  }
-
-  override def toString: String = s"$sym1 . $sym2"
-}
-
-object GenericRule {
-  def apply[C](cl: ClassLoader, cr: CheckedRule): GenericRule = cr match {
-    case dr: DerivedRule if dr.sym1.id == "erase" => deriveErase(cl, dr.sym2, dr.sym1)
-    case dr: DerivedRule if dr.sym1.id == "dup" => deriveDup(cl, dr.sym2, dr.sym1)
-    case cr: MatchRule => apply(cl, cr)
-  }
-
-  def apply[C](cl: ClassLoader, cr: MatchRule): GenericRule =
-    new GenericRule(cr.sym1, cr.sym2, cr.reduction.map(r => GenericRuleBranch(cl, cr, r)))
-
-  def deriveErase(cl: ClassLoader, sym: Symbol, eraseSym: Symbol): GenericRule = {
-    val cells = Array.fill(sym.arity)(eraseSym)
-    val fwp = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
-    val embComp = sym.payloadType match {
-      case PayloadType.REF => Seq(new EmbeddedMethodApplication(cl, classOf[Intrinsics.type].getName, "eraseRef", Nil, Array(-2), null))
-      case _ => Nil
-    }
-    new GenericRule(eraseSym, sym, Seq(new GenericRuleBranch(0, cells, Array.empty, fwp, Array(), embComp, None)))
-  }
-
-  def deriveDup(cl: ClassLoader, sym: Symbol, dupSym: Symbol): GenericRule = {
-    if(sym == dupSym)
-      new GenericRule(dupSym, sym, Seq(new GenericRuleBranch(2, Array.empty, Array.empty, Array(checkedIntOfShorts(-3, -1), checkedIntOfShorts(-4, -1)), Array(), Nil, None)))
-    else {
-      val cells = Array.fill(sym.arity)(dupSym) ++ Array.fill(2)(sym)
-      val conns = new Array[Int](sym.arity*2)
-      for(i <- 0 until sym.arity) {
-        conns(i*2) = checkedIntOfBytes(i, 0, sym.arity, i)
-        conns(i*2+1) = checkedIntOfBytes(i, 1, sym.arity+1, i)
-      }
-      val fwp1 = Array[Int](checkedIntOfShorts(sym.arity, -1), checkedIntOfShorts(sym.arity+1, -1))
-      val fwp2 = (0 until sym.arity).map(i => checkedIntOfShorts(i, -1)).toArray
-      val embComp = sym.payloadType match {
-        case PayloadType.REF => Seq(new EmbeddedMethodApplication(cl, classOf[Intrinsics.type].getName, "dupRef", Nil, Array(-2, sym.arity, sym.arity+1), null))
-        case _ => Nil
-      }
-      new GenericRule(dupSym, sym, Seq(new GenericRuleBranch(2, cells, conns, fwp1 ++ fwp2, Array(), embComp, None)))
-    }
-  }
-}
-
-abstract class RuleImplFactory[T] {
-  def apply(lookup: SymbolIdLookup): T
-}
-
-trait SymbolIdLookup {
-  def getSymbolId(name: String): Int
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$sym1 <-> $sym2")
 }

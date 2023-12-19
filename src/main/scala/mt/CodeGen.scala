@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, GenericRule}
+import de.szeiger.interact.{CellIdx, Connection, FreeIdx, RulePlan}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -37,7 +37,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val new_CellSpec_I = cellSpecTs.map(_.constr(tp.m(tp.I).V))
   private val new_WireRef_LILI = wrT.constr(tp.m(cellT, tp.I, cellT, tp.I).V)
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: GenericRule): Unit = {
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: RulePlan): Unit = {
     assert(g.branches.length == 1)
     val branch = g.branches.head
     val internalConns = branch.internalConns.toArray
