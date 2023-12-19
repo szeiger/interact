@@ -2,7 +2,7 @@ package de.szeiger.interact.codegen.dsl
 
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
-import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -159,6 +159,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   }
 
   def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
+  def iinc(varIdx: VarIdx, incr: Int): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
 
   def aload(varIdx: VarIdx): this.type = varInsn(ALOAD, varIdx)
   def astore(varIdx: VarIdx): this.type = { varInsn(ASTORE, varIdx); stored(varIdx); this }
@@ -222,12 +223,24 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   }
   def ifThenElseI_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPNE, cont, skip)
   def ifThenElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPEQ, cont, skip)
+  def ifThenElseI_>= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPLT, cont, skip)
   def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
   def ifThenI_>= (cont: => Unit): this.type = ifThen(IF_ICMPLT, cont)
   def ifThenA_== (cont: => Unit): this.type = ifThen(IF_ACMPNE, cont)
   def ifThenA_!= (cont: => Unit): this.type = ifThen(IF_ACMPEQ, cont)
   def ifThenElseA_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPNE, cont, skip)
   def ifThenElseA_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPEQ, cont, skip)
+
+  def forRange(from: Int, until: Int, incr: Int = 1)(f: VarIdx => Unit): this.type = {
+    val start, end = newLabel
+    val i = iconst(from).storeAnonLocal(Desc.I)
+    label(start)
+    iload(i).iconst(until).if_icmpge(end)
+    f(i)
+    iinc(i, incr)
+    goto(start)
+    label(end)
+  }
 
   def putfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(PUTFIELD, owner, name, desc)
   def getfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(GETFIELD, owner, name, desc)
