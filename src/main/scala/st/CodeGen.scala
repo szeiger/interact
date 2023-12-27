@@ -1,7 +1,7 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.codegen.AbstractCodeGen
-import de.szeiger.interact.{CellIdx, Connection, FreeIdx, RulePlan, BranchPlan, Idx}
+import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, SymbolIdLookup}
+import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, Idx, RuleKey, RulePlan}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -37,6 +37,26 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private val new_CellSpec = cellSpecTs.zipWithIndex.map { case (t, a) =>
     val params = Seq(tp.I) ++ (0 until a).flatMap(_ => Seq(cellT, tp.I))
     t.constr(tp.m(params: _*).V)
+  }
+
+  private def interfaceClassName(s: Symbol) = s"$genPackage/I_${encodeName(s)}"
+  private def consClassName(s: Symbol) = s"$genPackage/C_${encodeName(s)}"
+  private def interfaceMethodName(s: Symbol) = s"reduce_${encodeName(s)}"
+  private def cellTFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) cellSpecTs(sym.arity) else cellT
+
+
+  def compileRule(g: RulePlan, cl: LocalClassLoader, lookup: SymbolIdLookup): RuleImpl = {
+    val name1 = encodeName(g.sym1)
+    val name2 = encodeName(g.sym2)
+    val implClassName = s"$genPackage/Rule_$name1$$_$name2"
+    val factClassName = s"$genPackage/RuleFactory_$name1$$_$name2"
+    val syms = (Iterator.single(g.sym1) ++ g.branches.iterator.flatMap(_.cells)).distinct.toArray
+    val sids = syms.iterator.map(s => (s, lookup.getSymbolId(s.id))).toMap
+    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, implClassName, riT)
+    ric.emptyNoArgsConstructor(Acc.PUBLIC)
+    implementRuleClass(ric, sids, g)
+    addClass(cl, ric)
+    cl.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
   }
 
   private def findReuse(rule: RulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
@@ -85,7 +105,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], rule: RulePlan): Unit = {
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], rule: RulePlan): Unit = {
     assert(rule.branches.length == 1)
     val branch = rule.branches.head
     var cellAllocations = 0
@@ -106,7 +126,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       v
     }
     m.aload(cut1).invokevirtual(cell_symId)
-    m.aload(m.receiver).getfield(sidFields(0))
+    m.iconst(sids(rule.sym1))
     m.ifThenElseI_== { m.aload(cut1).aload(cut2) } { m.aload(cut2).aload(cut1) }
     val l1 = m.newLabel
     val cRight = storeCastCell("cRight", rule.arity2, start = l1)
@@ -159,7 +179,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     def createCell(sym: Symbol, cellIdx: Int): m.type = {
       if(sym.arity < new_CellSpec.length) {
         m.newInitDup(new_CellSpec(sym.arity)) {
-          m.aload(m.receiver).getfield(sidFields(sids(sym)))
+          m.iconst(sids(sym))
           branch.cellConns(cellIdx).tail.foreach {
             case CellIdx(ci, p) =>
               if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
@@ -169,7 +189,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
         }
       } else {
         m.newInitDup(new_CellN_II) {
-          m.aload(m.receiver).getfield(sidFields(sids(sym)))
+          m.iconst(sids(sym))
           m.iconst(sym.arity)
         }
       }
@@ -263,4 +283,42 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     // statistics
     c.method(Acc.PUBLIC, "cellAllocationCount", tp.m().I).iconst(cellAllocations).ireturn
   }
+
+  def compileInterface(sym: Symbol, cl: LocalClassLoader): Unit = {
+    val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, interfaceClassName(sym))
+    c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethodName(sym), tp.m(cellTFor(sym)).V)
+    addClass(cl, c)
+  }
+
+  def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader): Unit = {
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, consClassName(sym), cellTFor(sym))
+    val pairs = rules.keys.iterator.collect {
+      case rk if rk.sym1 == sym => (rk.sym2, rk)
+      case rk if rk.sym2 == sym => (rk.sym1, rk)
+    }.toMap
+    pairs.foreach { case (sym2, rk) =>
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, interfaceMethodName(sym2), tp.m(cellTFor(sym)).V)
+    }
+    addClass(cl, c)
+  }
 }
+
+/*
+
+interface I_dup {
+  def reduce_dup(c: C_dup): Unit
+}
+
+interface I_S {
+  def reduce_S(c: C_dup): Unit
+}
+
+class C_dup extends Cell2V, I_S, ... {
+  def reduce(c: Cell): Unit = c.asInstanceOf[I_dup].reduce_dup(this)
+  def reduce_S(c: C_dup): Unit = R_dup_S.reduce(this, c)
+}
+
+class C_S extends Cell2V, I_dup, ... {
+}
+
+*/

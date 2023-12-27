@@ -23,7 +23,8 @@ class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwn
   private[this] class Field(val access: Acc, val name: String, val desc: ValDesc, val value: Any)
 
   def accept(v: ClassVisitor): Unit = {
-    v.visit(version, ACC_SUPER | access.acc, name, null, superTp.className, interfaces)
+    val effectiveAcc = if(access.has(Acc.INTERFACE)) access | Acc.ABSTRACT else access | Acc.SUPER
+    v.visit(version, effectiveAcc.acc, name, null, superTp.className, interfaces)
     if(sourceFile != null) v.visitSource(sourceFile, null)
     fields.foreach(f => v.visitField(f.access.acc, f.name, f.desc.desc, null, f.value))
     methods.foreach(_.accept(v, this))
@@ -42,8 +43,8 @@ class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwn
     m
   }
 
-  def emptyNoArgsConstructor(access: Acc): MethodDSL = {
-    val m = method(Acc.PUBLIC, "<init>", Desc.m().V)
+  def emptyNoArgsConstructor(access: Acc = Acc.PUBLIC): MethodDSL = {
+    val m = method(access, "<init>", Desc.m().V)
     m.aload(m.receiver).invokespecial(superTp, "<init>", Desc.m().V)
     m.return_
   }
@@ -93,38 +94,40 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
 
   def accept(v: ClassVisitor, cls: ClassDSL): Unit = {
     val mv = v.visitMethod(access.acc, name, desc.desc, null, null)
-    assert(params.length == argsCount - 1)
-    params.foreach(p => mv.visitParameter(p.name, p.access.acc))
-    mv.visitCode()
-    mv.visitLabel(start)
-    code.zipWithIndex.foreach { case (in, idx) =>
-      //println(s"emitting ${in.getOpcode} ${if(in.getOpcode >= 0 && in.getOpcode < Printer.OPCODES.length) Printer.OPCODES(in.getOpcode) else "???"}")
-      in.accept(mv)
-      in match {
-        case in: VarInsnNode if in.getOpcode >= ISTORE && in.getOpcode <= SASTORE =>
-          val v = in.`var`
-          if(v >= argsCount && v - argsCount < locals.length) {
-            val l = locals(v-argsCount)
-            //println(s"l: $l; idx: $idx")
-            if(l.start == null && l.name != null && l.startPos == idx+1) {
-              val ln = code(idx+1) match {
-                case ln: LabelNode => ln
-                case _ => val ln = new LabelNode; ln.accept(mv); ln
+    if(!access.has(Acc.ABSTRACT)) {
+      assert(params.length == argsCount - 1)
+      params.foreach(p => mv.visitParameter(p.name, p.access.acc))
+      mv.visitCode()
+      mv.visitLabel(start)
+      code.zipWithIndex.foreach { case (in, idx) =>
+        //println(s"emitting ${in.getOpcode} ${if(in.getOpcode >= 0 && in.getOpcode < Printer.OPCODES.length) Printer.OPCODES(in.getOpcode) else "???"}")
+        in.accept(mv)
+        in match {
+          case in: VarInsnNode if in.getOpcode >= ISTORE && in.getOpcode <= SASTORE =>
+            val v = in.`var`
+            if(v >= argsCount && v - argsCount < locals.length) {
+              val l = locals(v-argsCount)
+              //println(s"l: $l; idx: $idx")
+              if(l.start == null && l.name != null && l.startPos == idx+1) {
+                val ln = code(idx+1) match {
+                  case ln: LabelNode => ln
+                  case _ => val ln = new LabelNode; ln.accept(mv); ln
+                }
+                l.start = ln.getLabel
               }
-              l.start = ln.getLabel
             }
-          }
-        case _ =>
+          case _ =>
+        }
       }
+      mv.visitLabel(end)
+      if(!isStatic)
+        mv.visitLocalVariable("this", s"L${cls.name};", null, start, end, 0)
+      (params.iterator ++ locals.iterator).foreach { l =>
+        if(l.name != null)
+          mv.visitLocalVariable(l.name, l.desc.desc, null, l.start, l.end, l.idx)
+      }
+      mv.visitMaxs(0, 0) // ClassWriter.COMPUTE_FRAMES required
     }
-    mv.visitLabel(end)
-    if(!isStatic)
-      mv.visitLocalVariable("this", s"L${cls.name};", null, start, end, 0)
-    (params.iterator ++ locals.iterator).foreach { l =>
-      if(l.name != null)
-        mv.visitLocalVariable(l.name, l.desc.desc, null, l.start, l.end, l.idx)
-    }
-    mv.visitMaxs(0, 0) // ClassWriter.COMPUTE_FRAMES required
     mv.visitEnd()
   }
 

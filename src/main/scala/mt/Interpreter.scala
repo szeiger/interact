@@ -267,7 +267,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
       assert(g.branches.length == 1)
       val branch = g.branches.head
       val ri =
-        if(compile) codeGen.compile(g, cl)(this)
+        if(compile) codeGen.compileRule(g, cl)(this)
         else {
           maxW.max(g.maxWires)
           maxC.max(g.maxCells)

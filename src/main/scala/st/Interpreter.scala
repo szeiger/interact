@@ -261,7 +261,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def cellAllocationCount: Int = protoCells.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], compile: Boolean,
+final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RulePlan], compile: Boolean,
   debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val allSymbols = globals.symbols
@@ -328,12 +328,16 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], compile: Bo
       else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxA = new ParSupport.AtomicCounter
-    ParSupport.foreach(rules) { g =>
+    if(compile)
+      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileInterface(_, cl))
+//    if(compile)
+//      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileCons(_, rules, cl))
+    ParSupport.foreach(rules.values) { g =>
       maxC.max(g.maxCells)
       maxA.max(g.arity1)
       maxA.max(g.arity2)
       val ri =
-        if(compile) codeGen.compile(g, cl)(this)
+        if(compile) codeGen.compileRule(g, cl, this)
         else g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(g, b, Option(z)) }
       ri.rule = g
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri

@@ -23,8 +23,8 @@ object ParSupport {
     def get: Int = ai.get()
   }
 
-  def foreach[T >: Null <: AnyRef](a: Iterable[T])(f: T => Unit): Unit = {
-    if(parallelism <= 1) a.foreach(f)
+  def foreach[T >: Null <: AnyRef](a: IterableOnce[T])(f: T => Unit): Unit = {
+    if(parallelism <= 1) a.iterator.foreach(f)
     else {
       val it = a.iterator
       def getNext: T = it.synchronized { if(it.hasNext) it.next() else null }

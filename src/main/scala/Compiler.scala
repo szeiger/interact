@@ -28,14 +28,6 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
     u2
   }
 
-  private[this] final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
-    override def equals(o: Any): Boolean = o match {
-      case o: RuleKey => o.sym1 == sym1 && o.sym2 == sym2 || o.sym1 == sym2 && o.sym2 == sym1
-      case _ => false
-    }
-    override def hashCode(): Int = sym1.hashCode() + sym2.hashCode()
-  }
-
   private[this] val rulePlans = mutable.Map.empty[RuleKey, RulePlan]
   private[this] val data = mutable.ArrayBuffer.empty[Let]
   unit.statements.foreach {
@@ -54,7 +46,7 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
 
   def createSTInterpreter(compile: Boolean = true,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st.Interpreter =
-    new st.Interpreter(globalSymbols, rulePlans.values, compile, debugBytecode, collectStats)
+    new st.Interpreter(globalSymbols, rulePlans, compile, debugBytecode, collectStats)
 
   def createInterpreter(spec: String,
       debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {
@@ -65,6 +57,14 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
       case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugBytecode = debugBytecode, collectStats = collectStats)
     }
   }
+}
+
+final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
+  override def equals(o: Any): Boolean = o match {
+    case o: RuleKey => o.sym1 == sym1 && o.sym2 == sym2 || o.sym1 == sym2 && o.sym2 == sym1
+    case _ => false
+  }
+  override def hashCode(): Int = sym1.hashCode() + sym2.hashCode()
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {
