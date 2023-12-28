@@ -1,5 +1,6 @@
 package de.szeiger.interact
 
+import de.szeiger.interact.ast.ShowableNode
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra._
 
@@ -86,7 +87,7 @@ class InterpreterBenchmark {
     val model: Compiler = new Compiler(Parser.parse(source))
     val inter = model.createInterpreter(spec, collectStats = false)
     def setup(): BaseInterpreter = {
-      inter.setData(model)
+      inter.initData()
       inter
     }
   }
@@ -104,6 +105,7 @@ class InterpreterBenchmark {
     this.mult3Inter = new PreparedInterpreter(prelude + mult3Src)
     this.fib22Inter = new PreparedInterpreter(prelude + fib22Src)
     this.fib29Inter = new PreparedInterpreter(prelude + fib29Src)
+    //ShowableNode.print(mult1Inter.model.unit)
   }
 
   @Benchmark

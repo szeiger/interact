@@ -29,7 +29,7 @@ object Main extends App {
 
     ShowableNode.print(model.unit)
     val inter = model.createSTInterpreter(compile = false, collectStats = true)
-    inter.setData(model)
+    inter.initData()
     println("Initial state:")
     inter.getAnalyzer.log(System.out)
     val steps = inter.reduce()

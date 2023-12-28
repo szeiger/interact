@@ -1,4 +1,4 @@
-package de.szeiger.interact.mt
+package de.szeiger.interact
 
 object BitOps {
   @inline def byte0(i: Int): Int = (i & 0xFF).toByte
@@ -38,5 +38,20 @@ object BitOps {
   }
   object IntOfShortByteByte {
     @inline def unapply(i: Int): Some[(Int, Int)] = Some((short0(i), short1(i)))
+  }
+}
+
+object LongBitOps {
+  @inline def short0(l: Long): Int = (l & 0xFFFFL).toShort
+  @inline def short1(l: Long): Int = ((l >>> 16L) & 0xFFFFL).toShort
+  @inline def short2(l: Long): Int = ((l >>> 32L) & 0xFFFFL).toShort
+  @inline def short3(l: Long): Int = ((l >>> 48L) & 0xFFFFL).toShort
+  @inline def longOfShorts(s0: Int, s1: Int, s2: Int, s3: Int): Long = s0.toShort&0xFFFFL | ((s1.toShort&0xFFFFL) << 16L) | ((s2.toShort&0xFFFFL) << 32L) | ((s3.toShort&0xFFFFL) << 48L)
+  def checkedLongOfShorts(s0: Int, s1: Int, s2: Int, s3: Int): Long = {
+    assert(s0 >= Short.MinValue && s0 <= Short.MaxValue)
+    assert(s1 >= Short.MinValue && s1 <= Short.MaxValue)
+    assert(s2 >= Short.MinValue && s2 <= Short.MaxValue)
+    assert(s3 >= Short.MinValue && s3 <= Short.MaxValue)
+    longOfShorts(s0, s1, s2, s3)
   }
 }

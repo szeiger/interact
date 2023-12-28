@@ -3,6 +3,8 @@ package de.szeiger.interact.ast
 import de.szeiger.interact.{RulePlan, BranchPlan}
 
 abstract class Transform {
+  import Transform._
+
   def apply(n: Node): Node = n match {
     case n: Branch => apply(n)
     case n: DefRule => apply(n)
@@ -120,8 +122,9 @@ abstract class Transform {
   def apply(n: Let): Vector[Statement] = Vector({
     val d2 = mapC(n.defs)(apply)
     val e2 = mapC(n.embDefs)(apply)
-    if((d2 eq n.defs) && (e2 eq n.embDefs)) n
-    else Let(d2, e2).setPos(n.pos)
+    val f2 = mapC(n.free)(apply)
+    if((d2 eq n.defs) && (e2 eq n.embDefs) && (f2 eq n.free)) n
+    else Let(d2, e2, f2).setPos(n.pos)
   })
 
   def apply(n: Def): Vector[Statement] = Vector({
@@ -183,8 +186,10 @@ abstract class Transform {
     if((cond2 eq n.cond) && (embRed2 eq n.embRed) && (red2 eq n.reduced)) n
     else Branch(cond2, embRed2, red2).setPos(n.pos)
   }
+}
 
-  protected[this] final def mapC[T,R](xs: Vector[T])(f: T => R): Vector[R] = {
+object Transform {
+  def mapC[T,R](xs: Vector[T])(f: T => R): Vector[R] = {
     var changed = false
     val xs2 = xs.map { x =>
       val x2 = f(x)
@@ -194,7 +199,7 @@ abstract class Transform {
     if(changed) xs2 else xs.asInstanceOf[Vector[R]]
   }
 
-  protected[this] final def flatMapC[T,R](xs: Vector[T])(f: T => Vector[R]): Vector[R] = {
+  def flatMapC[T,R](xs: Vector[T])(f: T => Vector[R]): Vector[R] = {
     var changed = false
     val xs2 = xs.flatMap { x =>
       val x2 = f(x)
@@ -204,7 +209,7 @@ abstract class Transform {
     if(changed) xs2 else xs.asInstanceOf[Vector[R]]
   }
 
-  protected[this] final def mapC[T,R](o: Option[T])(f: T => R): Option[R] = o match {
+  def mapC[T,R](o: Option[T])(f: T => R): Option[R] = o match {
     case None => o.asInstanceOf[Option[R]]
     case Some(x) =>
       val x2 = f(x)

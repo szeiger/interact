@@ -1,4 +1,4 @@
-package de.szeiger.interact.mt
+package de.szeiger.interact
 
 import org.junit.Assert._
 import org.junit.Test

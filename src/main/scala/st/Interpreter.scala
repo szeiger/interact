@@ -2,9 +2,9 @@ package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.SymbolIdLookup
-import de.szeiger.interact.mt.BitOps._
+import de.szeiger.interact.BitOps._
 
 import java.util.Arrays
 import scala.annotation.{switch, tailrec}
@@ -142,15 +142,13 @@ class WireCell(final val sym: Symbol, _symId: Int) extends Cell1V(0) {
 }
 
 abstract class RuleImpl {
-  var rule: RulePlan = _
   def reduce(c1: Cell, c2: Cell, ptw: PerThreadWorker): Unit
   def cellAllocationCount: Int
 }
 
-final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Int],
+final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
     assigners: Array[PayloadAssigner], embeddedComps: Array[EmbeddedComputation[Int]], embeddedArgss: Array[scala.collection.Seq[Int]],
     condComp: EmbeddedComputation[Int], condArgs: scala.collection.Seq[Int], next: RuleImpl) extends RuleImpl {
-  override def toString = rule.toString
 
   private[this] def delay(nanos: Int): Unit = {
     val end = System.nanoTime() + nanos
@@ -247,10 +245,10 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     i = 0
     while(i < connections.length) {
       val conn = connections(i)
-      val c1 = cells(byte0(conn))
-      val p1 = byte1(conn)
-      val c2 = cells(byte2(conn))
-      val p2 = byte3(conn)
+      val c1 = cells(LongBitOps.short0(conn))
+      val p1 = LongBitOps.short1(conn)
+      val c2 = cells(LongBitOps.short2(conn))
+      val p2 = LongBitOps.short3(conn)
       if(p1 >= 0) c1.setAux(p1, c2, p2)
       if(p2 >= 0) c2.setAux(p2, c1, p1)
       if((p1 & p2) < 0) ptw.createCut(c1, c2)
@@ -262,13 +260,14 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 }
 
 final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RulePlan], compile: Boolean,
-  debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
+  debugBytecode: Boolean, val collectStats: Boolean, initialRules: Iterable[InitialPlan])
+    extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
-  final val (ruleImpls, maxRuleCells, maxArity) = createRuleImpls()
+  final val (ruleImpls, maxRuleCells, maxArity, initialRuleImpls) = createRuleImpls()
   final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
 
@@ -281,6 +280,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     }
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
+      case c if c.symId == 0 => Symbol.NoSymbol
       case c => reverseSymIds(c.symId)
     }
     def getPayload(c: Cell): Any = c.getGenericPayload
@@ -290,22 +290,19 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
   }
 
-  def setData(comp: Compiler): Unit = {
+  def initData(): Unit = {
     cutBuffer.clear()
     irreducible.clear()
     freeWires.clear()
-    val pairs = mutable.HashSet.empty[(Cell, Cell)]
-    val scope = new Scope[Cell] {
-      override val freeWires: mutable.HashSet[Cell] = self.freeWires
-      def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell =
-        if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity, Cells.cellKind(sym.arity, sym.payloadType)) else new WireCell(sym, 0)
-      def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = {
-        if(p1 >= 0) c1.setAux(p1, c2, p2)
-        if(p2 >= 0) c2.setAux(p2, c1, p1)
-        if(p1 == -1 && p2 == -1 && !pairs.contains((c2, c1)) && pairs.add((c1, c2))) cutBuffer.addOne(c1, c2)
-      }
+    val w = new PerThreadWorker(this)
+    initialRuleImpls.foreach { case (freeSyms, rule) =>
+      val free = freeSyms.map(new WireCell(_, 0))
+      freeWires.addAll(free)
+      val lhs = Cells.mk(0, freeWires.size, Cells.cellKind(freeWires.size, PayloadType.VOID))
+      free.zipWithIndex.foreach { case (c, p) => lhs.setAux(p, c, 0) }
+      rule.reduce(lhs, Cells.mk(0, 0, Cells.cellKind(0, PayloadType.VOID)), w)
     }
-    comp.getData.foreach(scope.addData(_))
+    w.flushNext()
   }
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
@@ -313,16 +310,16 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
   def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
 
-  def createInterpretedRuleImpl(g: RulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
+  def createInterpretedRuleImpl(sym1Id: Int, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, Cells.cellKind(s.arity, s.payloadType))).toArray
     val embArgs = b.embeddedComps.map(_.argIndices)
     val condArgs = b.condition.map(_.argIndices)
-    new InterpretedRuleImpl(getSymbolId(g.sym1), pcs, b.freeWiresPacked, b.connectionsPacked, b.assigners,
+    new InterpretedRuleImpl(sym1Id, pcs, b.freeWiresPacked, b.connectionsPackedLong, b.assigners,
       if(b.embeddedComps.isEmpty) null else b.embeddedComps.toArray, if(embArgs.isEmpty) null else embArgs.toArray,
       b.condition.orNull, condArgs.orNull, next.orNull)
   }
 
-  def createRuleImpls(): (Array[RuleImpl], Int, Int) = {
+  def createRuleImpls(): (Array[RuleImpl], Int, Int, Vector[(Vector[Symbol], RuleImpl)]) = {
     val (cl, codeGen) =
       if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/st3/gen", debugBytecode))
       else (null, null)
@@ -336,13 +333,19 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
       maxC.max(g.maxCells)
       maxA.max(g.arity1)
       maxA.max(g.arity2)
+      val sym1Id = getSymbolId(g.sym1)
       val ri =
         if(compile) codeGen.compileRule(g, cl, this)
-        else g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(g, b, Option(z)) }
-      ri.rule = g
-      ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri
+        else g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, b, Option(z)) }
+      ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
     }
-    (ris, maxC.get, maxA.get)
+    val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
+    initialRules.foreach { ip =>
+      maxC.max(ip.maxCells)
+      maxA.max(ip.free.size)
+      initial += ((ip.free, createInterpretedRuleImpl(0, ip.branch, None)))
+    }
+    (ris, maxC.get, maxA.get, initial.result())
   }
 
   @inline def mkRuleKey(c1: Cell, c2: Cell): Int = mkRuleKey(c1.symId, c2.symId)
@@ -415,6 +418,14 @@ final class PerThreadWorker(final val inter: Interpreter) {
   final def setNext(c1: Cell, c2: Cell): Unit = {
     this.nextCut1 = c1
     this.nextCut2 = c2
+  }
+
+  final def flushNext(): Unit = {
+    if(nextCut1 != null) {
+      inter.cutBuffer.addOne(nextCut1, nextCut2)
+      nextCut1 = null
+      nextCut2 = null
+    }
   }
 
   final def getNext(): (Cell, Cell) = (nextCut1, nextCut2)

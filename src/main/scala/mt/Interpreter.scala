@@ -1,15 +1,15 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, RulePlan, Scope}
-import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Symbol, Symbols}
+import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, InitialPlan, RulePlan, Scope}
+import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.codegen.SymbolIdLookup
 import de.szeiger.interact.mt.workers.{Worker, Workers}
+import de.szeiger.interact.BitOps._
 
 import java.util.Arrays
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
-import BitOps._
 
 import java.lang.invoke.{MethodHandles, VarHandle}
 import java.util.concurrent.{CountDownLatch, ForkJoinPool, ForkJoinWorkerThread, RecursiveAction}
@@ -207,7 +207,9 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 }
 
 final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads: Int, compile: Boolean,
-  debugBytecode: Boolean, val collectStats: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
+  debugBytecode: Boolean, val collectStats: Boolean, compData: Iterable[Let], compInitial: Iterable[InitialPlan])
+    extends BaseInterpreter with SymbolIdLookup { self =>
+
   private[this] final val scope: Scope[Cell] with Analyzer[Cell] = new Scope[Cell] with Analyzer[Cell] {
     def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
@@ -221,9 +223,9 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
     def rootCells: IterableOnce[Cell] = freeWires
   }
   def getAnalyzer: Analyzer[_] = scope
-  def setData(comp: Compiler): Unit = {
+  def initData(): Unit = {
     scope.clear()
-    comp.getData.foreach(scope.addData(_))
+    compData.foreach(scope.addData(_))
   }
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })

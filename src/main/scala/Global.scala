@@ -107,9 +107,14 @@ class CompilerResult(val notices: IndexedSeq[Notice], parent: Throwable = null) 
 object CompilerResult {
   def tryInternal[T](at: Position)(f: => T): T = try f catch {
     case e: CompilerResult => throw e
+    case e: AssertionError => throw new CompilerResult(Vector(new Notice(e.toString, at, Severity.Fatal, internal = true)), e)
     case NonFatal(e) => throw new CompilerResult(Vector(new Notice(e.toString, at, Severity.Fatal, internal = true)), e)
   }
-  def tryInternal[T](at: Node)(f: => T): T = tryInternal(at.pos)(f)
+  def tryInternal[T](atNode: Node)(f: => T): T = try f catch {
+    case e: CompilerResult => throw e
+    case e: AssertionError => throw new CompilerResult(Vector(new Notice(e.toString, atNode.pos, Severity.Fatal, internal = true, atNode = atNode)), e)
+    case NonFatal(e) => throw new CompilerResult(Vector(new Notice(e.toString, atNode.pos, Severity.Fatal, internal = true, atNode = atNode)), e)
+  }
 
   def fail(msg: String, at: Position = null, parent: Throwable = null, atNode: Node = null, internal: Boolean = true): Nothing =
     throw new CompilerResult(Vector(new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal)))

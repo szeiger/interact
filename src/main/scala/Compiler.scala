@@ -30,7 +30,9 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
 
   private[this] val rulePlans = mutable.Map.empty[RuleKey, RulePlan]
   private[this] val data = mutable.ArrayBuffer.empty[Let]
+  private[this] val initialPlans = mutable.ArrayBuffer.empty[InitialPlan]
   unit.statements.foreach {
+    case i: InitialPlan => initialPlans += i
     case l: Let => data += l
     case g: RulePlan =>
       val key = new RuleKey(g.sym1, g.sym2)
@@ -38,15 +40,13 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
   }
   checkThrow()
 
-  def getData: Iterable[Let] = data
-
   def createMTInterpreter(numThreads: Int, compile: Boolean = true,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
-    new mt.Interpreter(globalSymbols, rulePlans.values, numThreads, compile, debugBytecode, collectStats)
+    new mt.Interpreter(globalSymbols, rulePlans.values, numThreads, compile, debugBytecode, collectStats, data, initialPlans)
 
   def createSTInterpreter(compile: Boolean = true,
     debugBytecode: Boolean = false, collectStats: Boolean = false) : st.Interpreter =
-    new st.Interpreter(globalSymbols, rulePlans, compile, debugBytecode, collectStats)
+    new st.Interpreter(globalSymbols, rulePlans, compile, debugBytecode, collectStats, initialPlans)
 
   def createInterpreter(spec: String,
       debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {

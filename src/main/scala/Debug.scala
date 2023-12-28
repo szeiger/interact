@@ -9,7 +9,7 @@ object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Compiler(statements)
   val inter = model.createSTInterpreter(compile = false)
-  inter.setData(model)
+  inter.initData()
 
   var steps = 0
   var cuts: mutable.ArrayBuffer[(Cell, Cell)] = _

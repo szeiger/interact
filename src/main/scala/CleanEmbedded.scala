@@ -25,16 +25,16 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
 
   override def apply(mr: MatchRule): Vector[Statement] = {
     val rm = new RefsMap
-    mr.args1.foreach(rm.collect)
-    mr.args2.foreach(rm.collect)
-    mr.emb1.foreach(rm.collect)
-    mr.emb2.foreach(rm.collect)
+    mr.args1.foreach(rm.collectAll)
+    mr.args2.foreach(rm.collectAll)
+    mr.emb1.foreach(rm.collectAll)
+    mr.emb2.foreach(rm.collectAll)
     val (emb1Sym, emb1Id) = patternEmbSym(mr.id1, mr.emb1)
     val (emb2Sym, emb2Id) = patternEmbSym(mr.id2, mr.emb2)
     val patSyms = rm.allSymbols.toSet
     val branches = mr.reduction.map { b =>
       val refs = rm.sub()
-      refs.collect(b)
+      refs.collectAll(b)
       if(refs.hasError) {
         val nonEmbErrs = refs.err.filter(!_.isEmbedded)
         if(nonEmbErrs.nonEmpty)
@@ -42,7 +42,7 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
       }
       b.cond.foreach { cond =>
         val condSyms = new RefsMap
-        condSyms.collect(cond)
+        condSyms.collectAll(cond)
         val newSyms = condSyms.allSymbols.filter(s => !patSyms.contains(s)).toSet
         if(newSyms.nonEmpty)
           error(s"Variable(s)s ${newSyms.map(s => s"'$s'").mkString(", ")} in condition do not refer to pattern", cond)

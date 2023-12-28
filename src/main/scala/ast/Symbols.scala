@@ -89,10 +89,15 @@ class RefsMap(parent: Option[RefsMap] = None) {
   def nonFree: Iterator[Symbol] = iterator.filter(_._2 > 1).map(_._1)
   def hasNonFree: Boolean = hasErr.nonEmpty || linear.hasNext || parent.exists(_.hasNonFree)
   def hasError: Boolean = hasErr.nonEmpty || parent.exists(_.hasError)
-  def collect(n: Node): Unit = n match {
-    case n: Ident => if(!n.sym.isEmpty && !n.sym.isCons) inc(n.sym)
-    case n => n.nodeChildren.foreach(collect)
+  private[this] def collect0(n: Node, embedded: Boolean, regular: Boolean): Unit = n match {
+    case n: Ident =>
+      val use = (n.sym.isEmbedded && embedded) || (!n.sym.isEmbedded && regular)
+      if(use && !n.sym.isEmpty && !n.sym.isCons) inc(n.sym)
+    case n => n.nodeChildren.foreach(collect0(_, embedded, regular))
   }
+  def collectRegular(n: Node): Unit = collect0(n, false, true)
+  def collectEmbedded(n: Node): Unit = collect0(n, true, false)
+  def collectAll(n: Node): Unit = collect0(n, true, true)
   def sub(): RefsMap = parent match {
     case Some(r) if data.isEmpty => r.sub()
     case _ => new RefsMap(Some(this))

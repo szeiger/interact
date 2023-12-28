@@ -208,7 +208,7 @@ trait Syntax { this: Parser =>
     P(  "match" ~ expr ~ reductions  ).map { case (on, red) => Match(Vector(on), red) }
 
   def let[_: P]: P[Let] =
-    P(  kw("let") ~/ anyExprBlock  ).map(Let.tupled)
+    P(  kw("let") ~/ anyExprBlock  ).map { case (defs, emb) => Let(defs, emb, Vector.empty) }
 
   def unit[_: P]: P[CompilationUnit] =
     P(  Start ~ pos ~ positioned(cons | let | definition | matchStatement ).rep ~ End  ).map { case (p, es) => CompilationUnit(es.toVector).setPos(p) }

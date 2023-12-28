@@ -18,14 +18,11 @@ class Prepare(global: Global) extends Phase {
         else d.name.sym = globalSymbols.defineDef(d.name.s, d.args.length, d.ret.length, d.payloadType)
       case _ =>
     }
-    assign(unit, globalSymbols)
-    unit
+    val st2 = Transform.mapC(unit.statements)(assign(_, globalSymbols))
+    if(st2 eq unit.statements) unit else unit.copy(st2).setPos(unit.pos)
   }
 
-  private[this] def assign(n: CompilationUnit, scope: Symbols): Unit =
-    n.statements.foreach(assign(_, scope))
-
-  private[this] def assign(n: Statement, scope: Symbols): Unit = n match {
+  private[this] def assign(n: Statement, scope: Symbols): Statement = n match {
     case Cons(_, args, _, _, embId, ret, der) =>
       val sc = scope.sub()
       args.foreach(assign(_, sc))
@@ -38,42 +35,46 @@ class Prepare(global: Global) extends Phase {
           error(s"No constructor '${i.s}' defined", i)
         else i.sym = symO.get
       })
+      n
     case Def(_, args, _, _, embId, ret, rules) =>
       val sc = scope.sub()
       args.foreach(assign(_, sc))
       ret.foreach(assign(_, sc))
       embId.foreach(assign(_: EmbeddedExpr, sc))
       val rm = new RefsMap
-      args.foreach(rm.collect)
-      ret.foreach(rm.collect)
-      embId.foreach(rm.collect)
+      args.foreach(rm.collectAll)
+      ret.foreach(rm.collectAll)
+      embId.foreach(rm.collectAll)
       if(rm.hasNonFree)
         error(s"Duplicate variable(s) in def pattern ${rm.nonFree.map(s => s"'$s'").mkString(", ")}", n)
       rules.foreach(assign(_, sc, rm))
+      n
     case Match(on, reduced) =>
       val sc = scope.sub()
       on.foreach(assign(_, sc))
       val rm = new RefsMap
-      on.foreach(rm.collect)
+      on.foreach(rm.collectAll)
       if(rm.hasNonFree)
         error(s"Duplicate variable(s) in match pattern ${rm.nonFree.map(s => s"'$s'").mkString(", ")}", n)
       reduced.foreach(assign(_, sc))
-    case Let(defs, embDefs) =>
+      n
+    case n @ Let(defs, embDefs, _) =>
       val sc = scope.sub()
       defs.foreach(assign(_, sc))
       embDefs.foreach(assign(_, sc))
       val refs = new RefsMap
-      defs.foreach(refs.collect)
+      defs.foreach(refs.collectAll)
       if(refs.hasError)
         error(s"Non-linear use of variable(s) ${refs.err.map(s => s"'$s'").mkString(", ")}", n)
-    case _: CheckedRule =>
+      n.copy(free = refs.free.filterNot(_.isEmbedded).map(sym => Ident(sym.id).setSym(sym)).toVector.sortBy(_.s)).setPos(n.pos)
+    case _: CheckedRule => n
   }
 
   private[this] def assign(n: DefRule, scope: Symbols, defRefs: RefsMap): Unit = {
     val sc = scope.sub()
     n.on.foreach(assign(_, sc))
     val rm = defRefs.sub()
-    n.on.foreach(rm.collect)
+    n.on.foreach(rm.collectAll)
     if(rm.hasNonFree)
       error(s"Duplicate variable(s) in def rule pattern ${rm.nonFree.map(s => s"'$s'").mkString(", ")}", n)
     n.reduced.foreach(assign(_, sc))

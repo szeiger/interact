@@ -1,6 +1,7 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.mt.BitOps._
+import de.szeiger.interact.BitOps._
+import de.szeiger.interact.LongBitOps._
 import de.szeiger.interact.ast._
 
 import java.lang.invoke.{MethodHandle, MethodHandles}
@@ -23,6 +24,9 @@ class PlanRules(global: Global) extends Transform with Phase {
     else if(n.sym1.id == "dup") Vector(deriveDup(n.sym2, n.sym1))
     else super.apply(n)
   }
+
+  override def apply(n: Let) =
+    Vector(InitialPlan(n.free.map(_.sym), BranchPlan(dependencyLoader, n)).setPos(n.pos))
 
   private[this] def deriveErase(sym: Symbol, eraseSym: Symbol): RulePlan = {
     val cells = Vector.fill(sym.arity)(eraseSym)
@@ -183,9 +187,9 @@ object EmbeddedComputation {
     "-" -> (Intrinsics.getClass.getName, "intSub"),
   )
 
-  def apply[A](cl: ClassLoader, e: EmbeddedExpr)(creator: => String)(handleArg: Symbol => A): EmbeddedComputation[A] = e match {
+  def apply[A](cl: ClassLoader, e: EmbeddedExpr)(handleArg: Symbol => A): EmbeddedComputation[A] = e match {
     case EmbeddedAssignment(lhs: Ident, emb: EmbeddedApply) =>
-      val ac = apply(cl, emb)(creator)(handleArg)
+      val ac = apply(cl, emb)(handleArg)
       new EmbeddedMethodApplicationWithReturn[A](ac, handleArg(lhs.sym))
     case EmbeddedAssignment(lhs: Ident, StringLit(v)) =>
       new EmbeddedConstantRefAssigner[A](handleArg(lhs.sym), v)
@@ -207,7 +211,7 @@ object EmbeddedComputation {
           argIndices += handleArg(id.sym)
         case (a: EmbeddedApply, i) =>
           if(subComps == null) subComps = new Array(args.length)
-          val sub = apply(cl, a)(creator)(handleArg)
+          val sub = apply(cl, a)(handleArg)
           subComps(i) = sub
           argIndices ++= sub.argIndices
       }
@@ -216,7 +220,7 @@ object EmbeddedComputation {
       new EmbeddedMethodApplication(cl, cln, mn, consts, argIndices, subComps)
     case CreateLabels(base, labels) =>
       new EmbeddedCreateLabels[A](base.id, labels.map(handleArg))
-    case _ => CompilerResult.fail(s"Embedded computation must be a method call in $creator", atNode = e)
+    case _ => CompilerResult.fail(s"Embedded computation must be a method call", atNode = e)
   }
 }
 
@@ -243,9 +247,15 @@ final class BranchPlan(arity1: Int,
   private[this] def packConn(conn: Connection): Int = {
     val (b0, b1) = packIdx(conn.c1)
     val (b2, b3) = packIdx(conn.c2)
-    intOfBytes(b0, b1, b2, b3)
+    checkedIntOfBytes(b0, b1, b2, b3)
+  }
+  private[this] def packConnLong(conn: Connection): Long = {
+    val (s0, s1) = packIdx(conn.c1)
+    val (s2, s3) = packIdx(conn.c2)
+    checkedLongOfShorts(s0, s1, s2, s3)
   }
   lazy val connectionsPacked: Array[Int] = internalConnsDistinct.iterator.map(packConn).toArray
+  lazy val connectionsPackedLong: Array[Long] = internalConnsDistinct.iterator.map(packConnLong).toArray
   lazy val freeWiresPacked: Array[Int] = {
     val a = new Array[Int](wireConnsByWire.length)
     wireConnsByWire.foreach { case c @ Connection(f @ FreeIdx(rhs, i), idx2) =>
@@ -278,25 +288,33 @@ final class BranchPlan(arity1: Int,
 }
 
 object BranchPlan {
-  def apply[C](cl: ClassLoader, cr: MatchRule, red: Branch): BranchPlan = CompilerResult.tryInternal(cr) {
-    val cells = mutable.ArrayBuffer.empty[Symbol]
-    val internalConns = mutable.HashSet.empty[Connection]
+  def apply(cl: ClassLoader, let: Let): BranchPlan = CompilerResult.tryInternal(let) {
+    val freeLookup = let.free.iterator.zipWithIndex.map { case (n, i) => (n.sym, -i-1) }.toMap
+    apply(cl, None, let.embDefs, let.defs, freeLookup, freeLookup.size, 0, None, None, PayloadType.VOID, PayloadType.VOID)
+  }
+
+  def apply(cl: ClassLoader, cr: MatchRule, red: Branch): BranchPlan = CompilerResult.tryInternal(cr) {
     val freeLookup = (cr.args1.iterator ++ cr.args2.iterator).zipWithIndex.map { case (n, i) => (n.asInstanceOf[Ident].sym, -i-1) }.toMap
     assert(freeLookup.size == cr.args1.length + cr.args2.length)
+    apply(cl, red.cond, red.embRed, red.reduced, freeLookup, cr.sym1.arity, cr.sym2.arity, cr.emb1, cr.emb2, cr.sym1.payloadType, cr.sym2.payloadType)
+  }
+
+  private[this] def apply(cl: ClassLoader, cond: Option[EmbeddedExpr], embRed: Vector[EmbeddedExpr], reduced: Vector[Expr], freeLookup: Map[Symbol, Int], arity1: Int, arity2: Int,
+      emb1: Option[EmbeddedExpr], emb2: Option[EmbeddedExpr], lhsPayloadType: PayloadType, rhsPayloadType: PayloadType): BranchPlan = {
+    val cells = mutable.ArrayBuffer.empty[Symbol]
+    val internalConns = mutable.HashSet.empty[Connection]
     val wireConns = new Array[Connection](freeLookup.size)
     val assigners = mutable.ArrayBuffer.empty[PayloadAssigner]
-    val lhsEmbId = cr.emb1.map(_.asInstanceOf[Ident].s).orNull
-    val rhsEmbId = cr.emb2.map(_.asInstanceOf[Ident].s).orNull
+    val lhsEmbId = emb1.map(_.asInstanceOf[Ident].s).orNull
+    val rhsEmbId = emb2.map(_.asInstanceOf[Ident].s).orNull
     val cellEmbIds = mutable.HashMap.empty[String, ArrayBuffer[Int]]
-    val lhsPayloadType = cr.sym1.payloadType
-    val rhsPayloadType = cr.sym2.payloadType
     if(lhsEmbId != null) cellEmbIds.put(lhsEmbId, ArrayBuffer(-1))
     if(rhsEmbId != null) cellEmbIds.put(rhsEmbId, ArrayBuffer(-2))
-    val arity1 = cr.sym1.arity
     def mkFreeIdx(idx: Int): FreeIdx = FreeIdx(idx >= arity1, if(idx >= arity1) idx-arity1 else idx)
     def mkIdx(t: Int, p: Int): Idx = if(t >= 0) CellIdx(t, p) else mkFreeIdx(-1-t)
     val sc = new Scope[Int] {
       override def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Int = {
+        assert(!sym.isEmbedded, s"Unexpected embedded symbol $sym in createCell()")
         if(sym.isCons) {
           val cellIdx = cells.length
           cells += sym
@@ -320,21 +338,27 @@ object BranchPlan {
         }
       }
     }
-    sc.addExprs(red.reduced)
+    sc.addExprs(reduced)
     def payloadTypeForIdent(s: String): PayloadType = cellEmbIds(s).head match {
       case -1 => lhsPayloadType
       case -2 => rhsPayloadType
       case i => cells(i).payloadType
     }
-    val embComp = red.embRed.map { ee =>
+    val embComp = embRed.map { ee =>
       val as = mutable.ArrayBuffer.empty[String]
-      val ec = EmbeddedComputation(cl, ee)(cr.show) { a => as += a.id; cellEmbIds(a.id).head }
+      val ec = EmbeddedComputation(cl, ee) { a => as += a.id; cellEmbIds(a.id).head }
       val refAs = as.filter(s => payloadTypeForIdent(s) == PayloadType.REF)
       assert(refAs.distinct.length == refAs.length)
       ec
     }
-    val cond = red.cond.map { ee => EmbeddedComputation(cl, ee)(cr.show)(s => cellEmbIds(s.id).head) }
-    new BranchPlan(arity1, cells.toVector, internalConns.toVector.sorted, wireConns.toVector, assigners.toArray, embComp, cond)
+    val condComp = cond.map { ee => EmbeddedComputation(cl, ee)(s => cellEmbIds(s.id).head) }
+    cells.foreach(c => assert(c != null))
+    internalConns.foreach(c => assert(c != null))
+    wireConns.foreach(c => assert(c != null))
+    assigners.foreach(c => assert(c != null))
+    embComp.foreach(c => assert(c != null))
+    condComp.foreach(c => assert(c != null))
+    new BranchPlan(arity1, cells.toVector, internalConns.toVector.sorted, wireConns.toVector, assigners.toArray, embComp, condComp)
   }
 }
 
@@ -343,8 +367,17 @@ final case class RulePlan(sym1: Symbol, sym2: Symbol, branches: Vector[BranchPla
   def arity1: Int = sym1.arity
   def arity2: Int = sym2.arity
   def maxCells: Int = branches.iterator.map(_.cells.length).max
-  def maxWires: Int = branches.iterator.map(b => b.connectionsPacked.length + b.freeWiresPacked.length).max
+  def maxWires: Int = branches.iterator.map(b => b.internalConnsDistinct.length + b.wireConnsByWire.length).max
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$sym1/${sym1.arity} <-> $sym2/${sym2.arity}")
+}
+
+// A rule-like object to perform the initial setup; lhs connects to free wires
+final case class InitialPlan(free: Vector[Symbol], branch: BranchPlan) extends Statement {
+  def maxCells: Int = branch.cells.length
+  def maxWires: Int = branch.internalConnsDistinct.length + branch.wireConnsByWire.length
+
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branch
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(free.mkString(", "))
 }

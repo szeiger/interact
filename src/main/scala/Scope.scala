@@ -51,26 +51,26 @@ abstract class Scope[Cell] { self =>
               assert(id.sym.payloadType.canCopy)
               cells += c
           }
-        case _ => sys.error(s"Invalid payload expression ${e.show} in data ${data.show}")
+        case _ => CompilerResult.fail("Invalid payload expression in data", atNode = e)
       }
     }
     val embComp = data.embDefs.map { ee =>
       val as = mutable.HashMap.empty[Symbol, Int]
-      val ec = EmbeddedComputation[Cell](getClass.getClassLoader, ee)(data.show) { a =>
+      val ec = EmbeddedComputation[Cell](getClass.getClassLoader, ee) { a =>
         as.put(a, as.getOrElse(a, 0) + 1)
         foundEmbIds.remove(a) match {
           case Some(s) => s.head
-          case None => sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
+          case None => CompilerResult.fail("Non-linear variable use in embedded method call in data", atNode = ee)
         }
       }
       if(as.exists(_._2 != 1))
-        sys.error(s"Non-linear variable use in embedded method call ${ee.show} in data ${data.show}")
+        CompilerResult.fail("Non-linear variable use in embedded method call in data", atNode = ee)
       ec
     }
     foundEmbIds.foreach { case (s, cs) =>
       if(s.payloadType == PayloadType.LABEL)
         cs.foreach(_.asInstanceOf[RefBox].setValue(s)) // use the Symbol as the label value
-      else sys.error(s"Non-linear variable use of ${s} in data ${data.show}")
+      else CompilerResult.fail(s"Non-linear variable use of ${s} in data", atNode = data)
     }
     embComp.foreach { e => e.invoke(e.argIndices) }
   }
@@ -115,7 +115,7 @@ abstract class Scope[Cell] { self =>
           case 0 => cellRet(s, createCell(s, None))
           case 1 => val c = createCell(s, None); freeWires.addOne(c); Seq((c, 0))
           case 2 => Seq((bind.getOrElseUpdate(s, new TempWire), -1))
-          case _ => sys.error(s"Non-linear use of ${i.show} in data")
+          case _ => CompilerResult.fail(s"Non-linear use of ${i.s} in data", atNode = i)
         }
       case Tuple(es) => es.flatMap(create)
       case Apply(i, emb, args) =>
@@ -332,6 +332,6 @@ trait Analyzer[Cell] { self =>
 
 trait BaseInterpreter {
   def getAnalyzer: Analyzer[_]
-  def setData(comp: Compiler): Unit
+  def initData(): Unit
   def reduce(): Int
 }
