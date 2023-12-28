@@ -42,7 +42,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   private def interfaceClassName(s: Symbol) = s"$genPackage/I_${encodeName(s)}"
   private def consClassName(s: Symbol) = s"$genPackage/C_${encodeName(s)}"
   private def interfaceMethodName(s: Symbol) = s"reduce_${encodeName(s)}"
-  private def cellTFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) cellSpecTs(sym.arity) else cellT
+  private def genericCellTFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) cellSpecTs(sym.arity) else cellT
+  private def genericConstrFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) new_CellSpec(sym.arity) else new_CellN_II
+  private def consConstrFor(sym: Symbol) = tp.c(consClassName(sym)).constr(genericConstrFor(sym).desc)
 
 
   def compileRule(g: RulePlan, cl: LocalClassLoader, lookup: SymbolIdLookup): RuleImpl = {
@@ -176,31 +178,25 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
 
     // Create new cells & update symbols of reused cells
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
-    def createCell(sym: Symbol, cellIdx: Int): m.type = {
-      if(sym.arity < new_CellSpec.length) {
-        m.newInitDup(new_CellSpec(sym.arity)) {
-          m.iconst(sids(sym))
-          branch.cellConns(cellIdx).tail.foreach {
-            case CellIdx(ci, p) =>
-              if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
-              m.iconst(p)
-            case f: FreeIdx => ldBoth(f)
-          }
-        }
-      } else {
-        m.newInitDup(new_CellN_II) {
-          m.iconst(sids(sym))
-          m.iconst(sym.arity)
-        }
-      }
-    }
     for(idx <- cells.indices) {
       cells(idx) = branch.cells(idx) match {
         case sym if idx == reuse1 => cLeft
         case sym if idx == reuse2 => cRight
         case sym =>
+          val constr = consConstrFor(sym)
           cellAllocations += 1
-          createCell(sym, idx).storeLocal(s"c$idx", cellT, Acc.FINAL)
+          m.newInitDup(constr) {
+            m.iconst(sids(sym))
+            if(sym.arity <= MAX_SPEC_CELL) {
+              branch.cellConns(idx).tail.foreach {
+                case CellIdx(ci, p) =>
+                  if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
+                  m.iconst(p)
+                case f: FreeIdx => ldBoth(f)
+              }
+            } else m.iconst(sym.arity)
+          }
+          m.storeLocal(s"c$idx", constr.tpe, Acc.FINAL)
       }
     }
 
@@ -285,20 +281,37 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   }
 
   def compileInterface(sym: Symbol, cl: LocalClassLoader): Unit = {
-    val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, interfaceClassName(sym))
-    c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethodName(sym), tp.m(cellTFor(sym)).V)
-    addClass(cl, c)
+//    val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, interfaceClassName(sym))
+//    c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethodName(sym), tp.m(genericCellTFor(sym)).V)
+//    addClass(cl, c)
   }
 
   def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader): Unit = {
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, consClassName(sym), cellTFor(sym))
-    val pairs = rules.keys.iterator.collect {
-      case rk if rk.sym1 == sym => (rk.sym2, rk)
-      case rk if rk.sym2 == sym => (rk.sym1, rk)
-    }.toMap
-    pairs.foreach { case (sym2, rk) =>
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, interfaceMethodName(sym2), tp.m(cellTFor(sym)).V)
+    val parentConstr = genericConstrFor(sym)
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, consClassName(sym), parentConstr.tpe)
+
+    // copy constructor
+    if(sym.arity <= MAX_SPEC_CELL) {
+      val params = Seq(tp.I) ++ (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
+      val m = c.constructor(Acc.PUBLIC, tp.m(params: _*))
+      val symId = m.param("symId", tp.I, Acc.FINAL)
+      val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
+      m.aload(m.receiver).iload(symId)
+      aux.foreach { case (c, p) => m.aload(c).iload(p) }
+      m.invokespecial(parentConstr).return_
+    } else {
+      val m = c.constructor(Acc.PUBLIC, tp.m(tp.I, tp.I))
+      val symId = m.param("symId", tp.I, Acc.FINAL)
+      val arity = m.param("arity", tp.I, Acc.FINAL)
+      m.aload(m.receiver).iload(symId).iload(arity).invokespecial(parentConstr).return_
     }
+//    val pairs = rules.keys.iterator.collect {
+//      case rk if rk.sym1 == sym => (rk.sym2, rk)
+//      case rk if rk.sym2 == sym => (rk.sym1, rk)
+//    }.toMap
+//    pairs.foreach { case (sym2, rk) =>
+//      val m = c.method(Acc.PUBLIC | Acc.FINAL, interfaceMethodName(sym2), tp.m(cellTFor(sym)).V)
+//    }
     addClass(cl, c)
   }
 }

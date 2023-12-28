@@ -54,7 +54,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   }
 
   private def createFactoryClass(implClass: ClassDSL, factClassName: String, names: Seq[String]): ClassDSL = {
-    val implClassT = implClass.thisTp
+    val implClassT = implClass.thisClassTp
     val riFactoryT = tp.c[RuleImplFactory[_]]
     val sidLookupT = tp.i[SymbolIdLookup]
     val new_implClass = ConstructorRef(implClassT, tp.m(Seq.fill(names.length)(tp.I): _*).V)

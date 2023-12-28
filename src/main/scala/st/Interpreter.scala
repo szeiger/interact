@@ -2,7 +2,7 @@ package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.ast.{PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.SymbolIdLookup
 import de.szeiger.interact.BitOps._
 
@@ -327,8 +327,8 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     val maxC, maxA = new ParSupport.AtomicCounter
     if(compile)
       ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileInterface(_, cl))
-//    if(compile)
-//      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileCons(_, rules, cl))
+    if(compile)
+      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileCons(_, rules, cl))
     ParSupport.foreach(rules.values) { g =>
       maxC.max(g.maxCells)
       maxA.max(g.arity1)

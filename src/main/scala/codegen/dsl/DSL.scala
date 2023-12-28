@@ -11,12 +11,14 @@ object VarIdx {
   def none: VarIdx = new VarIdx(-1)
 }
 
-class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwner[Object],
+final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwner[Object],
   interfaces: Array[String] = null, sourceFile: String = null, version: Int = V1_8) {
   private[this] val fields = ArrayBuffer.empty[Field]
   private[this] val methods = ArrayBuffer.empty[MethodDSL]
 
-  val thisTp: Owner = new ClassOwner(name)
+  val thisTp: Owner = if(access.has(Acc.INTERFACE)) new InterfaceOwner(name) else new ClassOwner(name)
+  def thisClassTp: ClassOwner = thisTp.asInstanceOf[ClassOwner]
+  def thisInterfaceTp: InterfaceOwner = thisTp.asInstanceOf[InterfaceOwner]
 
   def javaName = name.replace('/', '.')
 
@@ -43,14 +45,16 @@ class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwn
     m
   }
 
+  def constructor(access: Acc, desc: Desc.MethodArgs): MethodDSL = method(access, "<init>", desc.V)
+
   def emptyNoArgsConstructor(access: Acc = Acc.PUBLIC): MethodDSL = {
-    val m = method(access, "<init>", Desc.m().V)
+    val m = constructor(access, Desc.m())
     m.aload(m.receiver).invokespecial(superTp, "<init>", Desc.m().V)
     m.return_
   }
 }
 
-class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
+final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   private[this] val params = ArrayBuffer.empty[Local]
   private[this] val locals = ArrayBuffer.empty[Local]
   private[this] val code = ArrayBuffer.empty[AbstractInsnNode]
@@ -149,6 +153,8 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     insn(new MethodInsnNode(opcode, owner.className, name, desc.desc, owner.isInterface))
   private[this] def methodInsn(opcode: Int, method: MethodRef): this.type =
     methodInsn(opcode, method.owner, method.name, method.desc)
+  private[this] def methodInsn(opcode: Int, method: ConstructorRef): this.type =
+    methodInsn(opcode, method.tpe, "<init>", method.desc)
   private[this] def typeInsn(opcode: Int, tpe: Owner): this.type = insn(new TypeInsnNode(opcode, tpe.className))
 
   def label(l: Label): this.type = insn(new LabelNode(l))
@@ -254,6 +260,7 @@ class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def invokevirtual(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEVIRTUAL, owner, name, desc)
   def invokeinterface(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEINTERFACE, owner, name, desc)
   def invokespecial(method: MethodRef): this.type = methodInsn(INVOKESPECIAL, method)
+  def invokespecial(method: ConstructorRef): this.type = methodInsn(INVOKESPECIAL, method)
   def invokevirtual(method: MethodRef): this.type = methodInsn(INVOKEVIRTUAL, method)
   def invokeinterface(method: MethodRef): this.type = methodInsn(INVOKEINTERFACE, method)
 
