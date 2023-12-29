@@ -362,21 +362,32 @@ object BranchPlan {
   }
 }
 
-final case class RulePlan(sym1: Symbol, sym2: Symbol, branches: Vector[BranchPlan]) extends Statement {
-  def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
-  def arity1: Int = sym1.arity
-  def arity2: Int = sym2.arity
+abstract class GenericRulePlan extends Statement {
+  def sym1: Symbol
+  def sym2: Symbol
+  def branches: Vector[BranchPlan]
   def maxCells: Int = branches.iterator.map(_.cells.length).max
   def maxWires: Int = branches.iterator.map(b => b.internalConnsDistinct.length + b.wireConnsByWire.length).max
+  def arity1: Int
+  def arity2: Int
+  def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
+}
+
+final case class RulePlan(sym1: Symbol, sym2: Symbol, branches: Vector[BranchPlan]) extends GenericRulePlan {
+  def arity1: Int = sym1.arity
+  def arity2: Int = sym2.arity
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$sym1/${sym1.arity} <-> $sym2/${sym2.arity}")
 }
 
 // A rule-like object to perform the initial setup; lhs connects to free wires
-final case class InitialPlan(free: Vector[Symbol], branch: BranchPlan) extends Statement {
-  def maxCells: Int = branch.cells.length
-  def maxWires: Int = branch.internalConnsDistinct.length + branch.wireConnsByWire.length
+final case class InitialPlan(free: Vector[Symbol], branch: BranchPlan) extends GenericRulePlan {
+  def sym1 = Symbol.NoSymbol
+  def sym2 = Symbol.NoSymbol
+  def branches = Vector(branch)
+  def arity1: Int = free.length
+  def arity2: Int = 0
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branch
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(free.mkString(", "))

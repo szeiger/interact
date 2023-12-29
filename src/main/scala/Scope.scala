@@ -145,6 +145,7 @@ abstract class Scope[Cell] { self =>
 
 trait Analyzer[Cell] { self =>
   def rootCells: IterableOnce[Cell]
+  def irreduciblePairs: IterableOnce[(Cell, Cell)]
 
   def getSymbol(c: Cell): Symbol
   def getConnected(c: Cell, port: Int): (Cell, Int)
@@ -284,6 +285,12 @@ trait Analyzer[Cell] { self =>
         val s = show(c1, true)
         out.println(s"$prefix$s")
       }
+    }
+    val irr = irreduciblePairs.iterator.filter { case (c1, c2) => c1 != null && c2 != null }.map { case (c1, c2) => Seq(symbolName(c1), symbolName(c2)).sorted.mkString(" <-> ") }.toVector.sorted
+    if(irr.nonEmpty) {
+      out.println()
+      out.println("Irreducible pairs:")
+      irr.foreach(s => out.println(s"  $s"))
     }
     cuts
   }

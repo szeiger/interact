@@ -20,6 +20,8 @@ abstract class Cell(final var symId: Int) {
 
   final def auxPortsIterator: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (auxCell(i), auxPort(i)))
   override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${auxPortsIterator.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
+
+  def reduce(c: Cell, ptw: PerThreadWorker): Unit = ptw.reduceInterpreted(this, c)
 }
 
 trait IntCell extends IntBox {
@@ -272,12 +274,13 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   final val freeWires = mutable.HashSet.empty[Cell]
 
   def getAnalyzer: Analyzer[Cell] = new Analyzer[Cell] {
-    def rootCells = (self.freeWires.iterator ++ (cutBuffer.iterator ++ principals.iterator).flatMap { case (c1, c2) => Seq(c1, c2) }).filter(_ != null).toSet
+    def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     val principals = mutable.HashMap.empty[Cell, Cell]
     (cutBuffer.iterator ++ irreducible.iterator).foreach { case (c1, c2) =>
       principals.put(c1, c2)
       principals.put(c2, c1)
     }
+    def rootCells = (self.freeWires.iterator ++ (cutBuffer.iterator ++ principals.iterator).flatMap { case (c1, c2) => Seq(c1, c2) }).filter(_ != null).toSet
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
       case c if c.symId == 0 => Symbol.NoSymbol
@@ -321,7 +324,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
 
   def createRuleImpls(): (Array[RuleImpl], Int, Int, Vector[(Vector[Symbol], RuleImpl)]) = {
     val (cl, codeGen) =
-      if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/st3/gen", debugBytecode))
+      if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/st3/gen", debugBytecode, collectStats))
       else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxA = new ParSupport.AtomicCounter
@@ -340,10 +343,13 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
       ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
     }
     val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
-    initialRules.foreach { ip =>
+    initialRules.zipWithIndex.foreach { case (ip, i) =>
       maxC.max(ip.maxCells)
       maxA.max(ip.free.size)
-      initial += ((ip.free, createInterpretedRuleImpl(0, ip.branch, None)))
+      val ri =
+        if(compile) codeGen.compileInitial(ip, cl, this, i)
+        else createInterpretedRuleImpl(0, ip.branch, None)
+      initial += ((ip.free, ri))
     }
     (ris, maxC.get, maxA.get, initial.result())
   }
@@ -359,7 +365,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     val w = new PerThreadWorker(this)
     w.setNext(c1, c2)
     w.processNext()
-    val (d1, d2) = w.getNext()
+    val (d1, d2) = w.getNext
     if(d1 != null) cutBuffer.addOne(d1, d2)
   }
 
@@ -410,17 +416,17 @@ final class PerThreadWorker(final val inter: Interpreter) {
   private[this] final val collectStats = inter.collectStats
   var steps, cellAllocations = 0
 
-  final def createCut(c1: Cell, c2: Cell): Unit = {
+  def createCut(c1: Cell, c2: Cell): Unit = {
     if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 }
     else inter.cutBuffer.addOne(c1, c2)
   }
 
-  final def setNext(c1: Cell, c2: Cell): Unit = {
+  def setNext(c1: Cell, c2: Cell): Unit = {
     this.nextCut1 = c1
     this.nextCut2 = c2
   }
 
-  final def flushNext(): Unit = {
+  def flushNext(): Unit = {
     if(nextCut1 != null) {
       inter.cutBuffer.addOne(nextCut1, nextCut2)
       nextCut1 = null
@@ -428,13 +434,9 @@ final class PerThreadWorker(final val inter: Interpreter) {
     }
   }
 
-  final def getNext(): (Cell, Cell) = (nextCut1, nextCut2)
+  def getNext: (Cell, Cell) = (nextCut1, nextCut2)
 
-  final def processNext(): Unit = {
-    val c1 = nextCut1
-    val c2 = nextCut2
-    nextCut1 = null
-    nextCut2 = null
+  def reduceInterpreted(c1: Cell, c2: Cell): Unit = {
     val ri = inter.ruleImpls(inter.mkRuleKey(c1, c2))
     if(ri != null) {
       ri.reduce(c1, c2, this)
@@ -442,11 +444,26 @@ final class PerThreadWorker(final val inter: Interpreter) {
         steps += 1
         cellAllocations += ri.cellAllocationCount
       }
-    } else inter.irreducible.addOne(c1, c2)
+    } else irreducible(c1, c2)
+  }
+
+  def irreducible(c1: Cell, c2: Cell): Unit = inter.irreducible.addOne(c1, c2)
+
+  def recordStats(steps: Int, cellAllocations: Int): Unit = {
+    this.steps += steps
+    this.cellAllocations += cellAllocations
+  }
+
+  def processNext(): Unit = {
+    val c1 = nextCut1
+    val c2 = nextCut2
+    nextCut1 = null
+    nextCut2 = null
+    c1.reduce(c2, this)
   }
 
   @tailrec
-  final def processAll(): Unit = {
+  def processAll(): Unit = {
     processNext()
     if(nextCut1 != null) processAll()
   }

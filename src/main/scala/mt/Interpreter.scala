@@ -211,6 +211,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
     extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val scope: Scope[Cell] with Analyzer[Cell] = new Scope[Cell] with Analyzer[Cell] {
+    def irreduciblePairs: IterableOnce[(Cell, Cell)] = Iterator.empty //TODO
     def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
     def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def getSymbol(c: Cell): Symbol = c match {

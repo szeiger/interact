@@ -2,7 +2,8 @@ package de.szeiger.interact.codegen.dsl
 
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
-import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TryCatchBlockNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.util.Printer
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -58,9 +59,10 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   private[this] val params = ArrayBuffer.empty[Local]
   private[this] val locals = ArrayBuffer.empty[Local]
   private[this] val code = ArrayBuffer.empty[AbstractInsnNode]
+  private[this] val tryCatchBlocks = ArrayBuffer.empty[TryCatchBlockNode]
   private[this] class Local(val name: String, val desc: ValDesc, val access: Acc, val idx: Int, var start: Label, val end: Label) {
     var startPos: Int = -1
-    override def toString: String = s"Label($name, $desc, $idx, $startPos)"
+    override def toString: String = s"Label($name, $desc, $idx, $startPos, $start, $end)"
   }
   private[this] def isStatic = access has Acc.STATIC
   private[this] val argsCount = Type.getArgumentsAndReturnSizes(desc.desc) >> 2
@@ -102,16 +104,16 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
       assert(params.length == argsCount - 1)
       params.foreach(p => mv.visitParameter(p.name, p.access.acc))
       mv.visitCode()
+      tryCatchBlocks.foreach(_.accept(mv))
       mv.visitLabel(start)
       code.zipWithIndex.foreach { case (in, idx) =>
-        //println(s"emitting ${in.getOpcode} ${if(in.getOpcode >= 0 && in.getOpcode < Printer.OPCODES.length) Printer.OPCODES(in.getOpcode) else "???"}")
+        //System.err.println(s"emitting ${in.getOpcode} ${if(in.getOpcode >= 0 && in.getOpcode < Printer.OPCODES.length) Printer.OPCODES(in.getOpcode) else "???"}")
         in.accept(mv)
         in match {
           case in: VarInsnNode if in.getOpcode >= ISTORE && in.getOpcode <= SASTORE =>
-            val v = in.`var`
+            val v = if(isStatic) in.`var` + 1 else in.`var`
             if(v >= argsCount && v - argsCount < locals.length) {
               val l = locals(v-argsCount)
-              //println(s"l: $l; idx: $idx")
               if(l.start == null && l.name != null && l.startPos == idx+1) {
                 val ln = code(idx+1) match {
                   case ln: LabelNode => ln
@@ -135,11 +137,13 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     mv.visitEnd()
   }
 
-  private[this] def stored(v: VarIdx): Unit =
-    if(v.idx >= argsCount && v.idx - argsCount < locals.length) {
-      val l = locals(v.idx - argsCount)
+  private[this] def stored(v: VarIdx): Unit = {
+    val idx = if(isStatic) v.idx + 1 else v.idx
+    if(idx >= argsCount && idx - argsCount < locals.length) {
+      val l = locals(idx - argsCount)
       if(l.startPos == -1) l.startPos = code.length
     }
+  }
 
   private[this] def insn(i: AbstractInsnNode): this.type = { code.addOne(i); this }
   private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = { assert(varIdx != VarIdx.none); insn(new VarInsnNode(opcode, varIdx.idx)) }
@@ -257,10 +261,12 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def getfield(field: FieldRef): this.type = fieldInsn(GETFIELD, field)
 
   def invokespecial(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKESPECIAL, owner, name, desc)
+  def invokestatic(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKESTATIC, owner, name, desc)
   def invokevirtual(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEVIRTUAL, owner, name, desc)
   def invokeinterface(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEINTERFACE, owner, name, desc)
   def invokespecial(method: MethodRef): this.type = methodInsn(INVOKESPECIAL, method)
   def invokespecial(method: ConstructorRef): this.type = methodInsn(INVOKESPECIAL, method)
+  def invokestatic(method: MethodRef): this.type = methodInsn(INVOKESTATIC, method)
   def invokevirtual(method: MethodRef): this.type = methodInsn(INVOKEVIRTUAL, method)
   def invokeinterface(method: MethodRef): this.type = methodInsn(INVOKEINTERFACE, method)
 
@@ -281,4 +287,22 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def invokeInit(cons: ConstructorRef): this.type = invokespecial(cons.tpe, "<init>", cons.desc)
   def newInitDup(cons: ConstructorRef)(f: => Unit): this.type = newInitDup(cons.tpe, cons.desc)(f)
   def newInitConsume(cons: ConstructorRef)(f: => Unit): this.type = newInitConsume(cons.tpe, cons.desc)(f)
+
+  def exceptionHandler(start: Label, end: Label, handler: Label, tpe: Owner = null): this.type = {
+    val cls = if(tpe == null) null else tpe.className
+    tryCatchBlocks += new TryCatchBlockNode(new LabelNode(start), new LabelNode(end), new LabelNode(handler), cls)
+    this
+  }
+  def tryCatchGoto(tpe: Owner = null)(block: => Unit)(handler: => Unit): this.type = {
+    val l1, l2, l3, l4 = newLabel
+    exceptionHandler(l1, l2, l3, tpe)
+    label(l1)
+    block
+    label(l2)
+    goto(l4)
+    label(l3)
+    handler
+    label(l4)
+    this
+  }
 }

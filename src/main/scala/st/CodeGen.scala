@@ -1,19 +1,23 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, SymbolIdLookup}
-import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, Idx, RuleKey, RulePlan}
+import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, GenericRulePlan, Idx, InitialPlan, RuleKey, RulePlan}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
 import scala.collection.mutable
 
-class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st", genPackage, logGenerated) {
+class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
+  extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st", genPackage, logGenerated) {
+
   private val MAX_SPEC_CELL = 2
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")
   private val cellNT = tp.c(s"$interpreterPackage/CellNV")
   private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell${i}V"))
+  private val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
+  private val cell_reduce = cellT.method("reduce", tp.m(cellT, ptwT).V)
   private val cell_symId = cellT.method("symId", tp.m().I)
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
@@ -31,6 +35,8 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     (0 until a).map(p => cellSpecTs(a).method(s"aport${p}_$$eq", tp.m(tp.I).V))
   }
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
+  private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I).V)
+  private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   private val ptw_cutCacheCells = ptwT.method("cutCacheCells", tp.m()(cellT.a))
   private val ptw_cutCachePorts = ptwT.method("cutCachePorts", tp.m()(tp.I.a))
   private val new_CellN_II = cellNT.constr(tp.m(tp.I, tp.I).V)
@@ -38,30 +44,38 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     val params = Seq(tp.I) ++ (0 until a).flatMap(_ => Seq(cellT, tp.I))
     t.constr(tp.m(params: _*).V)
   }
+  private def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
+    tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(concreteCellTFor(sym1), concreteCellTFor(sym2), ptwT).V)
+  private def initialRuleT_static_reduce(idx: Int) =
+    tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, ptwT).V)
 
-  private def interfaceClassName(s: Symbol) = s"$genPackage/I_${encodeName(s)}"
-  private def consClassName(s: Symbol) = s"$genPackage/C_${encodeName(s)}"
-  private def interfaceMethodName(s: Symbol) = s"reduce_${encodeName(s)}"
-  private def genericCellTFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) cellSpecTs(sym.arity) else cellT
+  private def interfaceT(sym: Symbol) = tp.i(s"$genPackage/I_${encodeName(sym)}")
+  private def interfaceMethod(sym: Symbol) = interfaceT(sym).method(s"reduce_${encodeName(sym)}", tp.m(concreteCellTFor(sym), ptwT).V)
   private def genericConstrFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) new_CellSpec(sym.arity) else new_CellN_II
-  private def consConstrFor(sym: Symbol) = tp.c(consClassName(sym)).constr(genericConstrFor(sym).desc)
+  private def concreteCellTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/C_${encodeName(sym)}") else cellT
+  private def concreteConstrFor(sym: Symbol) = concreteCellTFor(sym).constr(genericConstrFor(sym).desc)
 
-
-  def compileRule(g: RulePlan, cl: LocalClassLoader, lookup: SymbolIdLookup): RuleImpl = {
-    val name1 = encodeName(g.sym1)
-    val name2 = encodeName(g.sym2)
-    val implClassName = s"$genPackage/Rule_$name1$$_$name2"
-    val factClassName = s"$genPackage/RuleFactory_$name1$$_$name2"
-    val syms = (Iterator.single(g.sym1) ++ g.branches.iterator.flatMap(_.cells)).distinct.toArray
-    val sids = syms.iterator.map(s => (s, lookup.getSymbolId(s.id))).toMap
-    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, implClassName, riT)
+  def compileInitial(rule: InitialPlan, cl: LocalClassLoader, lookup: SymbolIdLookup, initialIndex: Int): RuleImpl = {
+    val staticMR = initialRuleT_static_reduce(initialIndex)
+    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementRuleClass(ric, sids, g)
+    implementStaticReduce(ric, lookup, rule, staticMR)
+    implementReduce(ric, 0, None, None, staticMR)
     addClass(cl, ric)
     cl.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
   }
 
-  private def findReuse(rule: RulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
+  def compileRule(rule: RulePlan, cl: LocalClassLoader, lookup: SymbolIdLookup): RuleImpl = {
+    val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
+    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
+    ric.emptyNoArgsConstructor(Acc.PUBLIC)
+    implementStaticReduce(ric, lookup, rule, staticMR)
+    implementReduce(ric, lookup.getSymbolId(rule.sym1.id), Some(concreteCellTFor(rule.sym1)), Some(concreteCellTFor(rule.sym2)), staticMR)
+    addClass(cl, ric)
+    cl.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
+  }
+
+  private def findReuse(rule: GenericRulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
     // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
     def countReuseConnections(cellIdx: Int, rhs: Boolean): Int =
       reuseSkip(cellIdx, rhs).length
@@ -107,8 +121,29 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], rule: RulePlan): Unit = {
+  private def implementReduce(c: ClassDSL, sid1: Int, cast1: Option[Owner], cast2: Option[Owner], staticMR: MethodRef): Unit = {
+    val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce.name, ri_reduce.desc)
+    val c1 = m.param("c1", cellT, Acc.FINAL)
+    val c2 = m.param("c2", cellT, Acc.FINAL)
+    val ptw = m.param("ptw", ptwT, Acc.FINAL)
+    m.aload(c1).invokevirtual(cell_symId).iconst(sid1)
+    m.ifThenElseI_== {
+      m.aload(c1)
+      cast1.foreach(m.checkcast)
+      m.aload(c2)
+      cast2.foreach(m.checkcast)
+    } {
+      m.aload(c2)
+      cast1.foreach(m.checkcast)
+      m.aload(c1)
+      cast2.foreach(m.checkcast)
+    }
+    m.aload(ptw).invokestatic(staticMR).return_
+  }
+
+  private def implementStaticReduce(c: ClassDSL, lookup: SymbolIdLookup, rule: GenericRulePlan, mref: MethodRef): Unit = {
     assert(rule.branches.length == 1)
+    val isInitial = rule.isInstanceOf[InitialPlan]
     val branch = rule.branches.head
     var cellAllocations = 0
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
@@ -116,31 +151,17 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     val conns = (branch.wireConnsDistinct ++ branch.internalConnsDistinct).filterNot(skipConns.contains)
     def isReuse(cellIdx: Int): Boolean = cellIdx == reuse1 || cellIdx == reuse2
     def reuseAny = reuse1 != -1 || reuse2 != -1
-    val m = c.method(Acc.PUBLIC, "reduce", tp.m(cellT, cellT, ptwT).V)
-    val cut1 = m.param("cut1", cellT, Acc.FINAL)
-    val cut2 = m.param("cut2", cellT, Acc.FINAL)
+    val m = c.method(Acc.PUBLIC | Acc.STATIC, mref.name, mref.desc)
+    val cLeft = m.param("cLeft", concreteCellTFor(rule.sym1), Acc.FINAL)
+    val cRight = m.param("cRight", concreteCellTFor(rule.sym2), Acc.FINAL)
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
-
-    // Determine lhs and rhs
-    def storeCastCell(name: String, arity: Int, start: Label = null): VarIdx = {
-      if(arity < cellSpecTs.length) m.checkcast(cellSpecTs(arity))
-      val v = m.storeLocal(name, cellT, Acc.FINAL, start = start)
-      v
-    }
-    m.aload(cut1).invokevirtual(cell_symId)
-    m.iconst(sids(rule.sym1))
-    m.ifThenElseI_== { m.aload(cut1).aload(cut2) } { m.aload(cut2).aload(cut1) }
-    val l1 = m.newLabel
-    val cRight = storeCastCell("cRight", rule.arity2, start = l1)
-    val cLeft = storeCastCell("cLeft", rule.arity1, start = l1)
-    m.label(l1)
 
     // Helper methods
     def getAuxCell(a: Int, p: Int): m.type =
-      if(a < cell_acell.length) m.invokevirtual(cell_acell(a)(p))
+      if(a < cell_acell.length && !isInitial) m.invokevirtual(cell_acell(a)(p))
       else m.iconst(p).invokevirtual(cell_auxCell)
     def getAuxPort(a: Int, p: Int): m.type =
-      if(a < cell_aport.length) m.invokevirtual(cell_aport(a)(p))
+      if(a < cell_aport.length && !isInitial) m.invokevirtual(cell_aport(a)(p))
       else m.iconst(p).invokevirtual(cell_auxPort)
     def setAux(a: Int, p: Int, setPort: Boolean = true)(loadC2: => Unit)(loadP2: => Unit): m.type = {
       if(a < cell_acell.length) {
@@ -180,13 +201,13 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     for(idx <- cells.indices) {
       cells(idx) = branch.cells(idx) match {
-        case sym if idx == reuse1 => cLeft
-        case sym if idx == reuse2 => cRight
+        case _ if idx == reuse1 => cLeft
+        case _ if idx == reuse2 => cRight
         case sym =>
-          val constr = consConstrFor(sym)
+          val constr = concreteConstrFor(sym)
           cellAllocations += 1
           m.newInitDup(constr) {
-            m.iconst(sids(sym))
+            m.iconst(lookup.getSymbolId(sym.id))
             if(sym.arity <= MAX_SPEC_CELL) {
               branch.cellConns(idx).tail.foreach {
                 case CellIdx(ci, p) =>
@@ -274,6 +295,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       case Connection(i1: CellIdx, i2: FreeIdx) => connectCF(i1, i2)
       case Connection(i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
     }
+
+    if(collectStats)
+      m.aload(ptw).iconst(1).iconst(cellAllocations).invokevirtual(ptw_recordStats)
     m.return_
 
     // statistics
@@ -281,14 +305,20 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
   }
 
   def compileInterface(sym: Symbol, cl: LocalClassLoader): Unit = {
-//    val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, interfaceClassName(sym))
-//    c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethodName(sym), tp.m(genericCellTFor(sym)).V)
-//    addClass(cl, c)
+    val ifm = interfaceMethod(sym)
+    val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, ifm.owner.className)
+    c.method(Acc.PUBLIC | Acc.ABSTRACT, ifm.name, ifm.desc)
+    addClass(cl, c)
   }
 
   def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader): Unit = {
     val parentConstr = genericConstrFor(sym)
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, consClassName(sym), parentConstr.tpe)
+    val rulePairs = rules.keys.iterator.collect {
+      case rk if rk.sym1 == sym => (rk.sym2, rk)
+      case rk if rk.sym2 == sym => (rk.sym1, rk)
+    }.toMap
+    val interfaces = rulePairs.keysIterator.map(s => interfaceT(s).className).toArray.sorted
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, parentConstr.tpe, interfaces)
 
     // copy constructor
     if(sym.arity <= MAX_SPEC_CELL) {
@@ -305,13 +335,36 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
       val arity = m.param("arity", tp.I, Acc.FINAL)
       m.aload(m.receiver).iload(symId).iload(arity).invokespecial(parentConstr).return_
     }
-//    val pairs = rules.keys.iterator.collect {
-//      case rk if rk.sym1 == sym => (rk.sym2, rk)
-//      case rk if rk.sym2 == sym => (rk.sym1, rk)
-//    }.toMap
-//    pairs.foreach { case (sym2, rk) =>
-//      val m = c.method(Acc.PUBLIC | Acc.FINAL, interfaceMethodName(sym2), tp.m(cellTFor(sym)).V)
-//    }
+
+    // generic reduce
+    {
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_reduce.name, cell_reduce.desc)
+      val other = m.param("other", cellT, Acc.FINAL)
+      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      val ifm = interfaceMethod(sym)
+      m.aload(other)
+      m.tryCatchGoto(tp.c[ClassCastException]) {
+        m.checkcast(ifm.owner)
+      } {
+        m.pop
+        m.aload(ptw).aload(m.receiver).aload(other).invokevirtual(ptw_irreducible)
+        m.return_
+      }
+      m.aload(m.receiver).aload(ptw).invokeinterface(ifm)
+      m.return_
+    }
+
+    // interface methods
+    rulePairs.foreach { case (sym2, rk) =>
+      val ifm = interfaceMethod(sym2)
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, ifm.name, ifm.desc)
+      val other = m.param("other", concreteCellTFor(sym2), Acc.FINAL)
+      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
+      if(rk.sym1 == sym) m.aload(m.receiver).aload(other)
+      else m.aload(other).aload(m.receiver)
+      m.aload(ptw).invokestatic(staticMR).return_
+    }
     addClass(cl, c)
   }
 }
@@ -323,12 +376,12 @@ interface I_dup {
 }
 
 interface I_S {
-  def reduce_S(c: C_dup): Unit
+  def reduce_S(c: C_S): Unit
 }
 
 class C_dup extends Cell2V, I_S, ... {
-  def reduce(c: Cell): Unit = c.asInstanceOf[I_dup].reduce_dup(this)
-  def reduce_S(c: C_dup): Unit = R_dup_S.reduce(this, c)
+  def reduce(c: Cell, ptw: PerThreadWorker): Unit = c.asInstanceOf[I_dup].reduce_dup(this, ptw)
+  def reduce_S(c: C_S): Unit = R_dup_S.reduce(this, c)
 }
 
 class C_S extends Cell2V, I_dup, ... {

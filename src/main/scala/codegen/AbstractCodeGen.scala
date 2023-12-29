@@ -30,7 +30,10 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
     b.result()
   }
 
-  protected def encodeName(s: Symbol): String = encodeName(s.id)
+  protected def encodeName(s: Symbol): String = {
+    assert(s.isDefined)
+    encodeName(s.id)
+  }
 
   protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Unit = {
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)

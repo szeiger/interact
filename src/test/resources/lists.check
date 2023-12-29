@@ -4,3 +4,7 @@
   l0_mapped = 3n :: 4n :: 5n :: Nil
   l0_mapped_lambda = 3n :: 4n :: 5n :: Nil
   listCons = 1n :: 2n :: 3n :: 4n :: 5n ::: Nil
+
+Irreducible pairs:
+  ::: <-> S
+
