@@ -35,7 +35,7 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
     encodeName(s.id)
   }
 
-  protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Unit = {
+  protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Class[_] = {
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
     val ca = new CheckClassAdapter(cw)
     cls.accept(ca)

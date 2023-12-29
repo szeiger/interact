@@ -274,6 +274,7 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
 
   def new_(tpe: Owner): this.type = typeInsn(NEW, tpe)
   def checkcast(tpe: Owner): this.type = typeInsn(CHECKCAST, tpe)
+  def instanceof(tpe: Owner): this.type = typeInsn(INSTANCEOF, tpe)
 
   def newInitDup(tpe: Owner, desc: MethodDesc)(f: => Unit): this.type = {
     new_(tpe)

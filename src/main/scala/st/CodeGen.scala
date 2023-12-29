@@ -1,10 +1,9 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, SymbolIdLookup}
+import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader}
 import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, GenericRulePlan, Idx, InitialPlan, RuleKey, RulePlan}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
-import org.objectweb.asm.Label
 
 import scala.collection.mutable
 
@@ -15,7 +14,6 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
   private val cellT = tp.c(s"$interpreterPackage/Cell")
   private val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   private val cell_reduce = cellT.method("reduce", tp.m(cellT, ptwT).V)
-  private val cell_symId = cellT.method("symId", tp.m().I)
   private val cell_arity = cellT.method("arity", tp.m().I)
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
@@ -41,22 +39,22 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
   private def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
   private def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
 
-  def compileInitial(rule: InitialPlan, cl: LocalClassLoader, lookup: SymbolIdLookup, initialIndex: Int): RuleImpl = {
+  def compileInitial(rule: InitialPlan, cl: LocalClassLoader, initialIndex: Int): RuleImpl = {
     val staticMR = initialRuleT_static_reduce(initialIndex)
     val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, lookup, rule, staticMR)
-    implementReduce(ric, 0, None, None, staticMR)
+    implementStaticReduce(ric, rule, staticMR)
+    implementReduce(ric, None, None, None, staticMR)
     addClass(cl, ric)
     cl.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
   }
 
-  def compileRule(rule: RulePlan, cl: LocalClassLoader, lookup: SymbolIdLookup): RuleImpl = {
+  def compileRule(rule: RulePlan, cl: LocalClassLoader): RuleImpl = {
     val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
     val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, lookup, rule, staticMR)
-    implementReduce(ric, lookup.getSymbolId(rule.sym1.id), Some(concreteCellTFor(rule.sym1)), Some(concreteCellTFor(rule.sym2)), staticMR)
+    implementStaticReduce(ric, rule, staticMR)
+    implementReduce(ric, Some(rule.sym1), Some(concreteCellTFor(rule.sym1)), Some(concreteCellTFor(rule.sym2)), staticMR)
     addClass(cl, ric)
     cl.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
   }
@@ -107,27 +105,35 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
   }
 
-  private def implementReduce(c: ClassDSL, sid1: Int, cast1: Option[Owner], cast2: Option[Owner], staticMR: MethodRef): Unit = {
+  private def implementReduce(c: ClassDSL, symO: Option[Symbol], cast1: Option[Owner], cast2: Option[Owner], staticMR: MethodRef): Unit = {
     val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce.name, ri_reduce.desc)
     val c1 = m.param("c1", cellT, Acc.FINAL)
     val c2 = m.param("c2", cellT, Acc.FINAL)
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
-    m.aload(c1).invokevirtual(cell_symId).iconst(sid1)
-    m.ifThenElseI_== {
-      m.aload(c1)
-      cast1.foreach(m.checkcast)
-      m.aload(c2)
-      cast2.foreach(m.checkcast)
-    } {
-      m.aload(c2)
-      cast1.foreach(m.checkcast)
-      m.aload(c1)
-      cast2.foreach(m.checkcast)
+    symO match {
+      case Some(sym) =>
+        m.aload(c1).instanceof(concreteCellTFor(sym)).iconst(1)
+        m.ifThenElseI_== {
+          m.aload(c1)
+          cast1.foreach(m.checkcast)
+          m.aload(c2)
+          cast2.foreach(m.checkcast)
+        } {
+          m.aload(c2)
+          cast1.foreach(m.checkcast)
+          m.aload(c1)
+          cast2.foreach(m.checkcast)
+        }
+      case None =>
+        m.aload(c1)
+        cast1.foreach(m.checkcast)
+        m.aload(c2)
+        cast2.foreach(m.checkcast)
     }
     m.aload(ptw).invokestatic(staticMR).return_
   }
 
-  private def implementStaticReduce(c: ClassDSL, lookup: SymbolIdLookup, rule: GenericRulePlan, mref: MethodRef): Unit = {
+  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef): Unit = {
     assert(rule.branches.length == 1)
     val isInitial = rule.isInstanceOf[InitialPlan]
     val branch = rule.branches.head
@@ -281,9 +287,6 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     if(collectStats)
       m.aload(ptw).iconst(1).iconst(cellAllocations).invokevirtual(ptw_recordStats)
     m.return_
-
-    // statistics
-    c.method(Acc.PUBLIC, "cellAllocationCount", tp.m().I).iconst(cellAllocations).ireturn
   }
 
   def compileInterface(sym: Symbol, cl: LocalClassLoader): Unit = {
@@ -293,7 +296,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     addClass(cl, c)
   }
 
-  def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader, lookup: SymbolIdLookup): Unit = {
+  def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader): Class[_] = {
     val rulePairs = rules.keys.iterator.collect {
       case rk if rk.sym1 == sym => (rk.sym2, rk)
       case rk if rk.sym2 == sym => (rk.sym1, rk)
@@ -307,7 +310,6 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
 
     // accessors
     c.method(Acc.PUBLIC | Acc.FINAL, cell_arity).iconst(sym.arity).ireturn
-    c.method(Acc.PUBLIC | Acc.FINAL, cell_symId).iconst(lookup.getSymbolId(sym.id)).ireturn
 
     {
       val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_auxCell)
@@ -385,23 +387,3 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     addClass(cl, c)
   }
 }
-
-/*
-
-interface I_dup {
-  def reduce_dup(c: C_dup): Unit
-}
-
-interface I_S {
-  def reduce_S(c: C_S): Unit
-}
-
-class C_dup extends Cell2V, I_S, ... {
-  def reduce(c: Cell, ptw: PerThreadWorker): Unit = c.asInstanceOf[I_dup].reduce_dup(this, ptw)
-  def reduce_S(c: C_S): Unit = R_dup_S.reduce(this, c)
-}
-
-class C_S extends Cell2V, I_dup, ... {
-}
-
-*/
