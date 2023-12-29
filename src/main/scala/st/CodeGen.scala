@@ -25,7 +25,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
   private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   private val ptw_cutCacheCells = ptwT.method("cutCacheCells", tp.m()(cellT.a))
   private val ptw_cutCachePorts = ptwT.method("cutCachePorts", tp.m()(tp.I.a))
-  private val new_Cell = cellT.constr(tp.m(tp.I).V)
+  private val new_Cell = cellT.constr(tp.m().V)
 
   private def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
     tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(concreteCellTFor(sym1), concreteCellTFor(sym2), ptwT).V)
@@ -307,6 +307,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
 
     // accessors
     c.method(Acc.PUBLIC | Acc.FINAL, cell_arity).iconst(sym.arity).ireturn
+    c.method(Acc.PUBLIC | Acc.FINAL, cell_symId).iconst(lookup.getSymbolId(sym.id)).ireturn
 
     {
       val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_auxCell)
@@ -345,7 +346,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
       val params = (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
       val m = c.constructor(Acc.PUBLIC, tp.m(params: _*))
       val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
-      m.aload(m.receiver).iconst(lookup.getSymbolId(sym.id)).invokespecial(new_Cell)
+      m.aload(m.receiver).invokespecial(new_Cell)
       aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
         m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
       }
