@@ -15,8 +15,12 @@ abstract class Cell(final var symId: Int) {
   def auxCell(p: Int): Cell
   def auxPort(p: Int): Int
   def setAux(p: Int, c2: Cell, p2: Int): Unit
-  def getGenericPayload: Any
-  def setGenericPayload(v: Any): Unit
+
+  final def getGenericPayload: Any = this match {
+    case b: IntBox => b.getValue
+    case b: RefBox => b.getValue
+    case _ => ()
+  }
 
   final def auxPortsIterator: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (auxCell(i), auxPort(i)))
   override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${auxPortsIterator.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
@@ -28,20 +32,14 @@ trait IntCell extends IntBox {
   private[this] final var payload: Int = 0
   def setValue(i: Int) = payload = i
   def getValue: Int = payload
-  def setGenericPayload(v: Any): Unit = payload = v.asInstanceOf[Int]
-  def getGenericPayload: Any = payload
 }
 trait RefCell extends RefBox {
   private[this] final var payload: AnyRef = null
   def setValue(o: AnyRef) = payload = o
   def getValue: AnyRef = payload
-  def setGenericPayload(v: Any): Unit = payload = v.asInstanceOf[AnyRef]
-  def getGenericPayload: Any = payload
 }
 trait VoidCell {
   def getValue: Unit = ()
-  def setGenericPayload(v: Any): Unit = ()
-  def getGenericPayload: Any = ()
 }
 
 abstract class Cell0(_symId: Int) extends Cell(_symId) {
@@ -331,7 +329,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     if(compile)
       ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileInterface(_, cl))
     if(compile)
-      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileCons(_, rules, cl))
+      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileCons(_, rules, cl, this))
     ParSupport.foreach(rules.values) { g =>
       maxC.max(g.maxCells)
       maxA.max(g.arity1)

@@ -11,49 +11,35 @@ import scala.collection.mutable
 class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
   extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st", genPackage, logGenerated) {
 
-  private val MAX_SPEC_CELL = 2
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")
-  private val cellNT = tp.c(s"$interpreterPackage/CellNV")
-  private val cellSpecTs = (0 to MAX_SPEC_CELL).map(i => tp.c(s"$interpreterPackage/Cell${i}V"))
   private val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   private val cell_reduce = cellT.method("reduce", tp.m(cellT, ptwT).V)
   private val cell_symId = cellT.method("symId", tp.m().I)
+  private val cell_arity = cellT.method("arity", tp.m().I)
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
-  private val cell_acell = (0 to MAX_SPEC_CELL).map { a =>
-    (0 until a).map(p => cellSpecTs(a).method(s"acell$p", tp.m()(cellT)))
-  }
-  private val cell_aport = (0 to MAX_SPEC_CELL).map { a =>
-    (0 until a).map(p => cellSpecTs(a).method(s"aport$p", tp.m()(tp.I)))
-  }
-  private val cell_acellSetter = (0 to MAX_SPEC_CELL).map { a =>
-    (0 until a).map(p => cellSpecTs(a).method(s"acell${p}_$$eq", tp.m(cellT).V))
-  }
-  private val cell_aportSetter = (0 to MAX_SPEC_CELL).map { a =>
-    (0 until a).map(p => cellSpecTs(a).method(s"aport${p}_$$eq", tp.m(tp.I).V))
-  }
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
   private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I).V)
   private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   private val ptw_cutCacheCells = ptwT.method("cutCacheCells", tp.m()(cellT.a))
   private val ptw_cutCachePorts = ptwT.method("cutCachePorts", tp.m()(tp.I.a))
-  private val new_CellN_II = cellNT.constr(tp.m(tp.I, tp.I).V)
-  private val new_CellSpec = cellSpecTs.zipWithIndex.map { case (t, a) =>
-    val params = Seq(tp.I) ++ (0 until a).flatMap(_ => Seq(cellT, tp.I))
-    t.constr(tp.m(params: _*).V)
-  }
+  private val new_Cell = cellT.constr(tp.m(tp.I).V)
+
   private def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
     tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(concreteCellTFor(sym1), concreteCellTFor(sym2), ptwT).V)
   private def initialRuleT_static_reduce(idx: Int) =
     tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, ptwT).V)
-
   private def interfaceT(sym: Symbol) = tp.i(s"$genPackage/I_${encodeName(sym)}")
   private def interfaceMethod(sym: Symbol) = interfaceT(sym).method(s"reduce_${encodeName(sym)}", tp.m(concreteCellTFor(sym), ptwT).V)
-  private def genericConstrFor(sym: Symbol) = if(sym.arity <= MAX_SPEC_CELL) new_CellSpec(sym.arity) else new_CellN_II
   private def concreteCellTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/C_${encodeName(sym)}") else cellT
-  private def concreteConstrFor(sym: Symbol) = concreteCellTFor(sym).constr(genericConstrFor(sym).desc)
+  private def concreteConstrFor(sym: Symbol) = {
+    val params = (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
+    concreteCellTFor(sym).constr(tp.m(params: _*).V)
+  }
+  private def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
+  private def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
 
   def compileInitial(rule: InitialPlan, cl: LocalClassLoader, lookup: SymbolIdLookup, initialIndex: Int): RuleImpl = {
     val staticMR = initialRuleT_static_reduce(initialIndex)
@@ -157,47 +143,46 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
 
     // Helper methods
-    def getAuxCell(a: Int, p: Int): m.type =
-      if(a < cell_acell.length && !isInitial) m.invokevirtual(cell_acell(a)(p))
-      else m.iconst(p).invokevirtual(cell_auxCell)
-    def getAuxPort(a: Int, p: Int): m.type =
-      if(a < cell_aport.length && !isInitial) m.invokevirtual(cell_aport(a)(p))
-      else m.iconst(p).invokevirtual(cell_auxPort)
-    def setAux(a: Int, p: Int, setPort: Boolean = true)(loadC2: => Unit)(loadP2: => Unit): m.type = {
-      if(a < cell_acell.length) {
-        if(setPort) {
-          m.dup
-          loadP2; m.invokevirtual(cell_aportSetter(a)(p))
-        }
-        loadC2; m.invokevirtual(cell_acellSetter(a)(p))
-      }
-      else {
-        m.iconst(p) ; loadC2 ; loadP2
-        m.invokevirtual(cell_setAux)
-      }
+    def getAuxCell(rhs: Boolean, p: Int): m.type = {
+      if(isInitial) m.iconst(p).invokevirtual(cell_auxCell)
+      else m.getfield(cell_acell(if(rhs) rule.sym2 else rule.sym1, p))
+    }
+    def getAuxPort(rhs: Boolean, p: Int): m.type = {
+      if(isInitial) m.iconst(p).invokevirtual(cell_auxPort)
+      else m.getfield(cell_aport(if(rhs) rule.sym2 else rule.sym1, p))
+    }
+    def setAux(sym: Symbol, p: Int, setPort: Boolean = true)(loadC2: => Unit)(loadP2: => Unit): m.type = {
+      m.dup
+      loadC2
+      m.putfield(cell_acell(sym, p))
+      loadP2
+      m.putfield(cell_aport(sym, p))
     }
 
-    // Copy cached cells (if not skipped due to reuse)
-    val skipCache = skipConns.flatMap { case Connection(a, b) => Seq(a, b) }.collect {
-      case CellIdx(i, p) if i == reuse1 => (false, p)
-      case CellIdx(i, p) if i == reuse2 => (true, p)
-    }
     val cccells = m.aload(ptw).invokevirtual(ptw_cutCacheCells).storeLocal("cccells", cellT.a)
     val ccports = m.aload(ptw).invokevirtual(ptw_cutCachePorts).storeLocal("ccports", tp.I.a)
-    (0 until rule.arity1).foreach { p =>
-      if(!skipCache.contains((false, p))) {
-        m.aload(cccells).iconst(p).aload(cLeft); getAuxCell(rule.arity1, p).aastore
-        m.aload(ccports).iconst(p).aload(cLeft); getAuxPort(rule.arity1, p).iastore
+
+    // Copy cached cells (if not skipped due to reuse)
+    {
+      val skipCache = skipConns.flatMap { case Connection(a, b) => Seq(a, b) }.collect {
+        case CellIdx(i, p) if i == reuse1 => (false, p)
+        case CellIdx(i, p) if i == reuse2 => (true, p)
       }
-    }
-    (0 until rule.arity2).foreach { p =>
-      if(!skipCache.contains((true, p))) {
-        m.aload(cccells).iconst(p + rule.arity1).aload(cRight); getAuxCell(rule.arity2, p).aastore
-        m.aload(ccports).iconst(p + rule.arity1).aload(cRight); getAuxPort(rule.arity2, p).iastore
+      (0 until rule.arity1).foreach { p =>
+        if(!skipCache.contains((false, p))) {
+          m.aload(cccells).iconst(p).aload(cLeft); getAuxCell(false, p).aastore
+          m.aload(ccports).iconst(p).aload(cLeft); getAuxPort(false, p).iastore
+        }
+      }
+      (0 until rule.arity2).foreach { p =>
+        if(!skipCache.contains((true, p))) {
+          m.aload(cccells).iconst(p + rule.arity1).aload(cRight); getAuxCell(true, p).aastore
+          m.aload(ccports).iconst(p + rule.arity1).aload(cRight); getAuxPort(true, p).iastore
+        }
       }
     }
 
-    // Create new cells & update symbols of reused cells
+    // Create new cells
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     for(idx <- cells.indices) {
       cells(idx) = branch.cells(idx) match {
@@ -207,15 +192,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
           val constr = concreteConstrFor(sym)
           cellAllocations += 1
           m.newInitDup(constr) {
-            m.iconst(lookup.getSymbolId(sym.id))
-            if(sym.arity <= MAX_SPEC_CELL) {
-              branch.cellConns(idx).tail.foreach {
-                case CellIdx(ci, p) =>
-                  if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
-                  m.iconst(p)
-                case f: FreeIdx => ldBoth(f)
-              }
-            } else m.iconst(sym.arity)
+            branch.cellConns(idx).tail.foreach {
+              case CellIdx(ci, p) =>
+                if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
+                m.iconst(p)
+              case f: FreeIdx => ldBoth(f)
+            }
           }
           m.storeLocal(s"c$idx", constr.tpe, Acc.FINAL)
       }
@@ -224,11 +206,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     // Cell accessors
     def ldCell(idx: Idx) = idx match {
       case FreeIdx(rhs, i) => m.aload(cccells).iconst(if(rhs) i + rule.arity1 else i).aaload
-      case CellIdx(i, p) => m.aload(cells(i))
+      case CellIdx(i, _) => m.aload(cells(i))
     }
     def ldPort(idx: Idx) = idx match {
       case FreeIdx(rhs, i) => m.aload(ccports).iconst(if(rhs) i + rule.arity1 else i).iaload
-      case CellIdx(i, p) => m.iconst(p)
+      case CellIdx(_, p) => m.iconst(p)
     }
     def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
 
@@ -237,7 +219,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
       val (c1, p1) = (ct1.idx, ct1.port)
       if(isReuse(c1)) {
         m.aload(cells(c1))
-        if(p1 >= 0) setAux(branch.cells(c1).arity, p1)(ldCell(ct2))(ldPort(ct2))
+        if(p1 >= 0) setAux(branch.cells(c1), p1)(ldCell(ct2))(ldPort(ct2))
       }
       if(p1 < 0) {
         ldPort(ct2).iconst(0).ifThenElseI_>= {
@@ -278,12 +260,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
       if(c2 >= c1 || isReuse(c1)) {
         m.aload(cells(c1))
         if(p1 >= 0)
-          setAux(branch.cells(c1).arity, p1, isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
+          setAux(branch.cells(c1), p1, isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
       }
       if(c1 >= c2 || isReuse(c2)) {
         m.aload(cells(c2))
         if(p2 >= 0)
-          setAux(branch.cells(c2).arity, p2, isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
+          setAux(branch.cells(c2), p2, isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
       }
       if(p1 < 0 && p2 < 0) {
         m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
@@ -311,29 +293,63 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     addClass(cl, c)
   }
 
-  def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader): Unit = {
-    val parentConstr = genericConstrFor(sym)
+  def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], cl: LocalClassLoader, lookup: SymbolIdLookup): Unit = {
     val rulePairs = rules.keys.iterator.collect {
       case rk if rk.sym1 == sym => (rk.sym2, rk)
       case rk if rk.sym2 == sym => (rk.sym1, rk)
     }.toMap
     val interfaces = rulePairs.keysIterator.map(s => interfaceT(s).className).toArray.sorted
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, parentConstr.tpe, interfaces)
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, cellT, interfaces)
 
-    // copy constructor
-    if(sym.arity <= MAX_SPEC_CELL) {
-      val params = Seq(tp.I) ++ (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
+    // fields
+    val cfields = (0 until sym.arity).map(i => c.field(Acc.PUBLIC, s"acell$i", cellT))
+    val pfields = (0 until sym.arity).map(i => c.field(Acc.PUBLIC, s"aport$i", tp.I))
+
+    // accessors
+    c.method(Acc.PUBLIC | Acc.FINAL, cell_arity).iconst(sym.arity).ireturn
+
+    {
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_auxCell)
+      val p1 = m.param("p1", tp.I, Acc.FINAL)
+      sym.arity match {
+        case 0 => m.aconst_null.areturn
+        case 1 => m.aload(m.receiver).getfield(cfields(0)).areturn
+        case a => m.aload(m.receiver).iload(p1).tableSwitch(0, (0 until a).map { i => () => m.getfield(cfields(i)).areturn }: _*)
+      }
+    }
+
+    {
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_auxPort)
+      val p1 = m.param("p1", tp.I, Acc.FINAL)
+      sym.arity match {
+        case 0 => m.iconst(0).ireturn
+        case 1 => m.aload(m.receiver).getfield(pfields(0)).ireturn
+        case a => m.aload(m.receiver).iload(p1).tableSwitch(0, (0 until a).map { i => () => m.getfield(pfields(i)).ireturn }: _*)
+      }
+    }
+
+    {
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_setAux)
+      val p1 = m.param("p1", tp.I, Acc.FINAL)
+      val c2 = m.param("c2", cellT, Acc.FINAL)
+      val p2 = m.param("p2", tp.I, Acc.FINAL)
+      sym.arity match {
+        case 0 => m.return_
+        case 1 => m.aload(m.receiver).dup.aload(c2).putfield(cfields(0)).iload(p2).putfield(pfields(0)).return_
+        case a => m.aload(m.receiver).dup.iload(p1).tableSwitch(0, (0 until a).map { i => () => m.aload(c2).putfield(cfields(i)).iload(p2).putfield(pfields(i)).return_ }: _*)
+      }
+    }
+
+    // constructor
+    {
+      val params = (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
       val m = c.constructor(Acc.PUBLIC, tp.m(params: _*))
-      val symId = m.param("symId", tp.I, Acc.FINAL)
       val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
-      m.aload(m.receiver).iload(symId)
-      aux.foreach { case (c, p) => m.aload(c).iload(p) }
-      m.invokespecial(parentConstr).return_
-    } else {
-      val m = c.constructor(Acc.PUBLIC, tp.m(tp.I, tp.I))
-      val symId = m.param("symId", tp.I, Acc.FINAL)
-      val arity = m.param("arity", tp.I, Acc.FINAL)
-      m.aload(m.receiver).iload(symId).iload(arity).invokespecial(parentConstr).return_
+      m.aload(m.receiver).iconst(lookup.getSymbolId(sym.id)).invokespecial(new_Cell)
+      aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
+        m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
+      }
+      m.return_
     }
 
     // generic reduce

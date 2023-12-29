@@ -3,7 +3,7 @@ package de.szeiger.interact.codegen
 import de.szeiger.interact.RulePlan
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
-import org.objectweb.asm.util.{Textifier, TraceClassVisitor}
+import org.objectweb.asm.util.{CheckClassAdapter, Textifier, TraceClassVisitor}
 import org.objectweb.asm.{ClassReader, ClassWriter}
 
 import java.io.{OutputStreamWriter, PrintWriter}
@@ -37,7 +37,8 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
 
   protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Unit = {
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
-    cls.accept(cw)
+    val ca = new CheckClassAdapter(cw)
+    cls.accept(ca)
     val raw = cw.toByteArray
     if(logGenerated) {
       val cr = new ClassReader(raw)

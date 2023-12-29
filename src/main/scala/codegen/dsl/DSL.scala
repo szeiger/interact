@@ -2,7 +2,7 @@ package de.szeiger.interact.codegen.dsl
 
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
-import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TryCatchBlockNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TableSwitchInsnNode, TryCatchBlockNode, TypeInsnNode, VarInsnNode}
 import org.objectweb.asm.util.Printer
 
 import scala.collection.mutable.ArrayBuffer
@@ -45,6 +45,8 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
     methods.addOne(m)
     m
   }
+
+  def method(access: Acc, ref: MethodRef): MethodDSL = method(access, ref.name, ref.desc)
 
   def constructor(access: Acc, desc: Desc.MethodArgs): MethodDSL = method(access, "<init>", desc.V)
 
@@ -261,13 +263,13 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def getfield(field: FieldRef): this.type = fieldInsn(GETFIELD, field)
 
   def invokespecial(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKESPECIAL, owner, name, desc)
-  def invokestatic(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKESTATIC, owner, name, desc)
-  def invokevirtual(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEVIRTUAL, owner, name, desc)
-  def invokeinterface(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEINTERFACE, owner, name, desc)
   def invokespecial(method: MethodRef): this.type = methodInsn(INVOKESPECIAL, method)
   def invokespecial(method: ConstructorRef): this.type = methodInsn(INVOKESPECIAL, method)
+  def invokestatic(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKESTATIC, owner, name, desc)
   def invokestatic(method: MethodRef): this.type = methodInsn(INVOKESTATIC, method)
+  def invokevirtual(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEVIRTUAL, owner, name, desc)
   def invokevirtual(method: MethodRef): this.type = methodInsn(INVOKEVIRTUAL, method)
+  def invokeinterface(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEINTERFACE, owner, name, desc)
   def invokeinterface(method: MethodRef): this.type = methodInsn(INVOKEINTERFACE, method)
 
   def new_(tpe: Owner): this.type = typeInsn(NEW, tpe)
@@ -303,6 +305,18 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     label(l3)
     handler
     label(l4)
+    this
+  }
+
+  def tableswitch(min: Int, max: Int, deflt: Label, labels: Seq[Label]): this.type =
+    insn(new TableSwitchInsnNode(min, max, new LabelNode(deflt), labels.map(new LabelNode(_)): _*))
+  def tableSwitch(min: Int, blocks: (() => _)*): this.type = {
+    val labels = blocks.map(_ => newLabel)
+    tableswitch(min, min+blocks.length-2, labels.last, labels.init)
+    blocks.zip(labels).foreach { case (b, l) =>
+      label(l)
+      b()
+    }
     this
   }
 }
