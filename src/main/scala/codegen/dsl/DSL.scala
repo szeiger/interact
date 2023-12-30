@@ -198,6 +198,7 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def iand: this.type = insn(IAND)
   def ixor: this.type = insn(IXOR)
   def aconst_null: this.type = insn(ACONST_NULL)
+  def iadd: this.type = insn(IADD)
 
   def iconst(i: Int): this.type = i match {
     case -1 => insn(ICONST_M1)

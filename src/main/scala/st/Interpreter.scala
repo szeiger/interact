@@ -232,7 +232,6 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
-  def createCutCache(): (Array[Cell], Array[Int]) = (new Array[Cell](maxArity*2), new Array[Int](maxArity*2))
 
   def createInterpretedRuleImpl(sym1Id: Int, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
@@ -336,7 +335,6 @@ final class CutBuffer(initialSize: Int) {
 
 final class PerThreadWorker(final val inter: Interpreter) {
   final val tempCells = inter.createTempCells()
-  final val (cutCacheCells, cutCachePorts) = inter.createCutCache()
   private[this] final var nextCut1, nextCut2: Cell = _
   private[this] final val collectStats = inter.collectStats
   var steps, cellAllocations = 0
