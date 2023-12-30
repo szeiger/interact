@@ -110,25 +110,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     val c1 = m.param("c1", cellT, Acc.FINAL)
     val c2 = m.param("c2", cellT, Acc.FINAL)
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
+    def leftFirst = { m.aload(c1); cast1.foreach(m.checkcast); m.aload(c2); cast2.foreach(m.checkcast) }
+    def rightFirst = { m.aload(c2); cast1.foreach(m.checkcast); m.aload(c1); cast2.foreach(m.checkcast) }
     symO match {
-      case Some(sym) =>
-        m.aload(c1).instanceof(concreteCellTFor(sym)).iconst(1)
-        m.ifThenElseI_== {
-          m.aload(c1)
-          cast1.foreach(m.checkcast)
-          m.aload(c2)
-          cast2.foreach(m.checkcast)
-        } {
-          m.aload(c2)
-          cast1.foreach(m.checkcast)
-          m.aload(c1)
-          cast2.foreach(m.checkcast)
-        }
-      case None =>
-        m.aload(c1)
-        cast1.foreach(m.checkcast)
-        m.aload(c2)
-        cast2.foreach(m.checkcast)
+      case Some(sym) => m.aload(c1).instanceof(concreteCellTFor(sym)).if0ThenElse_!= (leftFirst)(rightFirst)
+      case None => leftFirst
     }
     m.aload(ptw).invokestatic(staticMR).return_
   }
@@ -158,11 +144,14 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
       else m.getfield(cell_aport(if(rhs) rule.sym2 else rule.sym1, p))
     }
     def setAux(sym: Symbol, p: Int, setPort: Boolean = true)(loadC2: => Unit)(loadP2: => Unit): m.type = {
-      m.dup
+      if(setPort) m.dup
       loadC2
       m.putfield(cell_acell(sym, p))
-      loadP2
-      m.putfield(cell_aport(sym, p))
+      if(setPort) {
+        loadP2
+        m.putfield(cell_aport(sym, p))
+      }
+      m
     }
 
     val cccells = m.aload(ptw).invokevirtual(ptw_cutCacheCells).storeLocal("cccells", cellT.a)
@@ -223,18 +212,18 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     // Connect remaining wires
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
-      if(isReuse(c1)) {
+      if(isReuse(c1) && p1 >= 0) {
         m.aload(cells(c1))
-        if(p1 >= 0) setAux(branch.cells(c1), p1)(ldCell(ct2))(ldPort(ct2))
+        setAux(branch.cells(c1), p1)(ldCell(ct2))(ldPort(ct2))
       }
       if(p1 < 0) {
-        ldPort(ct2).iconst(0).ifThenElseI_>= {
+        ldPort(ct2).if0ThenElse_>= {
           ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
         } {
           m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
         }
       } else {
-        ldPort(ct2).iconst(0).ifThenI_>= {
+        ldPort(ct2).if0Then_>= {
           ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
         }
       }
@@ -249,13 +238,13 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
 //      }
     }
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
-      ldPort(ct1).iconst(0).ifThenI_>= {
+      ldPort(ct1).if0Then_>= {
         ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setAux)
       }
-      ldPort(ct2).iconst(0).ifThenElseI_>= {
+      ldPort(ct2).if0ThenElse_>= {
         ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
       } {
-        ldPort(ct1).iconst(0).ifThenI_< {
+        ldPort(ct1).if0Then_< {
           m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
         }
       }
@@ -263,15 +252,13 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
       val (c2, p2) = (ct2.idx, ct2.port)
-      if(c2 >= c1 || isReuse(c1)) {
+      if((c2 >= c1 || isReuse(c1)) && p1 >= 0) {
         m.aload(cells(c1))
-        if(p1 >= 0)
-          setAux(branch.cells(c1), p1, isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
+        setAux(branch.cells(c1), p1, isReuse(c1))(m.aload(cells(c2)))(m.iconst(p2))
       }
-      if(c1 >= c2 || isReuse(c2)) {
+      if((c1 >= c2 || isReuse(c2)) && p2 >= 0) {
         m.aload(cells(c2))
-        if(p2 >= 0)
-          setAux(branch.cells(c2), p2, isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
+        setAux(branch.cells(c2), p2, isReuse(c2))(m.aload(cells(c1)))(m.iconst(p1))
       }
       if(p1 < 0 && p2 < 0) {
         m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)

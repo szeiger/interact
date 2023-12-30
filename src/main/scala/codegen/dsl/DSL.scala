@@ -221,6 +221,11 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def if_icmpgt(l: Label): this.type = jumpInsn(IF_ICMPGT, l)
   def if_icmple(l: Label): this.type = jumpInsn(IF_ICMPLE, l)
   def if_icmplt(l: Label): this.type = jumpInsn(IF_ICMPLT, l)
+  def ifeq(l: Label): this.type = jumpInsn(IFEQ, l)
+  def ifne(l: Label): this.type = jumpInsn(IFNE, l)
+  def iflt(l: Label): this.type = jumpInsn(IFLT, l)
+  def ifgt(l: Label): this.type = jumpInsn(IFGT, l)
+  def ifle(l: Label): this.type = jumpInsn(IFLE, l)
 
   private[this] def ifThenElse(opcode: Int, cont: => Unit, skip: => Unit): this.type = {
     val lElse, lEndif = new Label
@@ -236,11 +241,32 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     label(lEndif)
     this
   }
+  def ifThenI_== (cont: => Unit): this.type = ifThen(IF_ICMPNE, cont)
+  def ifThenI_!= (cont: => Unit): this.type = ifThen(IF_ICMPEQ, cont)
+  def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
+  def ifThenI_> (cont: => Unit): this.type = ifThen(IF_ICMPLE, cont)
+  def ifThenI_<= (cont: => Unit): this.type = ifThen(IF_ICMPGT, cont)
+  def ifThenI_>= (cont: => Unit): this.type = ifThen(IF_ICMPLT, cont)
+  def if0Then_== (cont: => Unit): this.type = ifThen(IFNE, cont)
+  def if0Then_!= (cont: => Unit): this.type = ifThen(IFEQ, cont)
+  def if0Then_< (cont: => Unit): this.type = ifThen(IFGE, cont)
+  def if0Then_> (cont: => Unit): this.type = ifThen(IFLE, cont)
+  def if0Then_<= (cont: => Unit): this.type = ifThen(IFGT, cont)
+  def if0Then_>= (cont: => Unit): this.type = ifThen(IFLT, cont)
+
   def ifThenElseI_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPNE, cont, skip)
   def ifThenElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPEQ, cont, skip)
+  def ifThenElseI_< (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPGE, cont, skip)
+  def ifThenElseI_> (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPLE, cont, skip)
+  def ifThenElseI_<= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPGT, cont, skip)
   def ifThenElseI_>= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPLT, cont, skip)
-  def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
-  def ifThenI_>= (cont: => Unit): this.type = ifThen(IF_ICMPLT, cont)
+  def if0ThenElse_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFNE, cont, skip)
+  def if0ThenElse_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFEQ, cont, skip)
+  def if0ThenElse_< (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFGE, cont, skip)
+  def if0ThenElse_> (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFLE, cont, skip)
+  def if0ThenElse_<= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFGT, cont, skip)
+  def if0ThenElse_>= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFLT, cont, skip)
+
   def ifThenA_== (cont: => Unit): this.type = ifThen(IF_ACMPNE, cont)
   def ifThenA_!= (cont: => Unit): this.type = ifThen(IF_ACMPEQ, cont)
   def ifThenElseA_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPNE, cont, skip)
