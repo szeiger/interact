@@ -1,6 +1,6 @@
 package de.szeiger.interact.mt
 
-import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, RuleImplFactory, SymbolIdLookup}
+import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader}
 import de.szeiger.interact.{CellIdx, Connection, FreeIdx, RulePlan}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
@@ -218,15 +218,15 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     }
     allConns.foreach { case conn @ Connection(idx1, idx2) =>
       def connectWW(i1: FreeIdx, i2: FreeIdx): Unit = {
-        val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
-        val r = if(i2.rhs) rhs(i2.idx) else lhs(i2.idx)
+        val l = if(i1.rhs) rhs(i1.port) else lhs(i1.port)
+        val r = if(i2.rhs) rhs(i2.port) else lhs(i2.port)
         m.aload(ptw).aload(l).aload(r).invokevirtual(ptw_connectFreeToFree)
       }
       def connectWC(i1: FreeIdx, i2: CellIdx): Unit = {
-        val skip1 = i2.idx == reuse1 && !i1.rhs && i2.port == i1.idx
-        val skip2 = i2.idx == reuse2 && i1.rhs && i2.port == i1.idx
+        val skip1 = i2.idx == reuse1 && !i1.rhs && i2.port == i1.port
+        val skip2 = i2.idx == reuse2 && i1.rhs && i2.port == i1.port
         if((!skip1 && !skip2) || i2.port == -1) { //TODO: Allow i2.port == -1 and check for cut
-          val l = if(i1.rhs) rhs(i1.idx) else lhs(i1.idx)
+          val l = if(i1.rhs) rhs(i1.port) else lhs(i1.port)
           m.aload(ptw).aload(l).aload(cells(i2.idx))
           ptwConnectLL(branch.cells(i2.idx).arity, i2.port)
           if(i2.port < 0) deferred += l
@@ -290,4 +290,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     c.method(Acc.PUBLIC, "cellAllocationCount", tp.m().I).iconst(cellAllocations).ireturn
     c.method(Acc.PUBLIC, "wireAllocationCount", tp.m().I).iconst(wireAllocations).ireturn
   }
+}
+
+trait SymbolIdLookup {
+  def getSymbolId(name: String): Int
+}
+
+abstract class RuleImplFactory[T] {
+  def apply(lookup: SymbolIdLookup): T
 }

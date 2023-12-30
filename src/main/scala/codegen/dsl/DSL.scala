@@ -227,6 +227,8 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def iflt(l: Label): this.type = jumpInsn(IFLT, l)
   def ifgt(l: Label): this.type = jumpInsn(IFGT, l)
   def ifle(l: Label): this.type = jumpInsn(IFLE, l)
+  def ifnull(l: Label): this.type = jumpInsn(IFNULL, l)
+  def ifnonnull(l: Label): this.type = jumpInsn(IFNONNULL, l)
 
   private[this] def ifThenElse(opcode: Int, cont: => Unit, skip: => Unit): this.type = {
     val lElse, lEndif = new Label

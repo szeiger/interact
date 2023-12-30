@@ -5,7 +5,9 @@ import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, GenericRul
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
+import java.util.ArrayList
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
   extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/st", genPackage, logGenerated) {
@@ -131,19 +133,13 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     val cRight = m.param("cRight", concreteCellTFor(rule.sym2), Acc.FINAL)
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
 
-    // Helper methods
-    def getAuxCell(rhs: Boolean, p: Int): m.type = {
-      if(isInitial) m.iconst(p).invokevirtual(cell_auxCell)
-      else m.getfield(cell_acell(if(rhs) rule.sym2 else rule.sym1, p))
-    }
-    def getAuxPort(rhs: Boolean, p: Int): m.type = {
-      if(isInitial) m.iconst(p).invokevirtual(cell_auxPort)
-      else m.getfield(cell_aport(if(rhs) rule.sym2 else rule.sym1, p))
-    }
+    val createOrder = optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)
 
     // Create new cells
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
-    for(idx <- cells.indices) {
+    val cellPortsConnected = mutable.HashSet.empty[CellIdx]
+    var cellPortsNotConnected = 0
+    for(idx <- createOrder) {
       cells(idx) = branch.cells(idx) match {
         case _ if idx == reuse1 => cLeft
         case _ if idx == reuse2 => cRight
@@ -151,40 +147,48 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
           val constr = concreteConstrFor(sym)
           cellAllocations += 1
           m.newInitDup(constr) {
-            branch.cellConns(idx).tail.foreach {
-              case CellIdx(ci, p) =>
-                if(cells(ci) == VarIdx.none) m.aconst_null else m.aload(cells(ci))
-                m.iconst(p)
-              case f: FreeIdx => ldBoth(f)
+            branch.cellConns(idx).zipWithIndex.foreach {
+              case (CellIdx(ci, p2), p1) =>
+                if(cells(ci) == VarIdx.none) { m.aconst_null; cellPortsNotConnected += 1 }
+                else { m.aload(cells(ci)); cellPortsConnected += CellIdx(idx, p1) }
+                m.iconst(p2)
+              case (f: FreeIdx, _) => ldBoth(f)
             }
           }
           m.storeLocal(s"c$idx", constr.tpe, Acc.FINAL)
       }
     }
+    //println(s"Connected ${cellPortsConnected.size} of ${cellPortsConnected.size+cellPortsNotConnected} ports")
 
     // Cell accessors
     def ldCell(idx: Idx) = idx match {
-      case FreeIdx(rhs, i) => m.aload(if(rhs) cRight else cLeft); getAuxCell(rhs, i)
+      case FreeIdx(rhs, p) =>
+        m.aload(if(rhs) cRight else cLeft)
+        if(isInitial) m.iconst(p).invokevirtual(cell_auxCell)
+        else m.getfield(cell_acell(if(rhs) rule.sym2 else rule.sym1, p))
       case CellIdx(i, _) => m.aload(cells(i))
     }
     def ldPort(idx: Idx) = idx match {
-      case FreeIdx(rhs, i) => m.aload(if(rhs) cRight else cLeft); getAuxPort(rhs, i)
+      case FreeIdx(rhs, p) =>
+        m.aload(if(rhs) cRight else cLeft)
+        if(isInitial) m.iconst(p).invokevirtual(cell_auxPort)
+        else m.getfield(cell_aport(if(rhs) rule.sym2 else rule.sym1, p))
       case CellIdx(_, p) => m.iconst(p)
     }
     def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
 
     val reuse1Buffer = new Array[VarIdx](rule.arity1*2)
     val reuse2Buffer = new Array[VarIdx](rule.arity2*2)
-    def setAux(idx: CellIdx, setPort: Boolean = true)(loadC2: => Unit)(loadP2: => Unit): m.type = {
+    def setAux(idx: CellIdx, ct2: Idx, setPort: Boolean = true): m.type = {
       val sym = branch.cells(idx.idx)
       m.aload(cells(idx.idx))
       if(setPort) m.dup
-      loadC2
+      ldCell(ct2)
       if(idx.idx == reuse1) reuse1Buffer(idx.port*2) = m.storeAnonLocal(cellT)
       else if(idx.idx == reuse2) reuse2Buffer(idx.port*2) = m.storeAnonLocal(cellT)
       else m.putfield(cell_acell(sym, idx.port))
       if(setPort) {
-        loadP2
+        ldPort(ct2)
         if(idx.idx == reuse1) reuse1Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
         else if(idx.idx == reuse2) reuse2Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
         else m.putfield(cell_aport(sym, idx.port))
@@ -196,7 +200,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
       if(isReuse(ct1) && p1 >= 0)
-        setAux(ct1)(ldCell(ct2))(ldPort(ct2))
+        setAux(ct1, ct2)
       if(p1 < 0) {
         ldPort(ct2).if0ThenElse_>= {
           ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
@@ -226,10 +230,10 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
       val (c2, p2) = (ct2.idx, ct2.port)
-      if((c2 >= c1 || isReuse(ct1)) && p1 >= 0)
-        setAux(ct1, isReuse(ct1))(ldCell(ct2))(ldPort(ct2))
-      if((c1 >= c2 || isReuse(ct2)) && p2 >= 0)
-        setAux(ct2, isReuse(ct2))(ldCell(ct1))(ldPort(ct1))
+      if(p1 >= 0 && !cellPortsConnected.contains(ct1))
+        setAux(ct1, ct2, isReuse(ct1))
+      if(p2 >= 0 && !cellPortsConnected.contains(ct2))
+        setAux(ct2, ct1, isReuse(ct2))
       if(p1 < 0 && p2 < 0) {
         m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
       }
@@ -274,9 +278,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     val interfaces = rulePairs.keysIterator.map(s => interfaceT(s).className).toArray.sorted
     val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, cellT, interfaces)
 
-    // fields
-    val cfields = (0 until sym.arity).map(i => c.field(Acc.PUBLIC, s"acell$i", cellT))
-    val pfields = (0 until sym.arity).map(i => c.field(Acc.PUBLIC, s"aport$i", tp.I))
+    val (cfields, pfields) = (0 until sym.arity).map(i => (c.field(Acc.PUBLIC, s"acell$i", cellT), c.field(Acc.PUBLIC, s"aport$i", tp.I))).unzip
 
     // accessors
     c.method(Acc.PUBLIC | Acc.FINAL, cell_arity).iconst(sym.arity).ireturn
@@ -355,5 +357,42 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
       m.aload(ptw).invokestatic(staticMR).return_
     }
     addClass(cl, c)
+  }
+
+  // maximize # of connections that can be made in the constructor calls
+  def optimizeCellCreationOrder(cellCount: Int, conns: Iterable[Connection]): ArrayBuffer[Int] = {
+    val inc: Option[Int] => Option[Int] = { case Some(i) => Some(i+1); case None => Some(1) }
+    lazy val cells = ArrayBuffer.tabulate(cellCount)(new C(_))
+    class C(val idx: Int) {
+      val in, out = mutable.HashMap.empty[C, Int]
+      var weight: Int = 0
+      def link(c: C): Unit = {
+        out.updateWith(c)(inc)
+        c.in.updateWith(this)(inc)
+        weight += 1
+      }
+      def unlink(): Unit = {
+        out.keys.foreach(c => c.in.remove(this))
+        in.keys.foreach(c => c.out.remove(this).foreach { w => c.weight -= w })
+      }
+    }
+    conns.foreach { case Connection(CellIdx(i1, p1), CellIdx(i2, p2)) =>
+      if(p1 >= 0) cells(i1).link(cells(i2))
+      if(p2 >= 0) cells(i2).link(cells(i1))
+    }
+    val order = ArrayBuffer.empty[Int]
+    def take() = {
+      val c = cells.head
+      cells.remove(0)
+      order += c.idx
+      c.unlink()
+    }
+    while(cells.nonEmpty) { //TODO use heap
+      cells.sortInPlaceBy(c => c.weight)
+      if(cells.head.weight == 0)
+        while(cells.nonEmpty && cells.head.weight == 0) take()
+      else take()
+    }
+    order
   }
 }

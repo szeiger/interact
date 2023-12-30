@@ -3,7 +3,6 @@ package de.szeiger.interact.mt
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, InitialPlan, RulePlan, Scope}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
-import de.szeiger.interact.codegen.SymbolIdLookup
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
 

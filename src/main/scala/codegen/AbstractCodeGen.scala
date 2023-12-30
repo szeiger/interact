@@ -1,6 +1,5 @@
 package de.szeiger.interact.codegen
 
-import de.szeiger.interact.RulePlan
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.util.{CheckClassAdapter, Textifier, TraceClassVisitor}
@@ -46,12 +45,4 @@ abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, gen
     }
     cl.defineClass(cls.name.replace('/', '.'), raw)
   }
-}
-
-abstract class RuleImplFactory[T] {
-  def apply(lookup: SymbolIdLookup): T
-}
-
-trait SymbolIdLookup {
-  def getSymbolId(name: String): Int
 }
