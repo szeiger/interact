@@ -5,7 +5,6 @@ import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, GenericRul
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
-import java.util.ArrayList
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -38,6 +37,11 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
   }
   private def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
   private def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
+  private def cell_singleton(sym: Symbol) = {
+    val tp = concreteCellTFor(sym)
+    tp.field("singleton", tp)
+  }
+  private def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty
 
   def compileInitial(rule: InitialPlan, cl: LocalClassLoader, initialIndex: Int): RuleImpl = {
     val staticMR = initialRuleT_static_reduce(initialIndex)
@@ -156,14 +160,17 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
         case _ if idx == reuse2 => cRight
         case sym =>
           val constr = concreteConstrFor(sym)
-          cellAllocations += 1
-          m.newInitDup(constr) {
-            branch.cellConns(idx).zipWithIndex.foreach {
-              case (CellIdx(ci, p2), p1) =>
-                if(cells(ci) == VarIdx.none) { m.aconst_null; cellPortsNotConnected += 1 }
-                else { m.aload(cells(ci)); cellPortsConnected += CellIdx(idx, p1) }
-                m.iconst(p2)
-              case (f: FreeIdx, _) => ldBoth(f)
+          if(isSingleton(sym)) m.getstatic(cell_singleton(sym))
+          else {
+            cellAllocations += 1
+            m.newInitDup(constr) {
+              branch.cellConns(idx).zipWithIndex.foreach {
+                case (CellIdx(ci, p2), p1) =>
+                  if(cells(ci) == VarIdx.none) { m.aconst_null; cellPortsNotConnected += 1 }
+                  else { m.aload(cells(ci)); cellPortsConnected += CellIdx(idx, p1) }
+                  m.iconst(p2)
+                case (f: FreeIdx, _) => ldBoth(f)
+              }
             }
           }
           m.storeLocal(s"c$idx", constr.tpe)
@@ -372,13 +379,18 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     // constructor
     {
       val params = (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
-      val m = c.constructor(Acc.PUBLIC, tp.m(params: _*))
+      val m = c.constructor(if(isSingleton(sym)) Acc.PRIVATE else Acc.PUBLIC, tp.m(params: _*))
       val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
       m.aload(m.receiver).invokespecial(new_Cell)
       aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
         m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
       }
       m.return_
+      if(isSingleton(sym)) {
+        val fref = cell_singleton(sym)
+        c.field(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, fref)
+        c.clinit().newInitDup(concreteConstrFor(sym))().putstatic(fref).return_
+      }
     }
 
     // generic reduce

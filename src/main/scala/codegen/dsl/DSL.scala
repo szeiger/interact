@@ -34,11 +34,14 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
     v.visitEnd()
   }
 
-  def field(access: Acc, name: String, desc: ValDesc, value: Any = null): FieldRef = {
+  def field(access: Acc, name: String, desc: ValDesc, value: Any): FieldRef = {
     val f = new Field(access, name, desc, value)
     fields.addOne(f)
     FieldRef(thisTp, name, desc)
   }
+  def field(access: Acc, name: String, desc: ValDesc): FieldRef = field(access, name, desc, null)
+  def field(access: Acc, ref: FieldRef, value: Any): FieldRef = field(access, ref.name, ref.desc, value)
+  def field(access: Acc, ref: FieldRef): FieldRef = field(access, ref.name, ref.desc, null)
 
   def method(access: Acc, name: String, desc: MethodDesc): MethodDSL = {
     val m = new MethodDSL(access, name, desc)
@@ -49,6 +52,8 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   def method(access: Acc, ref: MethodRef): MethodDSL = method(access, ref.name, ref.desc)
 
   def constructor(access: Acc, desc: Desc.MethodArgs): MethodDSL = method(access, "<init>", desc.V)
+
+  def clinit(): MethodDSL = method(Acc.STATIC, "<clinit>", Desc.m().V)
 
   def emptyNoArgsConstructor(access: Acc = Acc.PUBLIC): MethodDSL = {
     val m = constructor(access, Desc.m())
@@ -289,6 +294,10 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def getfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(GETFIELD, owner, name, desc)
   def putfield(field: FieldRef): this.type = fieldInsn(PUTFIELD, field)
   def getfield(field: FieldRef): this.type = fieldInsn(GETFIELD, field)
+  def putstatic(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(PUTSTATIC, owner, name, desc)
+  def getstatic(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(GETSTATIC, owner, name, desc)
+  def putstatic(field: FieldRef): this.type = fieldInsn(PUTSTATIC, field)
+  def getstatic(field: FieldRef): this.type = fieldInsn(GETSTATIC, field)
 
   def invokespecial(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKESPECIAL, owner, name, desc)
   def invokespecial(method: MethodRef): this.type = methodInsn(INVOKESPECIAL, method)
