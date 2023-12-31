@@ -244,7 +244,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     if(compile) {
-      val cg = new CodeGen("generated", debugBytecode, collectStats)
+      val cg = new CodeGen("generated", debugBytecode, collectStats, new LocalClassLoader)
       val (initial, classToSym) = cg.compile(rules, initialRules, globals)
       (null, 0, initial, classToSym)
     } else {
