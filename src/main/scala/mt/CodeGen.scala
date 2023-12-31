@@ -176,7 +176,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen
     val l1 = m.newLabel
     val cRight = if(needs2) storeCastCell("cRight", g.arity2, start = l1) else VarIdx.none
     val cLeft = if(needs1) storeCastCell("cLeft", g.arity1, start = l1) else VarIdx.none
-    m.label(l1)
+    m.setLabel(l1)
     val lhs = (0 until g.arity1).map { idx =>
       m.aload(cLeft)
       getAuxRef(g.arity1, idx)

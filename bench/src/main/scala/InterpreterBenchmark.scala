@@ -104,7 +104,7 @@ class InterpreterBenchmark {
     this.mult2Inter = new PreparedInterpreter(prelude + mult2Src)
     this.mult3Inter = new PreparedInterpreter(prelude + mult3Src)
     this.fib22Inter = new PreparedInterpreter(prelude + fib22Src)
-    this.fib29Inter = new PreparedInterpreter(prelude + fib29Src)
+    //this.fib29Inter = new PreparedInterpreter(prelude + fib29Src)
     //ShowableNode.print(mult1Inter.model.unit)
   }
 

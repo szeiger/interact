@@ -129,11 +129,22 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     val conns = (branch.wireConnsDistinct ++ branch.internalConnsDistinct).filterNot(skipConns.contains)
     def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
     val m = c.method(Acc.PUBLIC | Acc.STATIC, mref.name, mref.desc)
-    val cLeft = m.param("cLeft", concreteCellTFor(rule.sym1), Acc.FINAL)
-    val cRight = m.param("cRight", concreteCellTFor(rule.sym2), Acc.FINAL)
+    val cLeft = m.param("cLeft", concreteCellTFor(rule.sym1))
+    val cRight = m.param("cRight", concreteCellTFor(rule.sym2))
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
 
     val createOrder = optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)
+
+    val loopOn1 = reuse1 != -1 && (rule.sym1.isDef || reuse2 == -1)
+    val loopOn2 = reuse2 != -1 && (rule.sym2.isDef || reuse1 == -1)
+    val (cont1, cont2, loopStart) = {
+      if(loopOn1 || loopOn2) {
+        val cont1 = m.aconst_null.storeAnonLocal(concreteCellTFor(rule.sym1))
+        val cont2 = m.aconst_null.storeAnonLocal(concreteCellTFor(rule.sym2))
+        (cont1, cont2, m.setLabel())
+      } else (VarIdx.none, VarIdx.none, null)
+    }
+    //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; strict: $loopOn1, $loopOn2; relaxed: ${reuse1 != -1}, ${reuse2 != -1}")
 
     // Create new cells
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
@@ -155,7 +166,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
               case (f: FreeIdx, _) => ldBoth(f)
             }
           }
-          m.storeLocal(s"c$idx", constr.tpe, Acc.FINAL)
+          m.storeLocal(s"c$idx", constr.tpe)
       }
     }
     //println(s"Connected ${cellPortsConnected.size} of ${cellPortsConnected.size+cellPortsNotConnected} ports")
@@ -181,17 +192,25 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
     val reuse2Buffer = new Array[VarIdx](rule.arity2*2)
     def setAux(idx: CellIdx, ct2: Idx, setPort: Boolean = true): m.type = {
       val sym = branch.cells(idx.idx)
-      m.aload(cells(idx.idx))
-      if(setPort) m.dup
-      ldCell(ct2)
-      if(idx.idx == reuse1) reuse1Buffer(idx.port*2) = m.storeAnonLocal(cellT)
-      else if(idx.idx == reuse2) reuse2Buffer(idx.port*2) = m.storeAnonLocal(cellT)
-      else m.putfield(cell_acell(sym, idx.port))
-      if(setPort) {
-        ldPort(ct2)
-        if(idx.idx == reuse1) reuse1Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
-        else if(idx.idx == reuse2) reuse2Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
-        else m.putfield(cell_aport(sym, idx.port))
+      if(idx.idx == reuse1) {
+        ldCell(ct2)
+        reuse1Buffer(idx.port*2) = m.storeAnonLocal(cellT)
+        if(setPort) {
+          ldPort(ct2)
+          reuse1Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
+        }
+      } else if(idx.idx == reuse2) {
+        ldCell(ct2)
+        reuse2Buffer(idx.port*2) = m.storeAnonLocal(cellT)
+        if(setPort) {
+          ldPort(ct2)
+          reuse2Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
+        }
+      } else {
+        m.aload(cells(idx.idx))
+        if(setPort) m.dup
+        ldCell(ct2).putfield(cell_acell(sym, idx.port))
+        if(setPort) ldPort(ct2).putfield(cell_aport(sym, idx.port))
       }
       m
     }
@@ -205,7 +224,33 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
         ldPort(ct2).if0ThenElse_>= {
           ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
         } {
-          m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+          if(ct1.idx == reuse1 && loopOn1) {
+            //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; using sym1")
+            val dflt, end = m.newLabel
+            m.aload(cont1).ifnonnull(dflt)
+            ldCell(ct2).instanceof(concreteCellTFor(rule.sym2))
+            m.ifeq(dflt)
+            ldCell(ct1).astore(cont1)
+            ldCell(ct2).checkcast(concreteCellTFor(rule.sym2)).astore(cont2)
+            m.goto(end)
+            m.setLabel(dflt)
+            m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+            m.setLabel(end)
+          } else if(ct1.idx == reuse2 && loopOn2) {
+            //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; using sym2")
+            val dflt, end = m.newLabel
+            m.aload(cont1).ifnonnull(dflt)
+            ldCell(ct2).instanceof(concreteCellTFor(rule.sym1))
+            m.ifeq(dflt)
+            ldCell(ct1).astore(cont2)
+            ldCell(ct2).checkcast(concreteCellTFor(rule.sym1)).astore(cont1)
+            m.goto(end)
+            m.setLabel(dflt)
+            m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+            m.setLabel(end)
+          } else {
+            m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+          }
         }
       } else {
         ldPort(ct2).if0Then_>= {
@@ -260,6 +305,15 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean)
 
     if(collectStats)
       m.aload(ptw).iconst(1).iconst(cellAllocations).invokevirtual(ptw_recordStats)
+
+    if(cont1 != VarIdx.none) {
+      m.aload(cont1).ifNonNullThen {
+        m.aload(cont1).astore(cLeft).aload(cont2).astore(cRight)
+        m.aconst_null.dup.astore(cont1).astore(cont2)
+        m.goto(loopStart)
+      }
+    }
+
     m.return_
   }
 

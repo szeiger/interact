@@ -80,6 +80,7 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   }
 
   def newLabel: Label = new Label
+  def setLabel(l: Label = new Label): Label = { insn(new LabelNode(l)); l }
 
   private[this] def store(v: VarIdx, desc: ValDesc): VarIdx = {
     desc.desc.charAt(0) match {
@@ -163,15 +164,7 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     methodInsn(opcode, method.tpe, "<init>", method.desc)
   private[this] def typeInsn(opcode: Int, tpe: Owner): this.type = insn(new TypeInsnNode(opcode, tpe.className))
 
-  def label(l: Label): this.type = insn(new LabelNode(l))
-  def line(lineNumber: Int, l: Label = null): this.type = {
-    val l2 = if(l == null) {
-      val l2 = new Label
-      label(l2)
-      l2
-    } else l
-    insn(new LineNumberNode(lineNumber, new LabelNode(l2)))
-  }
+  def line(lineNumber: Int, l: Label = setLabel()): this.type = insn(new LineNumberNode(lineNumber, new LabelNode(l)))
 
   def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
   def iinc(varIdx: VarIdx, incr: Int): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
@@ -233,15 +226,15 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   private[this] def ifThenElse(opcode: Int, cont: => Unit, skip: => Unit): this.type = {
     val lElse, lEndif = new Label
     jumpInsn(opcode, lElse); cont; goto(lEndif)
-    label(lElse); skip
-    label(lEndif)
+    setLabel(lElse); skip
+    setLabel(lEndif)
     this
   }
   private[this] def ifThen(opcode: Int, cont: => Unit): this.type = {
     val lEndif = new Label
     jumpInsn(opcode, lEndif)
     cont
-    label(lEndif)
+    setLabel(lEndif)
     this
   }
   def ifThenI_== (cont: => Unit): this.type = ifThen(IF_ICMPNE, cont)
@@ -272,18 +265,24 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
 
   def ifThenA_== (cont: => Unit): this.type = ifThen(IF_ACMPNE, cont)
   def ifThenA_!= (cont: => Unit): this.type = ifThen(IF_ACMPEQ, cont)
+  def ifNullThen (cont: => Unit): this.type = ifThen(IFNONNULL, cont)
+  def ifNonNullThen (cont: => Unit): this.type = ifThen(IFNULL, cont)
+
   def ifThenElseA_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPNE, cont, skip)
   def ifThenElseA_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPEQ, cont, skip)
+  def ifNullThenElse (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFNONNULL, cont, skip)
+  def ifNonNullThenElse (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFNULL, cont, skip)
 
   def forRange(from: Int, until: Int, incr: Int = 1)(f: VarIdx => Unit): this.type = {
     val start, end = newLabel
     val i = iconst(from).storeAnonLocal(Desc.I)
-    label(start)
+    setLabel(start)
     iload(i).iconst(until).if_icmpge(end)
     f(i)
     iinc(i, incr)
     goto(start)
-    label(end)
+    setLabel(end)
+    this
   }
 
   def putfield(owner: Owner, name: String, desc: ValDesc): this.type = fieldInsn(PUTFIELD, owner, name, desc)
@@ -328,13 +327,13 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def tryCatchGoto(tpe: Owner = null)(block: => Unit)(handler: => Unit): this.type = {
     val l1, l2, l3, l4 = newLabel
     exceptionHandler(l1, l2, l3, tpe)
-    label(l1)
+    setLabel(l1)
     block
-    label(l2)
+    setLabel(l2)
     goto(l4)
-    label(l3)
+    setLabel(l3)
     handler
-    label(l4)
+    setLabel(l4)
     this
   }
 
@@ -344,7 +343,7 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
     val labels = blocks.map(_ => newLabel)
     tableswitch(min, min+blocks.length-2, labels.last, labels.init)
     blocks.zip(labels).foreach { case (b, l) =>
-      label(l)
+      setLabel(l)
       b()
     }
     this
