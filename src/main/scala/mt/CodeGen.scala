@@ -8,8 +8,10 @@ import org.objectweb.asm.Label
 
 import scala.collection.mutable.ArrayBuffer
 
-class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl]("de/szeiger/interact/mt", genPackage, logGenerated) {
+class CodeGen(genPackage: String, logGenerated: Boolean) extends AbstractCodeGen[RuleImpl](logGenerated) {
   private val MAX_SPEC_CELL = 2
+  private val interpreterPackage = "de/szeiger/interact/mt"
+  private val riT = tp.c(s"$interpreterPackage/RuleImpl")
   private val wrT = tp.c(s"$interpreterPackage/WireRef")
   private val ptwT = tp.c(s"$interpreterPackage/PerThreadWorker")
   private val cellT = tp.c(s"$interpreterPackage/Cell")

@@ -185,7 +185,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
-  final val (ruleImpls, maxRuleCells, maxArity, initialRuleImpls, classToSym) = createRuleImpls()
+  final val (ruleImpls, maxRuleCells, initialRuleImpls, classToSym) = createRuleImpls()
   final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
 
@@ -242,40 +242,28 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
       b.condition.orNull, condArgs.orNull, next.orNull)
   }
 
-  def createRuleImpls(): (Array[RuleImpl], Int, Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
-    val (cl, codeGen) =
-      if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/st3/gen", debugBytecode, collectStats))
-      else (null, null)
-    val ris = new Array[RuleImpl](1 << (symBits << 1))
-    val maxC, maxA = new ParSupport.AtomicCounter
-    val classToSymbol = Map.newBuilder[Class[_], Symbol]
+  def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     if(compile) {
-      ParSupport.foreach(globals.symbols.filter(_.isCons))(codeGen.compileInterface(_, cl))
-      ParSupport.foreach(globals.symbols.filter(_.isCons)) { sym =>
-        val cls = codeGen.compileCons(sym, rules, cl)
-        classToSymbol.synchronized(classToSymbol += ((cls, sym)))
+      val cg = new CodeGen("generated", debugBytecode, collectStats)
+      val (initial, classToSym) = cg.compile(rules, initialRules, globals)
+      (null, 0, initial, classToSym)
+    } else {
+      val ris = new Array[RuleImpl](1 << (symBits << 1))
+      val maxC = new ParSupport.AtomicCounter
+      val classToSymbol = Map.newBuilder[Class[_], Symbol]
+      ParSupport.foreach(rules.values) { g =>
+        maxC.max(g.maxCells)
+        val sym1Id = getSymbolId(g.sym1)
+        val ri = g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, b, Option(z)) }
+        ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
       }
+      val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
+      initialRules.zipWithIndex.foreach { case (ip, i) =>
+        maxC.max(ip.maxCells)
+        initial += ((ip.free, createInterpretedRuleImpl(0, ip.branch, None)))
+      }
+      (ris, maxC.get, initial.result(), classToSymbol.result())
     }
-    ParSupport.foreach(rules.values) { g =>
-      maxC.max(g.maxCells)
-      maxA.max(g.arity1)
-      maxA.max(g.arity2)
-      val sym1Id = getSymbolId(g.sym1)
-      val ri =
-        if(compile) codeGen.compileRule(g, cl)
-        else g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, b, Option(z)) }
-      ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
-    }
-    val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
-    initialRules.zipWithIndex.foreach { case (ip, i) =>
-      maxC.max(ip.maxCells)
-      maxA.max(ip.free.size)
-      val ri =
-        if(compile) codeGen.compileInitial(ip, cl, i)
-        else createInterpretedRuleImpl(0, ip.branch, None)
-      initial += ((ip.free, ri))
-    }
-    (ris, maxC.get, maxA.get, initial.result(), classToSymbol.result())
   }
 
   @inline def mkRuleKey(c1: InterpreterCell, c2: InterpreterCell): Int = mkRuleKey(c1.symId, c2.symId)

@@ -7,8 +7,7 @@ import org.objectweb.asm.{ClassReader, ClassWriter}
 
 import java.io.{OutputStreamWriter, PrintWriter}
 
-abstract class AbstractCodeGen[RI](protected val interpreterPackage: String, genPackage: String, logGenerated: Boolean) {
-  protected val riT = tp.c(s"$interpreterPackage/RuleImpl")
+abstract class AbstractCodeGen[RI](logGenerated: Boolean) {
 
   private def encodeName(s: String): String = {
     val b = new StringBuilder()
