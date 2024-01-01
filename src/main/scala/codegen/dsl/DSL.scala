@@ -172,7 +172,7 @@ final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
   def line(lineNumber: Int, l: Label = setLabel()): this.type = insn(new LineNumberNode(lineNumber, new LabelNode(l)))
 
   def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
-  def iinc(varIdx: VarIdx, incr: Int): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
+  def iinc(varIdx: VarIdx, incr: Int = 1): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
 
   def aload(varIdx: VarIdx): this.type = varInsn(ALOAD, varIdx)
   def astore(varIdx: VarIdx): this.type = { varInsn(ASTORE, varIdx); stored(varIdx); this }

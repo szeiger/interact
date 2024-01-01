@@ -11,10 +11,13 @@ import scala.collection.mutable.ArrayBuffer
 class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, classLoader: LocalClassLoader)
   extends AbstractCodeGen[RuleImpl](logGenerated) {
 
+  val UseCellCache = false
+
   private val riT = tp.c[RuleImpl]
   private val ptwT = tp.c[PerThreadWorker]
   private val cellT = tp.c[Cell]
   private val commonCellT = tp.c(s"$genPackage/CommonCell")
+  private val cellCacheT = tp.c(s"$genPackage/CellCache")
   private val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   private val cell_reduce = cellT.method("reduce", tp.m(cellT, ptwT).V)
   private val cell_arity = cellT.method("arity", tp.m().I)
@@ -22,7 +25,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
-  private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I).V)
+  private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I).V)
   private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   private val new_CommonCell = commonCellT.constr(tp.m().V)
 
@@ -34,10 +37,14 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
   private def interfaceMethod(sym: Symbol) = interfaceT(sym).method(s"reduce_${encodeName(sym)}", tp.m(concreteCellTFor(sym), ptwT).V)
   private def concreteCellTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/C_${encodeName(sym)}") else cellT
   private def concreteConstrFor(sym: Symbol) = concreteCellTFor(sym).constr(tp.m((0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
+  private def concreteReinitFor(sym: Symbol) = concreteCellTFor(sym).method("reinit", tp.m((0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
   private def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
   private def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
   private def cell_singleton(sym: Symbol) = { val tp = concreteCellTFor(sym); tp.field("singleton", tp) }
   private def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty
+  private def cellCache_var(sym: Symbol) = cellCacheT.field(s"f_${encodeName(sym)}", concreteCellTFor(sym))
+  private def cellCache_get(sym: Symbol) = cellCacheT.method(s"get_${encodeName(sym)}", tp.m()(concreteCellTFor(sym)))
+  private def cellCache_set(sym: Symbol) = cellCacheT.method(s"set_${encodeName(sym)}", tp.m(concreteCellTFor(sym)).V)
 
   private def compileInitial(rule: InitialPlan, initialIndex: Int): RuleImpl = {
     val staticMR = initialRuleT_static_reduce(initialIndex)
@@ -117,7 +124,6 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
     assert(rule.branches.length == 1)
     val isInitial = rule.isInstanceOf[InitialPlan]
     val branch = rule.branches.head
-    var cellAllocations = 0
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
     //val (reuse1, reuse2, skipConns) = (-1, -1, Set.empty[Connection])
     val conns = (branch.wireConnsDistinct ++ branch.internalConnsDistinct).filterNot(skipConns.contains)
@@ -141,6 +147,8 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
     //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; strict: $loopOn1, $loopOn2; relaxed: ${reuse1 != -1}, ${reuse2 != -1}")
 
     // Create new cells
+    var statCellAllocations, statCachedCellReuse = if(collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
+    var statSingletonUse = 0
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
@@ -150,16 +158,32 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
         case _ if idx == reuse2 => cRight
         case sym =>
           val constr = concreteConstrFor(sym)
-          if(isSingleton(sym)) m.getstatic(cell_singleton(sym))
-          else {
-            cellAllocations += 1
-            m.newInitDup(constr) {
+          if(isSingleton(sym)) {
+            m.getstatic(cell_singleton(sym))
+            statSingletonUse += 1
+          } else {
+            def loadParams() = {
               branch.cellConns(idx).zipWithIndex.foreach {
                 case (CellIdx(ci, p2), p1) =>
                   if(cells(ci) == VarIdx.none) { m.aconst_null; cellPortsNotConnected += 1 }
                   else { m.aload(cells(ci)); cellPortsConnected += CellIdx(idx, p1) }
                   m.iconst(p2)
                 case (f: FreeIdx, _) => ldBoth(f)
+              }
+            }
+            if(isInitial || !UseCellCache) {
+              m.newInitDup(constr)(loadParams())
+              if(collectStats) m.iinc(statCellAllocations)
+            } else {
+              m.invokestatic(cellCache_get(sym)).dup.ifNullThenElse {
+                m.pop
+                m.newInitDup(constr)(loadParams())
+                if(collectStats) m.iinc(statCellAllocations)
+              } {
+                m.dup
+                loadParams()
+                m.invokevirtual(concreteReinitFor(sym))
+                if(collectStats) m.iinc(statCachedCellReuse)
               }
             }
           }
@@ -307,8 +331,18 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
         m.aload(cells(reuse2)).iload(reuse2Buffer(p*2+1)).putfield(cell_aport(rule.sym2, p))
     }
 
-    if(collectStats)
-      m.aload(ptw).iconst(1).iconst(cellAllocations).invokevirtual(ptw_recordStats)
+    if(UseCellCache && !isInitial) {
+      if(reuse1 == -1) m.aload(cLeft).invokestatic(cellCache_set(rule.sym1))
+      if(reuse2 == -1) m.aload(cRight).invokestatic(cellCache_set(rule.sym2))
+    }
+
+    if(collectStats) {
+      m.aload(ptw).iload(statCellAllocations).iload(statCachedCellReuse).iconst(statSingletonUse)
+      if(cont1 != VarIdx.none) {
+        m.aload(cont1).ifNonNullThenElse(m.iconst(1))(m.iconst(0))
+      } else m.iconst(0)
+      m.invokevirtual(ptw_recordStats)
+    }
 
     if(cont1 != VarIdx.none) {
       m.aload(cont1).ifNonNullThen {
@@ -388,6 +422,16 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
         c.field(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, fref)
         c.clinit().newInitDup(concreteConstrFor(sym))().putstatic(fref).return_
       }
+    }
+
+    // reinit
+    if(sym.arity > 0) {
+      val m = c.method(Acc.PUBLIC, concreteReinitFor(sym))
+      val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
+      aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
+        m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
+      }
+      m.return_
     }
 
     // generic reduce
@@ -492,11 +536,34 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
     counts.iterator.filter(_._2 == totalSyms).map(_._1).toSet
   }
 
+  private def compileCellCache(rules: scala.collection.Map[RuleKey, RulePlan]): Unit = {
+    val syms = ((for {
+      r <- rules.valuesIterator
+      b <- r.branches.iterator
+      s <- b.cells.iterator
+    } yield s) ++ (rules.keysIterator.map(_.sym1) ++ rules.keysIterator.map(_.sym1)).filter(_.isDefined)).toVector.distinct.sortBy(_.id)
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, cellCacheT.className)
+    c.emptyNoArgsConstructor(Acc.PRIVATE)
+    syms.foreach { sym => c.field(Acc.PRIVATE | Acc.STATIC, cellCache_var(sym)) }
+    syms.foreach { sym =>
+      val m = c.method(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, cellCache_get(sym))
+      val f = cellCache_var(sym)
+      m.getstatic(f).aconst_null.putstatic(f).areturn
+    }
+    syms.foreach { sym =>
+      val m = c.method(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, cellCache_set(sym))
+      val cell = m.param("cell", concreteCellTFor(sym), Acc.FINAL)
+      m.aload(cell).putstatic(cellCache_var(sym)).return_
+    }
+    addClass(classLoader, c)
+  }
+
   def compile(rules: scala.collection.Map[RuleKey, RulePlan], initialRules: Iterable[InitialPlan], globals: Symbols): (Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     val shared = findCommonPartners(rules)
     val classToSymbol = Map.newBuilder[Class[_], Symbol]
     ParSupport.foreach(globals.symbols.filter(s => s.isCons && !shared.contains(s)))(compileInterface)
     compileCommonCell(shared)
+    if(UseCellCache) compileCellCache(rules)
     ParSupport.foreach(globals.symbols.filter(_.isCons)) { sym =>
       val cls = compileCons(sym, rules, shared)
       classToSymbol.synchronized(classToSymbol += ((cls, sym)))

@@ -171,10 +171,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       i += 1
     }
 
-    ptw.recordStats(1, cellAllocationCount)
+    if(ptw.collectStats) ptw.recordStats(protoCells.length, 0, 0, 0)
   }
-
-  def cellAllocationCount: Int = protoCells.length
 }
 
 final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RulePlan], compile: Boolean,
@@ -289,8 +287,8 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
       w.processAll()
     }
     if(collectStats)
-      println(s"Total steps: ${w.steps}, allocated cells: ${w.cellAllocations}")
-    w.steps
+      println(s"Steps: ${w.statSteps} (${w.statSteps-w.statLoopSave} non-looping), cells created: ${w.statCellAllocations} (new), ${w.statCachedCellReuse} (cached), ${w.statSingletonUse} (singleton)")
+    w.statSteps
   }
 }
 
@@ -322,10 +320,10 @@ final class CutBuffer(initialSize: Int) {
 }
 
 final class PerThreadWorker(final val inter: Interpreter) {
+  final val collectStats = inter.collectStats
   final val tempCells = inter.createTempCells()
   private[this] final var nextCut1, nextCut2: Cell = _
-  private[this] final val collectStats = inter.collectStats
-  var steps, cellAllocations = 0
+  var statSteps, statCellAllocations, statCachedCellReuse, statSingletonUse, statLoopSave = 0
 
   def createCut(c1: Cell, c2: Cell): Unit = {
     if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 }
@@ -355,11 +353,12 @@ final class PerThreadWorker(final val inter: Interpreter) {
 
   def irreducible(c1: Cell, c2: Cell): Unit = inter.irreducible.addOne(c1, c2)
 
-  def recordStats(steps: Int, cellAllocations: Int): Unit = {
-    if(collectStats) {
-      this.steps += steps
-      this.cellAllocations += cellAllocations
-    }
+  def recordStats(cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int): Unit = {
+    this.statSteps += 1
+    this.statCellAllocations += cellAllocations
+    this.statCachedCellReuse += cachedCellReuse
+    this.statSingletonUse += singletonUse
+    this.statLoopSave += loopSave
   }
 
   def processNext(): Unit = {
