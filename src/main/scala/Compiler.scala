@@ -4,7 +4,8 @@ import de.szeiger.interact.ast._
 
 import scala.collection.mutable
 
-class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
+class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig()) {
+  val global = new Global(_fconfig)
   import global._
 
   private[this] val phases: Vector[Phase] = Vector(
@@ -15,7 +16,7 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
     new PlanRules(global)
   )
 
-  private[this] val unit1 = if(addEraseDup) {
+  private[this] val unit1 = if(fconfig.addEraseDup) {
     val erase = globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
     val dup = globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2)
     unit0.copy(statements = Vector(DerivedRule(erase, erase), DerivedRule(erase, dup), DerivedRule(dup, dup)) ++ unit0.statements).setPos(unit0.pos)
@@ -40,21 +41,18 @@ class Compiler(unit0: CompilationUnit, val global: Global = new Global) {
   }
   checkThrow()
 
-  def createMTInterpreter(numThreads: Int, compile: Boolean = true,
-    debugBytecode: Boolean = false, collectStats: Boolean = false) : mt.Interpreter =
-    new mt.Interpreter(globalSymbols, rulePlans.values, numThreads, compile, debugBytecode, collectStats, data, initialPlans)
+  def createMTInterpreter(bconfig: BackendConfig = BackendConfig()) : mt.Interpreter =
+    new mt.Interpreter(globalSymbols, rulePlans.values, bconfig, data, initialPlans)
 
-  def createSTInterpreter(compile: Boolean = true,
-    debugBytecode: Boolean = false, collectStats: Boolean = false) : st.Interpreter =
-    new st.Interpreter(globalSymbols, rulePlans, compile, debugBytecode, collectStats, initialPlans)
+  def createSTInterpreter(bconfig: BackendConfig = BackendConfig()) : st.Interpreter =
+    new st.Interpreter(globalSymbols, rulePlans, bconfig, initialPlans)
 
-  def createInterpreter(spec: String,
-      debugBytecode: Boolean = false, collectStats: Boolean = false): BaseInterpreter = {
+  def createInterpreter(spec: String, bconfig: BackendConfig = BackendConfig()): BaseInterpreter = {
     spec match {
-      case s"st.i" => createSTInterpreter(compile = false, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"st.c" => createSTInterpreter(compile = true, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"mt${mode}.i" => createMTInterpreter(mode.toInt, compile = false, debugBytecode = debugBytecode, collectStats = collectStats)
-      case s"mt${mode}.c" => createMTInterpreter(mode.toInt, compile = true, debugBytecode = debugBytecode, collectStats = collectStats)
+      case s"st.i" => createSTInterpreter(bconfig.copy(compile = false))
+      case s"st.c" => createSTInterpreter(bconfig.copy(compile = true))
+      case s"mt${mode}.i" => createMTInterpreter(bconfig.copy(compile = false, numThreads = mode.toInt))
+      case s"mt${mode}.c" => createMTInterpreter(bconfig.copy(compile = true, numThreads = mode.toInt))
     }
   }
 }
@@ -70,3 +68,18 @@ final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
 trait Phase extends (CompilationUnit => CompilationUnit) {
   override def toString(): String = getClass.getName.replaceAll(".*\\.", "")
 }
+
+case class FrontendConfig(
+  defaultDerive: Seq[String] = Seq("erase", "dup"),
+  addEraseDup: Boolean = true,
+)
+
+case class BackendConfig(
+  compile: Boolean = true,
+  numThreads: Int = 0, // mt
+  collectStats: Boolean = false,
+  useCellCache: Boolean = false, // st.c
+  biasForCommonDispatch: Boolean = true, // st.c
+  logGenerated: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
+  compilerParallelism: Int = 1,
+)

@@ -175,9 +175,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   }
 }
 
-final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RulePlan], compile: Boolean,
-  debugBytecode: Boolean, val collectStats: Boolean, initialRules: Iterable[InitialPlan])
-    extends BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RulePlan],
+  config: BackendConfig, initialRules: Iterable[InitialPlan]) extends BaseInterpreter { self =>
 
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
@@ -186,6 +185,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   final val (ruleImpls, maxRuleCells, initialRuleImpls, classToSym) = createRuleImpls()
   final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
+  final val collectStats = config.collectStats
 
   def getSymbol(c: Cell): Symbol = c match {
     case c: WireCell => c.sym
@@ -241,15 +241,15 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   }
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
-    if(compile) {
-      val cg = new CodeGen("generated", debugBytecode, collectStats, new LocalClassLoader)
+    if(config.compile) {
+      val cg = new CodeGen("generated", new LocalClassLoader, config)
       val (initial, classToSym) = cg.compile(rules, initialRules, globals)
       (null, 0, initial, classToSym)
     } else {
       val ris = new Array[RuleImpl](1 << (symBits << 1))
       val maxC = new ParSupport.AtomicCounter
       val classToSymbol = Map.newBuilder[Class[_], Symbol]
-      ParSupport.foreach(rules.values) { g =>
+      ParSupport.foreach(rules.values, config.compilerParallelism) { g =>
         maxC.max(g.maxCells)
         val sym1Id = getSymbolId(g.sym1)
         val ri = g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, b, Option(z)) }

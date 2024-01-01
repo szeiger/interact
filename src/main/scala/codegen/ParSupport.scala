@@ -6,11 +6,7 @@ import java.util.concurrent.{CountedCompleter, ForkJoinPool}
 import scala.annotation.tailrec
 
 object ParSupport {
-  val parallelism: Int = {
-    val s = System.getProperty("interact.compilerParallelism", "")
-    if(s.nonEmpty) s.toInt
-    else math.min(ForkJoinPool.commonPool().getParallelism, 8)
-  }
+  val defaultParallelism: Int = math.min(ForkJoinPool.commonPool().getParallelism, 8)
 
   final class AtomicCounter {
     private[this] val ai = new AtomicInteger(0)
@@ -23,7 +19,7 @@ object ParSupport {
     def get: Int = ai.get()
   }
 
-  def foreach[T >: Null <: AnyRef](a: IterableOnce[T])(f: T => Unit): Unit = {
+  def foreach[T >: Null <: AnyRef](a: IterableOnce[T], parallelism: Int)(f: T => Unit): Unit = {
     if(parallelism <= 1) a.iterator.foreach(f)
     else {
       val it = a.iterator

@@ -1,17 +1,14 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
-import de.szeiger.interact.{BranchPlan, CellIdx, Connection, FreeIdx, GenericRulePlan, Global, Idx, InitialPlan, RuleKey, RulePlan}
+import de.szeiger.interact.{BranchPlan, CellIdx, BackendConfig, Connection, FreeIdx, GenericRulePlan, Global, Idx, InitialPlan, RuleKey, RulePlan}
 import de.szeiger.interact.ast.{Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, classLoader: LocalClassLoader)
-  extends AbstractCodeGen[RuleImpl](logGenerated) {
-
-  val UseCellCache = false
+class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: BackendConfig) extends AbstractCodeGen[RuleImpl](config) {
 
   private val riT = tp.c[RuleImpl]
   private val ptwT = tp.c[PerThreadWorker]
@@ -135,8 +132,8 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
 
     val createOrder = optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)
 
-    val loopOn1 = reuse1 != -1 && (rule.sym1.isDef || reuse2 == -1)
-    val loopOn2 = reuse2 != -1 && (rule.sym2.isDef || reuse1 == -1)
+    val loopOn1 = reuse1 != -1 && ((rule.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
+    val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
     val (cont1, cont2, loopStart) = {
       if(loopOn1 || loopOn2) {
         val cont1 = m.aconst_null.storeAnonLocal(concreteCellTFor(rule.sym1))
@@ -147,7 +144,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
     //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; strict: $loopOn1, $loopOn2; relaxed: ${reuse1 != -1}, ${reuse2 != -1}")
 
     // Create new cells
-    var statCellAllocations, statCachedCellReuse = if(collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
+    var statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
     var statSingletonUse = 0
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
@@ -171,19 +168,19 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
                 case (f: FreeIdx, _) => ldBoth(f)
               }
             }
-            if(isInitial || !UseCellCache) {
+            if(isInitial || !config.useCellCache) {
               m.newInitDup(constr)(loadParams())
-              if(collectStats) m.iinc(statCellAllocations)
+              if(config.collectStats) m.iinc(statCellAllocations)
             } else {
               m.invokestatic(cellCache_get(sym)).dup.ifNullThenElse {
                 m.pop
                 m.newInitDup(constr)(loadParams())
-                if(collectStats) m.iinc(statCellAllocations)
+                if(config.collectStats) m.iinc(statCellAllocations)
               } {
                 m.dup
                 loadParams()
                 m.invokevirtual(concreteReinitFor(sym))
-                if(collectStats) m.iinc(statCachedCellReuse)
+                if(config.collectStats) m.iinc(statCachedCellReuse)
               }
             }
           }
@@ -331,12 +328,12 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
         m.aload(cells(reuse2)).iload(reuse2Buffer(p*2+1)).putfield(cell_aport(rule.sym2, p))
     }
 
-    if(UseCellCache && !isInitial) {
+    if(config.useCellCache && !isInitial) {
       if(reuse1 == -1) m.aload(cLeft).invokestatic(cellCache_set(rule.sym1))
       if(reuse2 == -1) m.aload(cRight).invokestatic(cellCache_set(rule.sym2))
     }
 
-    if(collectStats) {
+    if(config.collectStats) {
       m.aload(ptw).iload(statCellAllocations).iload(statCachedCellReuse).iconst(statSingletonUse)
       if(cont1 != VarIdx.none) {
         m.aload(cont1).ifNonNullThenElse(m.iconst(1))(m.iconst(0))
@@ -561,14 +558,14 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
   def compile(rules: scala.collection.Map[RuleKey, RulePlan], initialRules: Iterable[InitialPlan], globals: Symbols): (Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     val shared = findCommonPartners(rules)
     val classToSymbol = Map.newBuilder[Class[_], Symbol]
-    ParSupport.foreach(globals.symbols.filter(s => s.isCons && !shared.contains(s)))(compileInterface)
+    ParSupport.foreach(globals.symbols.filter(s => s.isCons && !shared.contains(s)), config.compilerParallelism)(compileInterface)
     compileCommonCell(shared)
-    if(UseCellCache) compileCellCache(rules)
-    ParSupport.foreach(globals.symbols.filter(_.isCons)) { sym =>
+    if(config.useCellCache) compileCellCache(rules)
+    ParSupport.foreach(globals.symbols.filter(_.isCons), config.compilerParallelism) { sym =>
       val cls = compileCons(sym, rules, shared)
       classToSymbol.synchronized(classToSymbol += ((cls, sym)))
     }
-    ParSupport.foreach(rules.values) { g => compileRule(g, shared) }
+    ParSupport.foreach(rules.values, config.compilerParallelism) { g => compileRule(g, shared) }
     val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
     initialRules.zipWithIndex.foreach { case (ip, i) =>
       val ri = compileInitial(ip, i)

@@ -85,28 +85,27 @@ class InterpreterBenchmark {
 
   class PreparedInterpreter(source: String) {
     val model: Compiler = new Compiler(Parser.parse(source))
-    val inter = model.createInterpreter(spec, collectStats = false)
+
+    {
+      val i = model.createInterpreter(spec, BackendConfig(collectStats=true))
+      i.initData()
+      println()
+      i.reduce()
+      println()
+    }
+
+    val inter = model.createInterpreter(spec)
     def setup(): BaseInterpreter = {
       inter.initData()
       inter
     }
   }
 
-  private var mult1Inter: PreparedInterpreter = _
-  private var mult2Inter: PreparedInterpreter = _
-  private var mult3Inter: PreparedInterpreter = _
-  private var fib22Inter: PreparedInterpreter = _
-  private var fib29Inter: PreparedInterpreter = _
-
-  @Setup(Level.Trial)
-  def init: Unit = {
-    this.mult1Inter = new PreparedInterpreter(prelude + mult1Src)
-    this.mult2Inter = new PreparedInterpreter(prelude + mult2Src)
-    this.mult3Inter = new PreparedInterpreter(prelude + mult3Src)
-    this.fib22Inter = new PreparedInterpreter(prelude + fib22Src)
-    //this.fib29Inter = new PreparedInterpreter(prelude + fib29Src)
-    //ShowableNode.print(mult1Inter.model.unit)
-  }
+  private lazy val mult1Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult1Src)
+  private lazy val mult2Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult2Src)
+  private lazy val mult3Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult3Src)
+  private lazy val fib22Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib22Src)
+  private lazy val fib29Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib29Src)
 
   @Benchmark
   @OperationsPerInvocation(505402)

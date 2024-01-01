@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, InitialPlan, RulePlan, Scope}
+import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, BackendConfig, InitialPlan, RulePlan, Scope}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
@@ -9,7 +9,6 @@ import de.szeiger.interact.BitOps._
 import java.util.Arrays
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
-
 import java.lang.invoke.{MethodHandles, VarHandle}
 import java.util.concurrent.{CountDownLatch, ForkJoinPool, ForkJoinWorkerThread, RecursiveAction}
 import scala.annotation.{switch, tailrec}
@@ -205,9 +204,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def wireAllocationCount: Int = connections.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads: Int, compile: Boolean,
-  debugBytecode: Boolean, val collectStats: Boolean, compData: Iterable[Let], compInitial: Iterable[InitialPlan])
-    extends BaseInterpreter with SymbolIdLookup { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: BackendConfig, compData: Iterable[Let],
+  compInitial: Iterable[InitialPlan]) extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val scope: Scope[Cell] with Analyzer[Cell] = new Scope[Cell] with Analyzer[Cell] {
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = Iterator.empty //TODO
@@ -234,6 +232,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
   private[this] final val unfinished = new AtomicInteger(0)
   private[this] final var latch: CountDownLatch = _
   private[this] final val totalSteps, cellAllocations, wireAllocations = new AtomicInteger(0)
+  final val collectStats = config.collectStats
 
   def resetStats(): Unit = {
     totalSteps.set(0)
@@ -261,15 +260,15 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
 
   def createRuleImpls(): (Array[RuleImpl], Int, Int) = {
     val (cl, codeGen) =
-      if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/mt/gen", debugBytecode))
+      if(config.compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/mt/gen", config))
       else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxW = new ParSupport.AtomicCounter
-    ParSupport.foreach(rules) { g =>
+    ParSupport.foreach(rules, config.compilerParallelism) { g =>
       assert(g.branches.length == 1)
       val branch = g.branches.head
       val ri =
-        if(compile) codeGen.compileRule(g, cl)(this)
+        if(config.compile) codeGen.compileRule(g, cl)(this)
         else {
           maxW.max(g.maxWires)
           maxC.max(g.maxCells)
@@ -315,7 +314,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
   def reduce(): Int = {
     resetStats()
     val initial = detectInitialCuts
-    if(numThreads == 0) {
+    if(config.numThreads == 0) {
       val w = new PerThreadWorker(this) {
         protected[this] override def enqueueCut(wr: WireRef, ri: RuleImpl): Unit = initial.addOne(wr, ri)
       }
@@ -324,12 +323,12 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
         w.setNext(wr, ri)
         w.processAll()
       }
-      if(collectStats)
+      if(config.collectStats)
         println(s"Total steps: ${w.steps}, allocated cells: ${w.cellAllocations}, allocated wires: ${w.wireAllocations}")
       w.steps
-    } else if(numThreads <= 1000) {
+    } else if(config.numThreads <= 1000) {
       latch = new CountDownLatch(1)
-      val pool = new ForkJoinPool(numThreads, new ActionWorkerThread(_, this), null, numThreads > 1)
+      val pool = new ForkJoinPool(config.numThreads, new ActionWorkerThread(_, this), null, config.numThreads > 1)
       unfinished.addAndGet(initial.length)
       initial.foreach { (wr, ri) => pool.execute(new Action(wr, ri)) }
       while(unfinished.get() != 0) latch.await()
@@ -357,14 +356,14 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], numThreads:
           dec = 0
         }
       }
-      val workers = new Workers[(WireRef, RuleImpl)](numThreads-1000, 8, _ => new Adapter)
+      val workers = new Workers[(WireRef, RuleImpl)](config.numThreads-1000, 8, _ => new Adapter)
       unfinished.addAndGet(initial.length)
       workers.start()
       initial.foreach { (wr, ri) => workers.add((wr, ri)) }
       while(unfinished.get() != 0) latch.await()
       workers.shutdown()
       val steps = totalSteps.get()
-      if(collectStats)
+      if(config.collectStats)
         println(s"Total steps: $steps, allocated cells: ${cellAllocations.get()}, allocated wires: ${wireAllocations.get()}")
       steps
     }

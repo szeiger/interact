@@ -1,5 +1,6 @@
 package de.szeiger.interact.codegen
 
+import de.szeiger.interact.BackendConfig
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.util.{CheckClassAdapter, Textifier, TraceClassVisitor}
@@ -7,7 +8,7 @@ import org.objectweb.asm.{ClassReader, ClassWriter}
 
 import java.io.{OutputStreamWriter, PrintWriter}
 
-abstract class AbstractCodeGen[RI](logGenerated: Boolean) {
+abstract class AbstractCodeGen[RI](config: BackendConfig) {
 
   private def encodeName(s: String): String = {
     val b = new StringBuilder()
@@ -38,7 +39,7 @@ abstract class AbstractCodeGen[RI](logGenerated: Boolean) {
     val ca = new CheckClassAdapter(cw)
     cls.accept(ca)
     val raw = cw.toByteArray
-    if(logGenerated) {
+    if(config.logGenerated.exists(cls.name.contains)) {
       val cr = new ClassReader(raw)
       cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
     }

@@ -28,7 +28,7 @@ object Main extends App {
     //ShowableNode.print(model.unit)
 
     ShowableNode.print(model.unit)
-    val inter = model.createSTInterpreter(compile = false, collectStats = true)
+    val inter = model.createSTInterpreter(BackendConfig(compile = false, collectStats = true))
     inter.initData()
     println("Initial state:")
     inter.getAnalyzer.log(System.out)

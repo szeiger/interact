@@ -8,7 +8,7 @@ import scala.collection.mutable
 object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Compiler(statements)
-  val inter = model.createSTInterpreter(compile = false)
+  val inter = model.createSTInterpreter(BackendConfig(compile = false))
   inter.initData()
 
   var steps = 0
