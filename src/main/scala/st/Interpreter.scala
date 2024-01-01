@@ -284,8 +284,8 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   def reduce(): Int = {
     val w = new PerThreadWorker(this)
     while(cutBuffer.nonEmpty) {
-      val (wr, ri) = cutBuffer.pop()
-      w.setNext(wr, ri)
+      val (c1, c2) = cutBuffer.pop()
+      w.setNext(c1, c2)
       w.processAll()
     }
     if(collectStats)

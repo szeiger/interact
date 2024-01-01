@@ -43,17 +43,17 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
     val staticMR = initialRuleT_static_reduce(initialIndex)
     val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, rule, staticMR)
+    implementStaticReduce(ric, rule, staticMR, Set.empty)
     implementReduce(ric, staticMR)
     addClass(classLoader, ric)
     classLoader.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
   }
 
-  private def compileRule(rule: RulePlan): Class[_] = {
+  private def compileRule(rule: RulePlan, shared: Set[Symbol]): Class[_] = {
     val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
     val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, rule, staticMR)
+    implementStaticReduce(ric, rule, staticMR, shared)
     addClass(classLoader, ric)
     classLoader.loadClass(ric.javaName)
   }
@@ -113,7 +113,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
     m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
   }
 
-  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef): Unit = {
+  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: Set[Symbol]): Unit = {
     assert(rule.branches.length == 1)
     val isInitial = rule.isInstanceOf[InitialPlan]
     val branch = rule.branches.head
@@ -212,6 +212,16 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
       m
     }
 
+    def createCut(ct1: Idx, ct2: Idx) = {
+      m.aload(ptw);
+      (ct1, ct2) match {
+        case (_, CellIdx(idx, _)) if shared.contains(branch.cells(idx)) => ldCell(ct2); ldCell(ct1)
+        case (CellIdx(idx, _), _: FreeIdx) if !shared.contains(branch.cells(idx)) => ldCell(ct2); ldCell(ct1)
+        case _ => ldCell(ct1); ldCell(ct2)
+      }
+      m.invokevirtual(ptw_createCut)
+    }
+
     // Connect remaining wires
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
       val (c1, p1) = (ct1.idx, ct1.port)
@@ -231,7 +241,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
             ldCell(ct2).checkcast(concreteCellTFor(rule.sym2)).astore(cont2)
             m.goto(end)
             m.setLabel(dflt)
-            m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+            createCut(ct1, ct2)
             m.setLabel(end)
           } else if(ct1.idx == reuse2 && loopOn2) {
             //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; using sym2")
@@ -243,11 +253,9 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
             ldCell(ct2).checkcast(concreteCellTFor(rule.sym1)).astore(cont1)
             m.goto(end)
             m.setLabel(dflt)
-            m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+            createCut(ct1, ct2)
             m.setLabel(end)
-          } else {
-            m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
-          }
+          } else createCut(ct1, ct2)
         }
       } else {
         ldPort(ct2).if0Then_>= {
@@ -265,7 +273,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
         ldPort(ct2).if0ThenElse_>= {
           ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
         } {
-          m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
+          createCut(ct1, ct2)
         }
       }
     }
@@ -276,9 +284,8 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
         setAux(ct1, ct2, isReuse(ct1))
       if(p2 >= 0 && !cellPortsConnected.contains(ct2))
         setAux(ct2, ct1, isReuse(ct2))
-      if(p1 < 0 && p2 < 0) {
-        m.aload(ptw); ldCell(ct1); ldCell(ct2).invokevirtual(ptw_createCut)
-      }
+      if(p1 < 0 && p2 < 0)
+        createCut(ct1, ct2)
     }
     conns.foreach {
       case Connection(i1: FreeIdx, i2: FreeIdx) => connectFF(i1, i2)
@@ -494,7 +501,7 @@ class CodeGen(genPackage: String, logGenerated: Boolean, collectStats: Boolean, 
       val cls = compileCons(sym, rules, shared)
       classToSymbol.synchronized(classToSymbol += ((cls, sym)))
     }
-    ParSupport.foreach(rules.values) { g => compileRule(g) }
+    ParSupport.foreach(rules.values) { g => compileRule(g, shared) }
     val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
     initialRules.zipWithIndex.foreach { case (ip, i) =>
       val ri = compileInitial(ip, i)
