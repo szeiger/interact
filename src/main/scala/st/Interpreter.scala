@@ -171,7 +171,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       i += 1
     }
 
-    if(ptw.collectStats) ptw.recordStats(protoCells.length, 0, 0, 0)
+    if(ptw.metrics != null) ptw.metrics.recordStats(protoCells.length)
   }
 }
 
@@ -185,7 +185,9 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   final val (ruleImpls, maxRuleCells, initialRuleImpls, classToSym) = createRuleImpls()
   final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
-  final val collectStats = config.collectStats
+  private[this] var metrics: ExecutionMetrics = _
+
+  def getMetrics: ExecutionMetrics = metrics
 
   def getSymbol(c: Cell): Symbol = c match {
     case c: WireCell => c.sym
@@ -217,7 +219,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     cutBuffer.clear()
     irreducible.clear()
     freeWires.clear()
-    val w = new PerThreadWorker(this)
+    val w = new PerThreadWorker(this, if(config.collectStats) new ExecutionMetrics else null)
     initialRuleImpls.foreach { case (freeSyms, rule) =>
       val free = freeSyms.map(new WireCell(_))
       freeWires.addAll(free)
@@ -272,23 +274,21 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   // Used by the debugger
   def getRuleImpl(c1: Cell, c2: Cell): RuleImpl = ruleImpls(mkRuleKey(c1.asInstanceOf[InterpreterCell], c2.asInstanceOf[InterpreterCell]))
   def reduce1(c1: Cell, c2: Cell): Unit = {
-    val w = new PerThreadWorker(this)
+    val w = new PerThreadWorker(this, null)
     w.setNext(c1, c2)
     w.processNext()
     val (d1, d2) = w.getNext
     if(d1 != null) cutBuffer.addOne(d1, d2)
   }
 
-  def reduce(): Int = {
-    val w = new PerThreadWorker(this)
+  def reduce(): Unit = {
+    this.metrics = if(config.collectStats) new ExecutionMetrics else null
+    val w = new PerThreadWorker(this, metrics)
     while(cutBuffer.nonEmpty) {
       val (c1, c2) = cutBuffer.pop()
       w.setNext(c1, c2)
       w.processAll()
     }
-    if(collectStats)
-      println(s"Steps: ${w.statSteps} (${w.statSteps-w.statLoopSave} non-looping), cells created: ${w.statCellAllocations} (new), ${w.statCachedCellReuse} (cached), ${w.statSingletonUse} (singleton)")
-    w.statSteps
   }
 }
 
@@ -319,11 +319,9 @@ final class CutBuffer(initialSize: Int) {
   def iterator: Iterator[(Cell, Cell)] = pairs.iterator.take(len*2).grouped(2).map { case Seq(c1, c2) => (c1, c2) }
 }
 
-final class PerThreadWorker(final val inter: Interpreter) {
-  final val collectStats = inter.collectStats
+final class PerThreadWorker(final val inter: Interpreter, val metrics: ExecutionMetrics) {
   final val tempCells = inter.createTempCells()
   private[this] final var nextCut1, nextCut2: Cell = _
-  var statSteps, statCellAllocations, statCachedCellReuse, statSingletonUse, statLoopSave = 0
 
   def createCut(c1: Cell, c2: Cell): Unit = {
     if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 }
@@ -353,13 +351,9 @@ final class PerThreadWorker(final val inter: Interpreter) {
 
   def irreducible(c1: Cell, c2: Cell): Unit = inter.irreducible.addOne(c1, c2)
 
-  def recordStats(cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int): Unit = {
-    this.statSteps += 1
-    this.statCellAllocations += cellAllocations
-    this.statCachedCellReuse += cachedCellReuse
-    this.statSingletonUse += singletonUse
-    this.statLoopSave += loopSave
-  }
+  def recordStats(cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int): Unit =
+    metrics.recordStats(cellAllocations, cachedCellReuse, singletonUse, loopSave)
+  def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 
   def processNext(): Unit = {
     val c1 = nextCut1

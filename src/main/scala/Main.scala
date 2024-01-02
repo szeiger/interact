@@ -32,8 +32,9 @@ object Main extends App {
     inter.initData()
     println("Initial state:")
     inter.getAnalyzer.log(System.out)
-    val steps = inter.reduce()
-    println(s"Irreducible after $steps reductions.")
+    inter.reduce()
+    if(inter.getMetrics != null) inter.getMetrics.log()
+    println(s"Irreducible after ${inter.getMetrics.getSteps} reductions.")
     inter.getAnalyzer.log(System.out)
     handleRes(model.global.getCompilerResult(), false)
   } catch { case ex: CompilerResult => handleRes(ex, true) }

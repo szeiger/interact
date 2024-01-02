@@ -91,10 +91,11 @@ class InterpreterBenchmark {
       i.initData()
       println()
       i.reduce()
+      i.getMetrics.log()
       println()
     }
 
-    val inter = model.createInterpreter(spec)
+    val inter = model.createInterpreter(spec, BackendConfig(logGeneratedClasses = None))
     def setup(): BaseInterpreter = {
       inter.initData()
       inter

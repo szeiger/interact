@@ -23,6 +23,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
   private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I).V)
+  private val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   private val new_CommonCell = commonCellT.constr(tp.m().V)
 
@@ -117,6 +118,9 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
   }
 
+  private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
+    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invokevirtual(ptw_recordMetric)
+
   private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: scala.collection.Set[Symbol]): Unit = {
     assert(rule.branches.length == 1)
     val isInitial = rule.isInstanceOf[InitialPlan]
@@ -129,6 +133,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     val cLeft = m.param("cLeft", concreteCellTFor(rule.sym1))
     val cRight = m.param("cRight", concreteCellTFor(rule.sym2))
     val ptw = m.param("ptw", ptwT, Acc.FINAL)
+    incMetric(s"${c.name}.${m.name}", m, ptw)
 
     val createOrder = optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)
 
@@ -206,8 +211,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
     def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
 
-    val reuse1Buffer = new Array[VarIdx](rule.arity1*2)
-    val reuse2Buffer = new Array[VarIdx](rule.arity2*2)
+    val reuse1Buffer = Array.fill[VarIdx](rule.arity1*2)(VarIdx.none)
+    val reuse2Buffer = Array.fill[VarIdx](rule.arity2*2)(VarIdx.none)
     def setAux(idx: CellIdx, ct2: Idx, setPort: Boolean = true): m.type = {
       val sym = branch.cells(idx.idx)
       if(idx.idx == reuse1) {
@@ -316,15 +321,15 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     for(p <- 0 until rule.arity1) {
-      if(reuse1Buffer(p*2) != null)
+      if(reuse1Buffer(p*2) != VarIdx.none)
         m.aload(cells(reuse1)).aload(reuse1Buffer(p*2)).putfield(cell_acell(rule.sym1, p))
-      if(reuse1Buffer(p*2+1) != null)
+      if(reuse1Buffer(p*2+1) != VarIdx.none)
         m.aload(cells(reuse1)).iload(reuse1Buffer(p*2+1)).putfield(cell_aport(rule.sym1, p))
     }
     for(p <- 0 until rule.arity2) {
-      if(reuse2Buffer(p*2) != null)
+      if(reuse2Buffer(p*2) != VarIdx.none)
         m.aload(cells(reuse2)).aload(reuse2Buffer(p*2)).putfield(cell_acell(rule.sym2, p))
-      if(reuse2Buffer(p*2+1) != null)
+      if(reuse2Buffer(p*2+1) != VarIdx.none)
         m.aload(cells(reuse2)).iload(reuse2Buffer(p*2+1)).putfield(cell_aport(rule.sym2, p))
     }
 
@@ -436,6 +441,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_reduce.name, cell_reduce.desc)
       val other = m.param("other", cellT, Acc.FINAL)
       val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      incMetric(s"${c.name}.${m.name}", m, ptw)
       val isShared = common.contains(sym)
       val ifm = if(isShared) {
         val i = interfaceMethod(sym)
@@ -460,6 +466,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val m = c.method(Acc.PUBLIC | Acc.FINAL, ifm.name, ifm.desc)
       val other = m.param("other", concreteCellTFor(sym2), Acc.FINAL)
       val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      incMetric(s"${c.name}.${m.name}", m, ptw)
       val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
       if(rk.sym1 == sym) m.aload(m.receiver).aload(other)
       else m.aload(other).aload(m.receiver)

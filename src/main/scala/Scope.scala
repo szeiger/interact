@@ -340,5 +340,6 @@ trait Analyzer[Cell] { self =>
 trait BaseInterpreter {
   def getAnalyzer: Analyzer[_]
   def initData(): Unit
-  def reduce(): Int
+  def reduce(): Unit
+  def getMetrics: ExecutionMetrics
 }

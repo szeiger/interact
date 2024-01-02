@@ -62,7 +62,7 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   }
 }
 
-final class MethodDSL(access: Acc, name: String, desc: MethodDesc) {
+final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
   private[this] val params = ArrayBuffer.empty[Local]
   private[this] val locals = ArrayBuffer.empty[Local]
   private[this] val code = ArrayBuffer.empty[AbstractInsnNode]

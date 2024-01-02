@@ -16,7 +16,8 @@ object TestUtils {
     val model = new Compiler(statements, FrontendConfig(addEraseDup = addEraseDup))
     val inter = model.createInterpreter(spec, BackendConfig(collectStats = true))
     inter.initData()
-    val steps = inter.reduce()
+    inter.reduce()
+    if(inter.getMetrics != null) inter.getMetrics.logStats()
     val out = new ByteArrayOutputStream()
     inter.getAnalyzer.log(new PrintStream(out, true, StandardCharsets.UTF_8), color = false)
     val s = out.toString(StandardCharsets.UTF_8)
@@ -30,7 +31,7 @@ object TestUtils {
       //println("---- End ----")
       assertEquals(check.trim.replaceAll("\r", ""), s.trim.replaceAll("\r", ""))
     }
-    if(expectedSteps >= 0) assertEquals(expectedSteps, steps)
+    if(expectedSteps >= 0) assertEquals(expectedSteps, inter.getMetrics.getSteps)
   }
 }
 

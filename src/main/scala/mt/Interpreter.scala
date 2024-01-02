@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, BackendConfig, InitialPlan, RulePlan, Scope}
+import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialPlan, RulePlan, Scope}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
@@ -225,6 +225,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
     scope.clear()
     compData.foreach(scope.addData(_))
   }
+  def getMetrics: ExecutionMetrics = null
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
@@ -311,7 +312,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
     w.processNext()
   }
 
-  def reduce(): Int = {
+  def reduce(): Unit = {
     resetStats()
     val initial = detectInitialCuts
     if(config.numThreads == 0) {
@@ -325,7 +326,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
       }
       if(config.collectStats)
         println(s"Total steps: ${w.steps}, allocated cells: ${w.cellAllocations}, allocated wires: ${w.wireAllocations}")
-      w.steps
     } else if(config.numThreads <= 1000) {
       latch = new CountDownLatch(1)
       val pool = new ForkJoinPool(config.numThreads, new ActionWorkerThread(_, this), null, config.numThreads > 1)
@@ -333,7 +333,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
       initial.foreach { (wr, ri) => pool.execute(new Action(wr, ri)) }
       while(unfinished.get() != 0) latch.await()
       pool.shutdown()
-      totalSteps.get()
+      //totalSteps.get()
     } else {
       latch = new CountDownLatch(1)
       class Adapter extends Worker[(WireRef, RuleImpl)] {
@@ -365,7 +365,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
       val steps = totalSteps.get()
       if(config.collectStats)
         println(s"Total steps: $steps, allocated cells: ${cellAllocations.get()}, allocated wires: ${wireAllocations.get()}")
-      steps
     }
   }
 }
