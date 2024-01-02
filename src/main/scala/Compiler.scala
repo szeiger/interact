@@ -79,7 +79,9 @@ case class BackendConfig(
   numThreads: Int = 0, // mt
   collectStats: Boolean = false,
   useCellCache: Boolean = false, // st.c
-  biasForCommonDispatch: Boolean = true, // st.c
-  logGenerated: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
+  biasForCommonDispatch: Boolean = true, // optimize for invokevirtual dispatch of statically known cell types (st.c)
+  logCodeGenSummary: Boolean = false, // st.c, mt.c
+  logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
   compilerParallelism: Int = 1,
+  allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (st.c)
 )

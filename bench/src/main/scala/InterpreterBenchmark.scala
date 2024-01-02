@@ -87,7 +87,7 @@ class InterpreterBenchmark {
     val model: Compiler = new Compiler(Parser.parse(source))
 
     {
-      val i = model.createInterpreter(spec, BackendConfig(collectStats=true))
+      val i = model.createInterpreter(spec, BackendConfig(collectStats = true, logCodeGenSummary = true))
       i.initData()
       println()
       i.reduce()

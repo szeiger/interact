@@ -19,7 +19,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val cell_reduce = cellT.method("reduce", tp.m(cellT, ptwT).V)
   private val cell_arity = cellT.method("arity", tp.m().I)
   private val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
-  private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I)(tp.I))
+  private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I).I)
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
   private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I).V)
@@ -53,7 +53,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     classLoader.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
   }
 
-  private def compileRule(rule: RulePlan, shared: Set[Symbol]): Class[_] = {
+  private def compileRule(rule: RulePlan, shared: scala.collection.Set[Symbol]): Class[_] = {
     val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
     val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
@@ -117,7 +117,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
   }
 
-  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: Set[Symbol]): Unit = {
+  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: scala.collection.Set[Symbol]): Unit = {
     assert(rule.branches.length == 1)
     val isInitial = rule.isInstanceOf[InitialPlan]
     val branch = rule.branches.head
@@ -359,12 +359,12 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     addClass(classLoader, c)
   }
 
-  private def compileCons(sym: Symbol, rules: scala.collection.Map[RuleKey, _], shared: Set[Symbol]): Class[_] = {
+  private def compileCell(sym: Symbol, rules: scala.collection.Map[RuleKey, _], common: scala.collection.Set[Symbol]): Class[_] = {
     val rulePairs = rules.keys.iterator.collect {
       case rk if rk.sym1 == sym => (rk.sym2, rk)
       case rk if rk.sym2 == sym => (rk.sym1, rk)
     }.toMap
-    val interfaces = (rulePairs.keySet -- shared).iterator.map(s => interfaceT(s).className).toArray.sorted
+    val interfaces = (rulePairs.keySet -- common).iterator.map(s => interfaceT(s).className).toArray.sorted
     val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces)
 
     val (cfields, pfields) = (0 until sym.arity).map(i => (c.field(Acc.PUBLIC, s"acell$i", cellT), c.field(Acc.PUBLIC, s"aport$i", tp.I))).unzip
@@ -436,7 +436,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_reduce.name, cell_reduce.desc)
       val other = m.param("other", cellT, Acc.FINAL)
       val ptw = m.param("ptw", ptwT, Acc.FINAL)
-      val isShared = shared.contains(sym)
+      val isShared = common.contains(sym)
       val ifm = if(isShared) {
         val i = interfaceMethod(sym)
         commonCellT.method(i.name, i.desc)
@@ -464,6 +464,14 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       if(rk.sym1 == sym) m.aload(m.receiver).aload(other)
       else m.aload(other).aload(m.receiver)
       m.aload(ptw).invokestatic(staticMR).return_
+    }
+    // unsupported common operations (when using config.allCommon)
+    (common -- rulePairs.keySet).foreach { sym2 =>
+      val ifm = interfaceMethod(sym2)
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, ifm.name, ifm.desc)
+      val other = m.param("other", concreteCellTFor(sym2), Acc.FINAL)
+      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      m.aload(ptw).aload(m.receiver).aload(other).invokevirtual(ptw_irreducible).return_
     }
     addClass(classLoader, c)
   }
@@ -505,32 +513,35 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     order
   }
 
-  private def compileCommonCell(shared: Set[Symbol]): Unit = {
+  private def compileCommonCell(common: scala.collection.Set[Symbol]): Unit = {
     val c = new ClassDSL(Acc.PUBLIC | Acc.ABSTRACT, commonCellT.className, cellT)
     c.emptyNoArgsConstructor(Acc.PROTECTED)
-    shared.foreach(sym => c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethod(sym)))
+    common.foreach(sym => c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethod(sym)))
     addClass(classLoader, c)
   }
 
   // find symbols that can interact with every symbol (usually dup & erase)
-  private def findCommonPartners(rules: scala.collection.Map[RuleKey, RulePlan]): Set[Symbol] = {
+  private def findCommonPartners(rules: scala.collection.Map[RuleKey, RulePlan]): scala.collection.Set[Symbol] = {
     val ruleMap = mutable.HashMap.empty[Symbol, mutable.HashSet[Symbol]]
     rules.foreach { case (k, _) =>
       ruleMap.getOrElseUpdate(k.sym1, mutable.HashSet.empty) += k.sym2
       ruleMap.getOrElseUpdate(k.sym2, mutable.HashSet.empty) += k.sym1
     }
-    val totalSyms = ruleMap.size
-    val counts = mutable.HashMap.empty[Symbol, Int]
-    for {
-      v <- ruleMap.valuesIterator
-      s <- v
-    } {
-      counts.updateWith(s) {
-        case None => Some(1)
-        case Some(x) => Some(x+1)
+    if(config.allCommon) ruleMap.keySet
+    else {
+      val totalSyms = ruleMap.size
+      val counts = mutable.HashMap.empty[Symbol, Int]
+      for {
+        v <- ruleMap.valuesIterator
+        s <- v
+      } {
+        counts.updateWith(s) {
+          case None => Some(1)
+          case Some(x) => Some(x+1)
+        }
       }
+      counts.iterator.filter(_._2 == totalSyms).map(_._1).toSet
     }
-    counts.iterator.filter(_._2 == totalSyms).map(_._1).toSet
   }
 
   private def compileCellCache(rules: scala.collection.Map[RuleKey, RulePlan]): Unit = {
@@ -556,16 +567,16 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   }
 
   def compile(rules: scala.collection.Map[RuleKey, RulePlan], initialRules: Iterable[InitialPlan], globals: Symbols): (Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
-    val shared = findCommonPartners(rules)
+    val common = findCommonPartners(rules)
     val classToSymbol = Map.newBuilder[Class[_], Symbol]
-    ParSupport.foreach(globals.symbols.filter(s => s.isCons && !shared.contains(s)), config.compilerParallelism)(compileInterface)
-    compileCommonCell(shared)
+    ParSupport.foreach(globals.symbols.filter(s => s.isCons && !common.contains(s)), config.compilerParallelism)(compileInterface)
+    compileCommonCell(common)
     if(config.useCellCache) compileCellCache(rules)
     ParSupport.foreach(globals.symbols.filter(_.isCons), config.compilerParallelism) { sym =>
-      val cls = compileCons(sym, rules, shared)
+      val cls = compileCell(sym, rules, common)
       classToSymbol.synchronized(classToSymbol += ((cls, sym)))
     }
-    ParSupport.foreach(rules.values, config.compilerParallelism) { g => compileRule(g, shared) }
+    ParSupport.foreach(rules.values, config.compilerParallelism) { g => compileRule(g, common) }
     val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
     initialRules.zipWithIndex.foreach { case (ip, i) =>
       val ri = compileInitial(ip, i)

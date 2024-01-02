@@ -39,7 +39,8 @@ abstract class AbstractCodeGen[RI](config: BackendConfig) {
     val ca = new CheckClassAdapter(cw)
     cls.accept(ca)
     val raw = cw.toByteArray
-    if(config.logGenerated.exists(cls.name.contains)) {
+    if(config.logCodeGenSummary) println(s"Generated class ${cls.name} (${raw.length} bytes)")
+    if(config.logGeneratedClasses.exists(cls.name.contains)) {
       val cr = new ClassReader(raw)
       cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
     }
