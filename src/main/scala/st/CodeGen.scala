@@ -44,90 +44,12 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private def cellCache_get(sym: Symbol) = cellCacheT.method(s"get_${encodeName(sym)}", tp.m()(concreteCellTFor(sym)))
   private def cellCache_set(sym: Symbol) = cellCacheT.method(s"set_${encodeName(sym)}", tp.m(concreteCellTFor(sym)).V)
 
-  private def compileInitial(rule: InitialPlan, initialIndex: Int): RuleImpl = {
-    val staticMR = initialRuleT_static_reduce(initialIndex)
-    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
-    ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, rule, staticMR, Set.empty)
-    implementReduce(ric, staticMR)
-    addClass(classLoader, ric)
-    classLoader.loadClass(ric.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
-  }
-
-  private def compileRule(rule: RulePlan, shared: scala.collection.Set[Symbol]): Class[_] = {
-    val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
-    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className)
-    ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, rule, staticMR, shared)
-    addClass(classLoader, ric)
-    classLoader.loadClass(ric.javaName)
-  }
-
-  private def findReuse(rule: GenericRulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
-    // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
-    def countReuseConnections(cellIdx: Int, rhs: Boolean): Int =
-      reuseSkip(cellIdx, rhs).length
-    // Find connections to skip for reuse
-    def reuseSkip(cellIdx: Int, rhs: Boolean): IndexedSeq[Connection] =
-      (0 until branch.cells(cellIdx).arity).flatMap { p =>
-        val ci = new CellIdx(cellIdx, p)
-        branch.wireConnsDistinct.collect {
-          case c @ Connection(FreeIdx(rhs2, fi2), ci2) if ci2 == ci && rhs2 == rhs && fi2 == p => c
-          case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
-        }
-      }
-    // Find cellIdx/quality of best reuse candidate for rhs/lhs
-    def bestReuse(candidates: Vector[(Symbol, Int)], rhs: Boolean): Option[(Int, Int)] =
-      candidates.map { case (s, i) => (i, countReuseConnections(i, rhs)) }
-        .sortBy { case (i, q) => -q }.headOption
-    // Find sym/cellIdx of cells with same symbol as rhs/lhs
-    def reuseCandidates(rhs: Boolean): Vector[(Symbol, Int)] =
-      branch.cells.zipWithIndex.filter { case (sym, _) => sym == rule.symFor(rhs) }
-    // Find best reuse combination for both sides
-    def bestReuse2: (Option[(Int, Int)], Option[(Int, Int)], Set[Connection]) = {
-      var cand1 = reuseCandidates(false)
-      var cand2 = reuseCandidates(true)
-      var best1 = bestReuse(cand1, false)
-      var best2 = bestReuse(cand2, true)
-      (best1, best2) match {
-        case (Some((ci1, q1)), Some((ci2, q2))) if ci1 == ci2 =>
-          if(q1 >= q2) { // redo best2
-            cand2 = cand2.filter { case (s, i) => i != ci1 }
-            best2 = bestReuse(cand2, true)
-          } else { // redo best1
-            cand1 = cand1.filter { case (s, i) => i != ci2 }
-            best1 = bestReuse(cand1, false)
-          }
-        case _ =>
-      }
-      val skipConn1 = best1.iterator.flatMap { case (ci, _) => reuseSkip(ci, false) }
-      val skipConn2 = best2.iterator.flatMap { case (ci, _) => reuseSkip(ci, true) }
-      (best1, best2, (skipConn1 ++ skipConn2).toSet)
-    }
-
-    val (r1, r2, skip) = bestReuse2
-    (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
-  }
-
-  // only used for initial rules
-  private def implementReduce(c: ClassDSL, staticMR: MethodRef): Unit = {
-    val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce.name, ri_reduce.desc)
-    val c1 = m.param("c1", cellT, Acc.FINAL)
-    val c2 = m.param("c2", cellT, Acc.FINAL)
-    val ptw = m.param("ptw", ptwT, Acc.FINAL)
-    m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
-  }
-
-  private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
-    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invokevirtual(ptw_recordMetric)
-
-  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: scala.collection.Set[Symbol]): Unit = {
+  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan]): Unit = {
     assert(rule.branches.length == 1)
     val isInitial = rule.isInstanceOf[InitialPlan]
     val branch = rule.branches.head
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
-    //val (reuse1, reuse2, skipConns) = (-1, -1, Set.empty[Connection])
-    val conns = (branch.wireConnsDistinct ++ branch.internalConnsDistinct).filterNot(skipConns.contains)
+    val conns = (branch.internalConnsDistinct ++ branch.wireConnsDistinct).filterNot(skipConns.contains)
     def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
     val m = c.method(Acc.PUBLIC | Acc.STATIC, mref.name, mref.desc)
     val cLeft = m.param("cLeft", concreteCellTFor(rule.sym1))
@@ -136,6 +58,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     incMetric(s"${c.name}.${m.name}", m, ptw)
 
     val createOrder = optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)
+    //val (uniqueConts, uniqueContPoss) = uniqueContinuationsFor(rule, rules)
 
     val loopOn1 = reuse1 != -1 && ((rule.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
     val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
@@ -146,7 +69,6 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
         (cont1, cont2, m.setLabel())
       } else (VarIdx.none, VarIdx.none, null)
     }
-    //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; strict: $loopOn1, $loopOn2; relaxed: ${reuse1 != -1}, ${reuse2 != -1}")
 
     // Create new cells
     var statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
@@ -165,7 +87,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
             statSingletonUse += 1
           } else {
             def loadParams() = {
-              branch.cellConns(idx).zipWithIndex.foreach {
+              branch.auxConns(idx).zipWithIndex.foreach {
                 case (CellIdx(ci, p2), p1) =>
                   if(cells(ci) == VarIdx.none) { m.aconst_null; cellPortsNotConnected += 1 }
                   else { m.aload(cells(ci)); cellPortsConnected += CellIdx(idx, p1) }
@@ -357,6 +279,123 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     m.return_
   }
 
+  private def findReuse(rule: GenericRulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
+    if(!config.reuseCells) return (-1, -1, Set.empty)
+
+    // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
+    def countReuseConnections(cellIdx: Int, rhs: Boolean): Int =
+      reuseSkip(cellIdx, rhs).length
+    // Find connections to skip for reuse
+    def reuseSkip(cellIdx: Int, rhs: Boolean): IndexedSeq[Connection] =
+      (0 until branch.cells(cellIdx).arity).flatMap { p =>
+        val ci = new CellIdx(cellIdx, p)
+        branch.wireConnsDistinct.collect {
+          case c @ Connection(FreeIdx(rhs2, fi2), ci2) if ci2 == ci && rhs2 == rhs && fi2 == p => c
+          case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
+        }
+      }
+    // Find cellIdx/quality of best reuse candidate for rhs/lhs
+    def bestReuse(candidates: Vector[(Symbol, Int)], rhs: Boolean): Option[(Int, Int)] =
+      candidates.map { case (s, i) => (i, countReuseConnections(i, rhs)) }
+        .sortBy { case (i, q) => -q }.headOption
+    // Find sym/cellIdx of cells with same symbol as rhs/lhs
+    def reuseCandidates(rhs: Boolean): Vector[(Symbol, Int)] =
+      branch.cells.zipWithIndex.filter { case (sym, _) => sym == rule.symFor(rhs) }
+    // Find best reuse combination for both sides
+    def bestReuse2: (Option[(Int, Int)], Option[(Int, Int)], Set[Connection]) = {
+      var cand1 = reuseCandidates(false)
+      var cand2 = reuseCandidates(true)
+      var best1 = bestReuse(cand1, false)
+      var best2 = bestReuse(cand2, true)
+      (best1, best2) match {
+        case (Some((ci1, q1)), Some((ci2, q2))) if ci1 == ci2 =>
+          if(q1 >= q2) { // redo best2
+            cand2 = cand2.filter { case (s, i) => i != ci1 }
+            best2 = bestReuse(cand2, true)
+          } else { // redo best1
+            cand1 = cand1.filter { case (s, i) => i != ci2 }
+            best1 = bestReuse(cand1, false)
+          }
+        case _ =>
+      }
+      val skipConn1 = best1.iterator.flatMap { case (ci, _) => reuseSkip(ci, false) }
+      val skipConn2 = best2.iterator.flatMap { case (ci, _) => reuseSkip(ci, true) }
+      (best1, best2, (skipConn1 ++ skipConn2).toSet)
+    }
+
+    val (r1, r2, skip) = bestReuse2
+    (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
+  }
+
+  // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
+  private def uniqueContinuationsFor(rule: RulePlan, rules: scala.collection.Map[RuleKey, RulePlan]): (Set[Symbol], Vector[Vector[Int]]) = {
+    if(config.inlineUniqueContinuations) {
+      val funcSym =
+        if(rule.derived) null
+        else {
+          val s = Set(rule.sym1, rule.sym2).filter(_.isDef)
+          if(s.size == 1) s.head else null
+        }
+      if(funcSym != null) {
+        val rhsSymsMap = rules.view.filterNot(_._2.derived).mapValues(_.branches.iterator.flatMap(_.cells).toSet)
+        val rhsSymsHere = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 == funcSym || k.sym2 == funcSym }.map(_._2).flatten.toSet
+        val otherRhsSyms = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 != funcSym && k.sym2 != funcSym }.map(_._2).flatten.toSet
+        val unique = (rhsSymsHere -- otherRhsSyms).filter(s => s.isDef && s != funcSym && s.id != "dup" && s.id != "erase")
+        val completions = rule.branches.map { branch =>
+          (for {
+            (s, i) <- branch.cells.zipWithIndex if unique.contains(s)
+          } yield {
+            branch.principalConns(i) match {
+              case CellIdx(_, -1) => i //TODO not needed if rhs is fully reduced
+              case FreeIdx(_, _) => i
+              case _ => -1
+          }}).filter(_ >= 0)
+        }
+        (unique, completions)
+      } else (Set.empty, rule.branches.map(_ => Vector.empty))
+    } else (Set.empty, rule.branches.map(_ => Vector.empty))
+  }
+
+  // maximize # of connections that can be made in the constructor calls
+  private def optimizeCellCreationOrder(cellCount: Int, conns: Iterable[Connection]): ArrayBuffer[Int] = {
+    val inc: Option[Int] => Option[Int] = { case Some(i) => Some(i+1); case None => Some(1) }
+    lazy val cells = ArrayBuffer.tabulate(cellCount)(new C(_))
+    class C(val idx: Int) {
+      val in, out = mutable.HashMap.empty[C, Int]
+      var weight: Int = 0
+      def link(c: C): Unit = {
+        out.updateWith(c)(inc)
+        c.in.updateWith(this)(inc)
+        weight += 1
+      }
+      def unlink(): Unit = {
+        out.keys.foreach(c => c.in.remove(this))
+        in.keys.foreach(c => c.out.remove(this).foreach { w => c.weight -= w })
+      }
+    }
+    conns.foreach { case Connection(CellIdx(i1, p1), CellIdx(i2, p2)) =>
+      if(p1 >= 0) cells(i1).link(cells(i2))
+      if(p2 >= 0) cells(i2).link(cells(i1))
+    }
+    val order = ArrayBuffer.empty[Int]
+    def take() = {
+      val c = cells.head
+      cells.remove(0)
+      order += c.idx
+      c.unlink()
+    }
+    while(cells.nonEmpty) { //TODO use heap
+      cells.sortInPlaceBy(c => c.weight)
+      if(cells.head.weight == 0)
+        while(cells.nonEmpty && cells.head.weight == 0) take()
+      else take()
+    }
+    order
+  }
+
+  private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
+    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invokevirtual(ptw_recordMetric)
+
   private def compileInterface(sym: Symbol): Unit = {
     val ifm = interfaceMethod(sym)
     val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, ifm.owner.className)
@@ -483,43 +522,6 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     addClass(classLoader, c)
   }
 
-  // maximize # of connections that can be made in the constructor calls
-  private def optimizeCellCreationOrder(cellCount: Int, conns: Iterable[Connection]): ArrayBuffer[Int] = {
-    val inc: Option[Int] => Option[Int] = { case Some(i) => Some(i+1); case None => Some(1) }
-    lazy val cells = ArrayBuffer.tabulate(cellCount)(new C(_))
-    class C(val idx: Int) {
-      val in, out = mutable.HashMap.empty[C, Int]
-      var weight: Int = 0
-      def link(c: C): Unit = {
-        out.updateWith(c)(inc)
-        c.in.updateWith(this)(inc)
-        weight += 1
-      }
-      def unlink(): Unit = {
-        out.keys.foreach(c => c.in.remove(this))
-        in.keys.foreach(c => c.out.remove(this).foreach { w => c.weight -= w })
-      }
-    }
-    conns.foreach { case Connection(CellIdx(i1, p1), CellIdx(i2, p2)) =>
-      if(p1 >= 0) cells(i1).link(cells(i2))
-      if(p2 >= 0) cells(i2).link(cells(i1))
-    }
-    val order = ArrayBuffer.empty[Int]
-    def take() = {
-      val c = cells.head
-      cells.remove(0)
-      order += c.idx
-      c.unlink()
-    }
-    while(cells.nonEmpty) { //TODO use heap
-      cells.sortInPlaceBy(c => c.weight)
-      if(cells.head.weight == 0)
-        while(cells.nonEmpty && cells.head.weight == 0) take()
-      else take()
-    }
-    order
-  }
-
   private def compileCommonCell(common: scala.collection.Set[Symbol]): Unit = {
     val c = new ClassDSL(Acc.PUBLIC | Acc.ABSTRACT, commonCellT.className, cellT)
     c.emptyNoArgsConstructor(Acc.PROTECTED)
@@ -573,6 +575,34 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     addClass(classLoader, c)
   }
 
+  private def compileInitial(rule: InitialPlan, initialIndex: Int): RuleImpl = {
+    val staticMR = initialRuleT_static_reduce(initialIndex)
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
+    c.emptyNoArgsConstructor(Acc.PUBLIC)
+    implementStaticReduce(c, rule, staticMR, Set.empty, Map.empty)
+
+    // reduce
+    {
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce.name, ri_reduce.desc)
+      val c1 = m.param("c1", cellT, Acc.FINAL)
+      val c2 = m.param("c2", cellT, Acc.FINAL)
+      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
+    }
+
+    addClass(classLoader, c)
+    classLoader.loadClass(c.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
+  }
+
+  private def compileRule(rule: RulePlan, shared: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan]): Class[_] = {
+    val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
+    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className)
+    ric.emptyNoArgsConstructor(Acc.PUBLIC)
+    implementStaticReduce(ric, rule, staticMR, shared, rules)
+    addClass(classLoader, ric)
+    classLoader.loadClass(ric.javaName)
+  }
+
   def compile(rules: scala.collection.Map[RuleKey, RulePlan], initialRules: Iterable[InitialPlan], globals: Symbols): (Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     val common = findCommonPartners(rules)
     val classToSymbol = Map.newBuilder[Class[_], Symbol]
@@ -583,7 +613,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val cls = compileCell(sym, rules, common)
       classToSymbol.synchronized(classToSymbol += ((cls, sym)))
     }
-    ParSupport.foreach(rules.values, config.compilerParallelism) { g => compileRule(g, common) }
+    ParSupport.foreach(rules.values, config.compilerParallelism) { g => compileRule(g, common, rules) }
     val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
     initialRules.zipWithIndex.foreach { case (ip, i) =>
       val ri = compileInitial(ip, i)

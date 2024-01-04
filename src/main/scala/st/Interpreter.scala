@@ -59,7 +59,7 @@ abstract class RuleImpl {
 }
 
 final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
-    assigners: Array[PayloadAssigner], embeddedComps: Array[EmbeddedComputation[Int]], embeddedArgss: Array[scala.collection.Seq[Int]],
+    embeddedAssigners: Array[PayloadAssigner], embeddedComps: Array[EmbeddedComputation[Int]], embeddedArgss: Array[scala.collection.Seq[Int]],
     condComp: EmbeddedComputation[Int], condArgs: scala.collection.Seq[Int], next: RuleImpl) extends RuleImpl {
 
   private[this] def delay(nanos: Int): Unit = {
@@ -101,8 +101,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     }
 
     i = 0
-    while(i < assigners.length) {
-      val ass = assigners(i)
+    while(i < embeddedAssigners.length) {
+      val ass = embeddedAssigners(i)
       ass(c1, c2, cells(ass.cellIdx))
       i += 1
     }

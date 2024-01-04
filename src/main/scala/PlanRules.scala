@@ -17,7 +17,7 @@ class PlanRules(global: Global) extends Transform with Phase {
   import global._
 
   override def apply(n: MatchRule) =
-    Vector(RulePlan(n.sym1, n.sym2, n.reduction.map(r => BranchPlan(dependencyLoader, n, r))).setPos(n.pos))
+    Vector(RulePlan(n.sym1, n.sym2, n.reduction.map(r => BranchPlan(dependencyLoader, n, r)), false).setPos(n.pos))
 
   override def apply(n: DerivedRule) = {
     if(n.sym1.id == "erase") Vector(deriveErase(n.sym2, n.sym1))
@@ -35,13 +35,13 @@ class PlanRules(global: Global) extends Transform with Phase {
       case PayloadType.REF => Seq(new EmbeddedMethodApplication(dependencyLoader, classOf[Intrinsics.type].getName, "eraseRef", Nil, Array(-2), null))
       case _ => Nil
     }
-    RulePlan(eraseSym, sym, Vector(new BranchPlan(0, cells, Vector.empty, wireConns, Array(), embComp, None)))
+    RulePlan(eraseSym, sym, Vector(new BranchPlan(0, cells, Vector.empty, wireConns, Array(), embComp, None)), true)
   }
 
   private[this] def deriveDup(sym: Symbol, dupSym: Symbol): RulePlan = {
     if(sym == dupSym) {
       val wireConns = Vector(Connection(FreeIdx(false, 0), FreeIdx(true, 0)), Connection(FreeIdx(false, 1), FreeIdx(true, 1)))
-      RulePlan(dupSym, sym, Vector(new BranchPlan(2, Vector.empty, Vector.empty, wireConns, Array(), Nil, None)))
+      RulePlan(dupSym, sym, Vector(new BranchPlan(2, Vector.empty, Vector.empty, wireConns, Array(), Nil, None)), true)
     } else {
       val cells = Vector.fill(sym.arity)(dupSym) ++ Array.fill(2)(sym)
       val internalConns = Vector.newBuilder[Connection]
@@ -55,7 +55,7 @@ class PlanRules(global: Global) extends Transform with Phase {
         case PayloadType.REF => Seq(new EmbeddedMethodApplication(dependencyLoader, classOf[Intrinsics.type].getName, "dupRef", Nil, Array(-2, sym.arity, sym.arity+1), null))
         case _ => Nil
       }
-      RulePlan(dupSym, sym, Vector(new BranchPlan(2, cells, internalConns.result(), wireConns1 ++ wireConns2, Array(), embComp, None)))
+      RulePlan(dupSym, sym, Vector(new BranchPlan(2, cells, internalConns.result(), wireConns1 ++ wireConns2, Array(), embComp, None)), true)
     }
   }
 }
@@ -63,11 +63,6 @@ class PlanRules(global: Global) extends Transform with Phase {
 case class Connection(c1: Idx, c2: Idx) extends Node {
   def show = s"${c1.show} <-> ${c2.show}"
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
-  def mapCell(m: Map[Int, Int]): Connection = {
-    val c1m = c1.mapCell(m)
-    val c2m = c2.mapCell(m)
-    if((c1m eq c1) && (c2m eq c2)) this else Connection(c1m, c2m)
-  }
 }
 object Connection {
   implicit val ord: Ordering[Connection] = Ordering.by(_.c1)
@@ -75,21 +70,15 @@ object Connection {
 
 sealed abstract class Idx {
   def show: String
-  def mapCell(m: Map[Int, Int]): Idx
 }
 object Idx {
   implicit val ord: Ordering[Idx] = Ordering.by(_.show)
 }
 case class CellIdx(idx: Int, port: Int) extends Idx {
   def show = s"c$idx:$port"
-  def mapCell(m: Map[Int, Int]): Idx = {
-    val i2 = m(idx)
-    if(i2 == idx) this else CellIdx(i2, port)
-  }
 }
 case class FreeIdx(rhs: Boolean, port: Int) extends Idx {
   def show = if(rhs) s"rhs:$port" else s"lhs:$port"
-  def mapCell(m: Map[Int, Int]): Idx = this
 }
 
 trait IntBox { def getValue: Int; def setValue(i: Int): Unit }
@@ -98,35 +87,18 @@ trait LifecycleManaged { def erase(): Unit; def copy(): LifecycleManaged }
 
 sealed abstract class PayloadAssigner(val cellIdx: Int) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit
-  def mapCell(m: Map[Int, Int]): PayloadAssigner
 }
 class IntLHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[IntBox].setValue(lhs.asInstanceOf[IntBox].getValue)
-  def mapCell(m: Map[Int, Int]): PayloadAssigner = {
-    val c = m(cellIdx)
-    if(c == cellIdx) this else new IntLHSMover(c)
-  }
 }
 class IntRHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[IntBox].setValue(rhs.asInstanceOf[IntBox].getValue)
-  def mapCell(m: Map[Int, Int]): PayloadAssigner = {
-    val c = m(cellIdx)
-    if(c == cellIdx) this else new IntRHSMover(c)
-  }
 }
 class RefLHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(lhs.asInstanceOf[RefBox].getValue)
-  def mapCell(m: Map[Int, Int]): PayloadAssigner = {
-    val c = m(cellIdx)
-    if(c == cellIdx) this else new RefLHSMover(c)
-  }
 }
 class RefRHSMover(_cellIdx: Int) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = target.asInstanceOf[RefBox].setValue(rhs.asInstanceOf[RefBox].getValue)
-  def mapCell(m: Map[Int, Int]): PayloadAssigner = {
-    val c = m(cellIdx)
-    if(c == cellIdx) this else new RefRHSMover(c)
-  }
 }
 class EmbeddedComputationAssigner(_cellIdx: Int, ec: EmbeddedComputation[Int]) extends PayloadAssigner(_cellIdx) {
   def apply(lhs: AnyRef, rhs: AnyRef, target: AnyRef): Unit = {
@@ -145,10 +117,6 @@ class EmbeddedComputationAssigner(_cellIdx: Int, ec: EmbeddedComputation[Int]) e
       case c: RefBox => c.setValue(v.asInstanceOf[AnyRef])
       case c: IntBox => c.setValue(v.asInstanceOf[Int])
     }
-  }
-  def mapCell(m: Map[Int, Int]): PayloadAssigner = {
-    val c = m(cellIdx)
-    if(c == cellIdx) this else new EmbeddedComputationAssigner(c, ec)
   }
 }
 
@@ -305,7 +273,7 @@ final class BranchPlan(arity1: Int,
   lazy val (freeWiresPacked1, freWiresPacked2) = freeWiresPacked.splitAt(arity1)
 
   // Aux connections by cell & port
-  lazy val cellConns: Array[Array[Idx]] = {
+  lazy val auxConns: Array[Array[Idx]] = {
     val a = new Array[Array[Idx]](cells.length)
     for(i <- cells.indices) a(i) = new Array[Idx](cells(i).arity)
     def f(cs: Iterable[Connection]): Unit = cs.foreach {
@@ -314,6 +282,22 @@ final class BranchPlan(arity1: Int,
         if(c2.port >= 0) a(c2.idx)(c2.port) = c1
       case Connection(c1: CellIdx, c2) if c1.port >= 0 => a(c1.idx)(c1.port) = c2
       case Connection(c1, c2: CellIdx) if c2.port >= 0 => a(c2.idx)(c2.port) = c1
+      case _ =>
+    }
+    f(internalConnsDistinct)
+    f(wireConnsByWire)
+    a
+  }
+
+  // Principal connections by cell & port
+  lazy val principalConns: Array[Idx] = {
+    val a = new Array[Idx](cells.length)
+    def f(cs: Iterable[Connection]): Unit = cs.foreach {
+      case Connection(c1: CellIdx, c2: CellIdx) =>
+        if(c1.port == -1) a(c1.idx) = c2
+        if(c2.port == -1) a(c2.idx) = c1
+      case Connection(c1: CellIdx, c2) if c1.port == -1 => a(c1.idx) = c2
+      case Connection(c1, c2: CellIdx) if c2.port == -1 => a(c2.idx) = c1
       case _ =>
     }
     f(internalConnsDistinct)
@@ -414,7 +398,8 @@ abstract class GenericRulePlan extends Statement {
   def symFor(rhs: Boolean): Symbol = if(rhs) sym2 else sym1
 }
 
-final case class RulePlan(sym1: Symbol, sym2: Symbol, branches: Vector[BranchPlan]) extends GenericRulePlan {
+final case class RulePlan(sym1: Symbol, sym2: Symbol, branches: Vector[BranchPlan], derived: Boolean) extends GenericRulePlan {
+  val key: RuleKey = new RuleKey(sym1, sym2)
   def arity1: Int = sym1.arity
   def arity2: Int = sym2.arity
 

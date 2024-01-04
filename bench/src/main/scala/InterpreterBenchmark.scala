@@ -1,6 +1,5 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.ShowableNode
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra._
 
@@ -132,13 +131,4 @@ class InterpreterBenchmark {
 //  @OperationsPerInvocation(16503015)
 //  def fib29(bh: Blackhole): Unit =
 //    bh.consume(fib29Inter.setup().reduce())
-
-//  @Benchmark
-//  def createInterpreter(bh: Blackhole): Unit = {
-//    bh.consume(new PreparedInterpreter(prelude + mult1Src))
-//    bh.consume(new PreparedInterpreter(prelude + mult2Src))
-//    bh.consume(new PreparedInterpreter(prelude + mult3Src))
-//    bh.consume(new PreparedInterpreter(prelude + fib22Src))
-//    bh.consume(new PreparedInterpreter(prelude + fib29Src))
-//  }
 }

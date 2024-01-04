@@ -63,6 +63,7 @@ final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
     case _ => false
   }
   override def hashCode(): Int = sym1.hashCode() + sym2.hashCode()
+  override def toString: String = s"$sym1 <-> $sym2"
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {
@@ -84,4 +85,6 @@ case class BackendConfig(
   logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
   compilerParallelism: Int = 1,
   allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (st.c)
+  inlineUniqueContinuations: Boolean = true, // st.c
+  reuseCells: Boolean = true, // st.c
 )

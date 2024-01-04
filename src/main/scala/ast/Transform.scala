@@ -168,7 +168,7 @@ abstract class Transform {
   def apply(n: RulePlan): Vector[Statement] = Vector({
     val b2 = mapC(n.branches)(apply)
     if(b2 eq n.branches) n
-    else RulePlan(n.sym1, n.sym2, b2).setPos(n.pos)
+    else RulePlan(n.sym1, n.sym2, b2, n.derived).setPos(n.pos)
   })
 
   def apply(n: BranchPlan): BranchPlan = n
