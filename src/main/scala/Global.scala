@@ -116,3 +116,10 @@ object CompilerResult {
   def fail(msg: String, at: Position = null, parent: Throwable = null, atNode: Node = null, internal: Boolean = true): Nothing =
     throw new CompilerResult(Vector(new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal)))
 }
+
+trait BaseInterpreter {
+  def getAnalyzer: Analyzer[_]
+  def initData(): Unit
+  def reduce(): Unit
+  def getMetrics: ExecutionMetrics
+}

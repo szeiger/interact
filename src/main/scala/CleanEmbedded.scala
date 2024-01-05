@@ -13,6 +13,7 @@ import scala.collection.mutable.ArrayBuffer
  * - PayloadTypes are assigned to all embedded Symbols.
  * - Embedded variable usage is linear.
  * - Embedded expressions are valid assignments and method calls.
+ * - Operators are resolved to methods.
  */
 class CleanEmbedded(global: Global) extends Transform with Phase {
   import global._
@@ -40,18 +41,19 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
         if(nonEmbErrs.nonEmpty)
           error(s"Non-linear use of variable(s) ${nonEmbErrs.map(s => s"'$s'").mkString(", ")}", b)
       }
-      b.cond.foreach { cond =>
+      val cond2 = b.cond.map { cond =>
         val condSyms = new RefsMap
         condSyms.collectAll(cond)
         val newSyms = condSyms.allSymbols.filter(s => !patSyms.contains(s)).toSet
         if(newSyms.nonEmpty)
           error(s"Variable(s)s ${newSyms.map(s => s"'$s'").mkString(", ")} in condition do not refer to pattern", cond)
+        checkEE(null)(cond)
       }
       val patPayloads = mutable.HashMap.empty[Symbol, Position]
       if(emb1Sym.isDefined) patPayloads.put(emb1Sym, emb1Id.get.pos)
       if(emb2Sym.isDefined) patPayloads.put(emb2Sym, emb2Id.get.pos)
       val (es, ees) = transformReduction(b.reduced, b.embRed, patPayloads)
-      b.copy(reduced = es, embRed = ees).setPos(b.pos)
+      b.copy(cond = cond2, reduced = es, embRed = ees).setPos(b.pos)
     }
     Vector(mr.copy(reduction = branches).setPos(mr.pos))
   }
@@ -61,9 +63,9 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
     Vector(l.copy(defs = es, embDefs = ees).setPos(l.pos))
   }
 
-  private[this] def inferMethod(e: EmbeddedApply): EmbeddedType = {
-    val (cln, mn) =
-      if(e.op) CleanEmbedded.operators(e.methodQN.head) else (e.className, e.methodName)
+  private[this] def inferMethod(e: EmbeddedApply): (EmbeddedType, Vector[Ident]) = {
+    val (cln, mn, qn) =
+      if(e.op) CleanEmbedded.operators(e.methodQN.head) else (e.className, e.methodName, e.methodQNIds)
     val c = dependencyLoader.loadClass(cln)
     def toPT(cl: Class[_]) = cl.getName match {
       case "void" => (PayloadType.VOID, false)
@@ -72,7 +74,7 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
       case s if s == classOf[RefBox].getName => (PayloadType.REF, true)
       case _ => (PayloadType.REF, false)
     }
-    c.getMethods.find(_.getName == mn) match {
+    (c.getMethods.find(_.getName == mn) match {
       case None =>
         error(s"Method $mn not found in $cln", e)
         EmbeddedType.Unknown
@@ -80,6 +82,21 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
         val ret = toPT(meth.getReturnType)._1
         val args = meth.getParameterTypes.iterator.map(toPT).toVector
         EmbeddedType.Method(ret, args)
+    }, qn)
+  }
+
+  def checkEE(consumed: mutable.HashMap[Symbol, Position]): Transform = new Transform {
+    override def apply(n: EmbeddedExpr): EmbeddedExpr = n match {
+      case ei: Ident if consumed != null =>
+        val old = consumed.put(ei.sym, ei.pos)
+        val pt = ei.sym.payloadType
+        if(old.isDefined && !pt.canCopy) error(s"Cannot copy embedded value of type $pt", ei.pos)
+        ei
+      case n => super.apply(n)
+    }
+    override def apply(n: EmbeddedApply): EmbeddedApply = {
+      val (pt, qn) = inferMethod(n)
+      super.apply(n).copy(embTp = pt, methodQNIds = qn, op = false).setPos(n.pos)
     }
   }
 
@@ -95,20 +112,6 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
       val id = local.id(payloadType = PayloadType.LABEL).setPos(pos)
       l += id.sym
       id
-    }
-    val checkEE = new Transform {
-      override def apply(n: EmbeddedExpr): EmbeddedExpr = n match {
-        case ei: Ident =>
-          val old = consumed.put(ei.sym, ei.pos)
-          val pt = ei.sym.payloadType
-          if(old.isDefined && !pt.canCopy) error(s"Cannot copy embedded value of type $pt", ei.pos)
-          ei
-        case n => super.apply(n)
-      }
-      override def apply(n: EmbeddedApply): EmbeddedApply = {
-        val pt = inferMethod(n)
-        super.apply(n).copy(embTp = pt).setPos(n.pos)
-      }
     }
     val tr = new Transform {
       override def apply(n: Expr): Expr = n match {
@@ -132,7 +135,7 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
                 super.apply(n)
               }
             case Some(ee) =>
-              val ee2 = checkEE(ee)
+              val ee2 = checkEE(consumed)(ee)
               val id = local.id(payloadType = target.sym.payloadType).setPos(ee2.pos)
               consumed.put(id.sym, id.pos)
               extraComps += EmbeddedAssignment(id, ee2).setPos(ee2.pos)
@@ -156,30 +159,10 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
     }
     val embComps = (extraComps.iterator ++ ees.iterator).toVector
 
-//    println(s"****   patPayloads = ${patPayloads.mkString(", ")}")
-//    println(s"     implicitLabel = $implicitLabel")
-//    println(s"     aliasedLabels = $aliasedLabels")
-//    println(s"          consumed = ${consumed.mkString(", ")}")
-//    extraComps.foreach { e =>
-//      println(s"        extraComps = ${e.show}")
-//    }
-
     patPayloads.foreach { case (sym, pos) =>
       if(!consumed.contains(sym) && !sym.payloadType.canErase)
         error(s"Cannot erase embedded value of type ${sym.payloadType}", pos)
     }
-
-
-//    payloads.foreach { case (s, pos) =>
-//      val r = refs(s)
-//      val pt = s.payloadType
-//      if(!pt.canCopy && r > 2)
-//        error(s"Cannot copy embedded value of type $pt", pos)
-//      else if(!pt.canCreate && !patPayloads.keySet.contains(s) && !createdSyms.contains(s))
-//        error(s"Cannot create embedded value of type $pt", pos)
-//      else if(!pt.canErase && r < 2)
-//        error(s"Cannot erase embedded value of type $pt", pos)
-//    }
 
     (es2, embComps)
   }
@@ -206,9 +189,12 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
 }
 
 object CleanEmbedded {
+  private[this] val intrinsicsName = Intrinsics.getClass.getName
+  private[this] val intrinsicsQN = intrinsicsName.split('.').toVector
+  private[this] def mkOp(m: String) = (intrinsicsName, m, (intrinsicsQN :+ m).map(Ident(_)))
   private val operators = Map(
-    "==" -> (Intrinsics.getClass.getName, "eq"),
-    "+" -> (Intrinsics.getClass.getName, "intAdd"),
-    "-" -> (Intrinsics.getClass.getName, "intSub"),
+    "==" -> mkOp("eq"),
+    "+" -> mkOp("intAdd"),
+    "-" -> mkOp("intSub"),
   )
 }

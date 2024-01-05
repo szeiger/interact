@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialPlan, RulePlan, Scope}
+import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialPlan, RulePlan}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
@@ -207,10 +207,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: BackendConfig, compData: Iterable[Let],
   compInitial: Iterable[InitialPlan]) extends BaseInterpreter with SymbolIdLookup { self =>
 
-  private[this] final val scope: Scope[Cell] with Analyzer[Cell] = new Scope[Cell] with Analyzer[Cell] {
+  private[this] final val scope: Analyzer[Cell] = new Analyzer[Cell] {
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = Iterator.empty //TODO
-    def createCell(sym: Symbol, emb: Option[EmbeddedExpr]): Cell = if(sym.isCons) Cells.mk(getSymbolId(sym), sym.arity) else new WireCell(sym, 0) //TODO embedded
-    def connectCells(c1: Cell, p1: Int, c2: Cell, p2: Int): Unit = new WireRef(c1, p1, c2, p2)
     def getSymbol(c: Cell): Symbol = c match {
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
@@ -218,12 +216,12 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
     def getPayload(c: Cell): Any = ??? //TODO embedded
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
-    def rootCells: IterableOnce[Cell] = freeWires
+    def rootCells: IterableOnce[Cell] = ??? //TODO
   }
   def getAnalyzer: Analyzer[_] = scope
   def initData(): Unit = {
-    scope.clear()
-    compData.foreach(scope.addData(_))
+    //scope.clear()
+    //compData.foreach(scope.addData(_))
   }
   def getMetrics: ExecutionMetrics = null
   private[this] final val allSymbols = globals.symbols

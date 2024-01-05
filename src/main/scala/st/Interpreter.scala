@@ -59,15 +59,16 @@ abstract class RuleImpl {
 }
 
 final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
-    embeddedAssigners: Array[PayloadAssigner], embeddedComps: Array[EmbeddedComputation[Int]], embeddedArgss: Array[scala.collection.Seq[Int]],
-    condComp: EmbeddedComputation[Int], condArgs: scala.collection.Seq[Int], next: RuleImpl) extends RuleImpl {
+    embeddedComps: Array[PayloadComputation], condComp: PayloadComputation, next: RuleImpl, sym1: Symbol, sym2: Symbol) extends RuleImpl {
+
+  override def toString = s"InterpretedRuleImpl($sym1 <-> $sym2)"
 
   private[this] def delay(nanos: Int): Unit = {
     val end = System.nanoTime() + nanos
     while(System.nanoTime() < end) Thread.onSpinWait()
   }
 
-  def reduce(_c1: Cell, _c2: Cell, ptw: PerThreadWorker): Unit = {
+  def reduce(_c1: Cell, _c2: Cell, ptw: PerThreadWorker): Unit = try {
     val (c1, c2) = {
       val ic1 = _c1.asInstanceOf[InterpreterCell]
       val ic2 = _c2.asInstanceOf[InterpreterCell]
@@ -75,12 +76,14 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     }
 
     if(condComp != null) {
+      val condArgs = condComp.embArgs
       var i = 0
       val args = new Array[Any](condArgs.length)
       while(i < condArgs.length) {
         args(i) = condArgs(i) match {
-          case -1 => c1.getGenericPayload
-          case -2 => c2.getGenericPayload
+          case EmbArg.Left => c1.getGenericPayload
+          case EmbArg.Right => c2.getGenericPayload
+          case EmbArg.Const(v) => v
         }
         i += 1
       }
@@ -100,24 +103,19 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       i += 1
     }
 
-    i = 0
-    while(i < embeddedAssigners.length) {
-      val ass = embeddedAssigners(i)
-      ass(c1, c2, cells(ass.cellIdx))
-      i += 1
-    }
     if(embeddedComps != null) {
       var j = 0
       while(j < embeddedComps.length) {
         val embeddedComp = embeddedComps(j)
-        val embeddedArgs = embeddedArgss(j)
+        val embeddedArgs = embeddedComp.embArgs
         val args = new Array[Any](embeddedArgs.length)
         i = 0
         while(i < embeddedArgs.length) {
           args(i) = embeddedArgs(i) match {
-            case -1 => c1.getGenericPayload
-            case -2 => c2.getGenericPayload
-            case n => cells(n)
+            case EmbArg.Left => c1.getGenericPayload
+            case EmbArg.Right => c2.getGenericPayload
+            case EmbArg.Cell(n) => cells(n)
+            case EmbArg.Const(v) => v
           }
           i += 1
         }
@@ -172,6 +170,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     }
 
     if(ptw.metrics != null) ptw.metrics.recordStats(protoCells.length)
+  } catch { case ex: Exception =>
+    throw new RuntimeException(s"Error evaluating rule $this: $ex", ex)
   }
 }
 
@@ -233,13 +233,10 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
-  def createInterpretedRuleImpl(sym1Id: Int, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
+  def createInterpretedRuleImpl(sym1Id: Int, r: GenericRulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
-    val embArgs = b.embeddedComps.map(_.argIndices)
-    val condArgs = b.condition.map(_.argIndices)
-    new InterpretedRuleImpl(sym1Id, pcs, b.freeWiresPacked, b.connectionsPackedLong, b.assigners,
-      if(b.embeddedComps.isEmpty) null else b.embeddedComps.toArray, if(embArgs.isEmpty) null else embArgs.toArray,
-      b.condition.orNull, condArgs.orNull, next.orNull)
+    new InterpretedRuleImpl(sym1Id, pcs, b.freeWiresPacked, b.connectionsPackedLong,
+      if(b.embeddedComps.isEmpty) null else b.embeddedComps.toArray, b.condition.orNull, next.orNull, r.sym1, r.sym2)
   }
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
@@ -254,13 +251,13 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
       ParSupport.foreach(rules.values, config.compilerParallelism) { g =>
         maxC.max(g.maxCells)
         val sym1Id = getSymbolId(g.sym1)
-        val ri = g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, b, Option(z)) }
+        val ri = g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, g, b, Option(z)) }
         ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
       }
       val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
       initialRules.zipWithIndex.foreach { case (ip, i) =>
         maxC.max(ip.maxCells)
-        initial += ((ip.free, createInterpretedRuleImpl(0, ip.branch, None)))
+        initial += ((ip.free, createInterpretedRuleImpl(0, ip, ip.branch, None)))
       }
       (ris, maxC.get, initial.result(), classToSymbol.result())
     }
