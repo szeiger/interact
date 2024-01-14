@@ -13,7 +13,7 @@ import scala.collection.mutable.ArrayBuffer
  * - PayloadTypes are assigned to all embedded Symbols.
  * - Embedded variable usage is linear.
  * - Embedded expressions are valid assignments and method calls.
- * - Operators are resolved to methods.
+ * - Method/operator calls are typed but not yet resolved.
  */
 class CleanEmbedded(global: Global) extends Transform with Phase {
   import global._
@@ -25,176 +25,168 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
   }
 
   override def apply(mr: MatchRule): Vector[Statement] = {
-    val rm = new RefsMap
-    mr.args1.foreach(rm.collectAll)
-    mr.args2.foreach(rm.collectAll)
-    mr.emb1.foreach(rm.collectAll)
-    mr.emb2.foreach(rm.collectAll)
-    val (emb1Sym, emb1Id) = patternEmbSym(mr.id1, mr.emb1)
-    val (emb2Sym, emb2Id) = patternEmbSym(mr.id2, mr.emb2)
-    val patSyms = rm.allSymbols.toSet
-    val branches = mr.reduction.map { b =>
-      val refs = rm.sub()
-      refs.collectAll(b)
-      if(refs.hasError) {
-        val nonEmbErrs = refs.err.filter(!_.isEmbedded)
-        if(nonEmbErrs.nonEmpty)
-          error(s"Non-linear use of variable(s) ${nonEmbErrs.map(s => s"'$s'").mkString(", ")}", b)
-      }
-      val cond2 = b.cond.map { cond =>
-        val condSyms = new RefsMap
-        condSyms.collectAll(cond)
-        val newSyms = condSyms.allSymbols.filter(s => !patSyms.contains(s)).toSet
-        if(newSyms.nonEmpty)
-          error(s"Variable(s)s ${newSyms.map(s => s"'$s'").mkString(", ")} in condition do not refer to pattern", cond)
-        checkEE(null)(cond)
-      }
-      val patPayloads = mutable.HashMap.empty[Symbol, Position]
-      if(emb1Sym.isDefined) patPayloads.put(emb1Sym, emb1Id.get.pos)
-      if(emb2Sym.isDefined) patPayloads.put(emb2Sym, emb2Id.get.pos)
-      val (es, ees) = transformReduction(b.reduced, b.embRed, patPayloads)
-      b.copy(cond = cond2, reduced = es, embRed = ees).setPos(b.pos)
+    val emb1IdOpt = checkPatternEmbSym(mr.id1, mr.emb1)
+    val emb2IdOpt = checkPatternEmbSym(mr.id2, mr.emb2)
+    val patternIds = Iterator(emb1IdOpt, emb2IdOpt).flatten.toSet
+    patternIds.foreach { _.sym.isPattern = true }
+    val branches = mr.branches.map { b =>
+      val (reduced2, embRed2) = transformReduction(b.reduced, b.embRed, patternIds)
+      val cond2 = b.cond.map(checkCond(_))
+      b.copy(cond = cond2, reduced = reduced2, embRed = embRed2).setPos(b.pos)
     }
-    Vector(mr.copy(reduction = branches).setPos(mr.pos))
+    Vector(mr.copy(branches = branches).setPos(mr.pos))
   }
 
   override def apply(l: Let): Vector[Statement] = {
-    val (es, ees) = transformReduction(l.defs, l.embDefs, mutable.HashMap.empty)
+    val (es, ees) = transformReduction(l.defs, l.embDefs, Set.empty)
     Vector(l.copy(defs = es, embDefs = ees).setPos(l.pos))
   }
 
-  private[this] def inferMethod(e: EmbeddedApply): (EmbeddedType, Vector[Ident]) = {
-    val (cln, mn, qn) =
-      if(e.op) CleanEmbedded.operators(e.methodQN.head) else (e.className, e.methodName, e.methodQNIds)
-    val c = dependencyLoader.loadClass(cln)
-    def toPT(cl: Class[_]) = cl.getName match {
-      case "void" => (PayloadType.VOID, false)
-      case "int" => (PayloadType.INT, false)
-      case s if s == classOf[IntBox].getName => (PayloadType.INT, true)
-      case s if s == classOf[RefBox].getName => (PayloadType.REF, true)
-      case _ => (PayloadType.REF, false)
-    }
-    (c.getMethods.find(_.getName == mn) match {
-      case None =>
-        error(s"Method $mn not found in $cln", e)
-        EmbeddedType.Unknown
-      case Some(meth) =>
-        val ret = toPT(meth.getReturnType)._1
-        val args = meth.getParameterTypes.iterator.map(toPT).toVector
-        EmbeddedType.Method(ret, args)
-    }, qn)
-  }
-
-  def checkEE(consumed: mutable.HashMap[Symbol, Position]): Transform = new Transform {
-    override def apply(n: EmbeddedExpr): EmbeddedExpr = n match {
-      case ei: Ident if consumed != null =>
-        val old = consumed.put(ei.sym, ei.pos)
-        val pt = ei.sym.payloadType
-        if(old.isDefined && !pt.canCopy) error(s"Cannot copy embedded value of type $pt", ei.pos)
-        ei
-      case n => super.apply(n)
-    }
-    override def apply(n: EmbeddedApply): EmbeddedApply = {
-      val (pt, qn) = inferMethod(n)
-      super.apply(n).copy(embTp = pt, methodQNIds = qn, op = false).setPos(n.pos)
-    }
-  }
-
-  private[this] def transformReduction(es: Vector[Expr], ees: Vector[EmbeddedExpr],
-    patPayloads: mutable.HashMap[Symbol, Position]): (Vector[Expr], Vector[EmbeddedExpr]) = {
-    val local = new SymbolGen("$e$", isEmbedded = true)
-    val consumed = mutable.HashMap.empty[Symbol, Position]
-    val extraComps = ArrayBuffer.empty[EmbeddedExpr]
-    val implicitLabel = local(payloadType = PayloadType.LABEL)
-    val aliasedLabels = mutable.HashMap.empty[Symbol, ArrayBuffer[Symbol]]
-    def aliasLabel(es: Symbol, pos: Position): Ident = {
-      val l = aliasedLabels.getOrElseUpdate(es, new ArrayBuffer[Symbol])
-      val id = local.id(payloadType = PayloadType.LABEL).setPos(pos)
-      l += id.sym
-      id
-    }
-    val tr = new Transform {
-      override def apply(n: Expr): Expr = n match {
-        case n @ AnyApply(target, embedded, args, _) =>
-          embedded match {
-            case Some(ei: Ident) =>
-              val pt = target.sym.payloadType
-              // Check matching PayloadType if the symbol is not new
-              if(ei.sym.payloadType.isDefined) {
-                if(ei.sym.payloadType != pt) error(s"Inconsistent type for embedded variable: $pt != ${ei.sym.payloadType}", target)
-              } else {
-                assert(ei.sym.payloadType.isEmpty)
-                ei.sym.payloadType = pt
-              }
-              // Replace new (non-pattern) label with an alias to allow copying
-              if(pt == PayloadType.LABEL && !patPayloads.contains(ei.sym))
-                n.copy(target, Some(aliasLabel(ei.sym, ei.pos)), args.map(apply)).setPos(n.pos)
-              else {
-                val old = consumed.put(ei.sym, ei.pos)
-                if(old.isDefined && !pt.canCopy) error(s"Cannot copy embedded value of type $pt", ei.pos)
-                super.apply(n)
-              }
-            case Some(ee) =>
-              val ee2 = checkEE(consumed)(ee)
-              val id = local.id(payloadType = target.sym.payloadType).setPos(ee2.pos)
-              consumed.put(id.sym, id.pos)
-              extraComps += EmbeddedAssignment(id, ee2).setPos(ee2.pos)
-              n.copy(target, Some(id), args.map(apply)).setPos(n.pos)
-            case None if target.sym.payloadType.isDefined =>
-              if(target.sym.payloadType == PayloadType.LABEL)
-                n.copy(target, Some(aliasLabel(implicitLabel, target.pos)), args.map(apply)).setPos(n.pos)
-              else {
-                error(s"Embedded value of type ${target.sym.payloadType} must be specified", target)
-                super.apply(n)
-              }
-            case None => super.apply(n)
-          }
-        case n => super.apply(n)
-      }
-      override def apply(n: EmbeddedExpr): EmbeddedExpr = n // skip
-    }
-    val es2 = es.map(tr(_))
-    aliasedLabels.foreach { case (base, syms) =>
-      extraComps += CreateLabels(base, syms.toVector)
-    }
-    val embComps = (extraComps.iterator ++ ees.iterator).toVector
-
-    patPayloads.foreach { case (sym, pos) =>
-      if(!consumed.contains(sym) && !sym.payloadType.canErase)
-        error(s"Cannot erase embedded value of type ${sym.payloadType}", pos)
-    }
-
-    (es2, embComps)
-  }
-
-  private[this] def patternEmbSym(consId: Ident, o: Option[EmbeddedExpr]): (Symbol, Option[Ident]) = {
-    val embId = o match {
-      case o @ Some(i: Ident) => o.asInstanceOf[Some[Ident]]
-      case Some(e) =>
-        error(s"Embedded expression in pattern match must be a variable", e)
-        None
-      case _ => None
-    }
-    val embSym = embId.map(_.sym).getOrElse(Symbol.NoSymbol)
+  // check embedded symbol in pattern and assign payload type to is
+  private[this] def checkPatternEmbSym(consId: Ident, embId: Option[Ident]): Option[Ident] = {
     val consPT = consId.sym.payloadType
-    if(consPT.isDefined && embSym.isEmpty && !consPT.canErase)
-      error(s"Embedded value of type $consPT must be extracted in pattern match", consId)
-    else if(embSym.isDefined) {
-      if(consPT.isEmpty)
-        error(s"Constructor has no embedded value", consId)
-      else embSym.payloadType = consPT
+    embId match {
+      case s @ Some(id) =>
+        assert(id.sym.isDefined)
+        id.sym.payloadType = consPT
+        if(consPT.isEmpty) {
+          error(s"Constructor has no embedded value", consId)
+          None
+        } else s
+      case None =>
+        if(consPT.isDefined && !consPT.canErase)
+          error(s"Embedded value of type $consPT must be extracted in pattern match", consId)
+        None
     }
-    (embSym, embId)
   }
-}
 
-object CleanEmbedded {
-  private[this] val intrinsicsName = Intrinsics.getClass.getName
-  private[this] val intrinsicsQN = intrinsicsName.split('.').toVector
-  private[this] def mkOp(m: String) = (intrinsicsName, m, (intrinsicsQN :+ m).map(Ident(_)))
-  private val operators = Map(
-    "==" -> mkOp("eq"),
-    "+" -> mkOp("intAdd"),
-    "-" -> mkOp("intSub"),
-  )
+  // Create new unique embedded symbols in Apply / ApplyCons and assign their PayloadTypes.
+  // Ensure that all targets have / do not have embedded symbols based on type.
+  // Returns updated exprs, extracted embedded computations, old symbol to new idents mapping, all new symbols
+  private[this] def extractConsEmbComps(exprs: Vector[Expr]): (Vector[Expr], Vector[EmbeddedExpr], mutable.HashMap[Symbol, ArrayBuffer[Ident]], Set[Symbol]) = {
+    val local = new SymbolGen("$e$", isEmbedded = true)
+    val symbolMap = mutable.HashMap.empty[Symbol, ArrayBuffer[Ident]]
+    val newEmbComps = Vector.newBuilder[EmbeddedExpr]
+    val defaultCreate = ArrayBuffer.empty[Symbol]
+    val allEmbCompSyms = Set.newBuilder[Symbol]
+    val proc: Transform = new Transform {
+      def tr[T <: AnyApply](n: T): T = {
+        val emb2 = n.embedded match {
+          case s @ Some(e) =>
+            if(n.target.sym.payloadType.isEmpty)
+              error("Constructor has no embedded value", e)
+            val prefix = e match {
+              case i: Ident => i.s
+              case _ => n.target.sym.id
+            }
+            val id = local.id(isEmbedded = true, payloadType = n.target.sym.payloadType, prefix = prefix).setPos(e.pos)
+            e match {
+              case oldId: Ident if !oldId.sym.isPattern =>
+                symbolMap.getOrElseUpdate(oldId.sym, ArrayBuffer.empty) += id
+              case _ =>
+                newEmbComps += EmbeddedAssignment(id, e)
+                allEmbCompSyms += id.sym
+            }
+            Some(id)
+          case None if n.target.sym.payloadType.canCreate =>
+            val id = local.id(isEmbedded = true, payloadType = n.target.sym.payloadType, prefix = "cr_"+n.target.sym.id).setPos(n.pos)
+            defaultCreate += id.sym
+            allEmbCompSyms += id.sym
+            Some(id)
+          case None =>
+            if(n.target.sym.payloadType.isDefined)
+              error(s"Embedded value of type ${n.target.sym.payloadType} must be created", n)
+            None
+        }
+        n.copy(embedded = emb2).setPos(n.pos).asInstanceOf[T]
+      }
+      override def apply(n: Apply): Apply = tr(super.apply(n))
+      override def apply(n: ApplyCons): ApplyCons = tr(super.apply(n))
+    }
+    if(defaultCreate.nonEmpty)
+      newEmbComps += CreateLabels(local(isEmbedded = true, payloadType = PayloadType.REF, prefix = "defCr"), defaultCreate.toVector)
+    (exprs.map(proc(_)), newEmbComps.result(), symbolMap, allEmbCompSyms.result())
+  }
+
+  private[this] def checkCond(cond: EmbeddedExpr): EmbeddedExpr = {
+    val proc: Transform = new Transform {
+      override def apply(n: Ident): Ident = {
+        if(n.sym.isDefined && !n.sym.isPattern)
+          error("Unknown symbol (not in pattern)", n)
+        n
+      }
+    }
+    proc(cond)
+  }
+
+  private[this] def checkLinearity(patternIds: Iterable[Ident], consIds: Iterable[Ident], usageCount: mutable.HashMap[Symbol, Int]): Unit = {
+    patternIds.foreach { id =>
+      val pt = id.sym.payloadType
+      usageCount(id.sym) match {
+        case 0 => if(!pt.canErase) error(s"Cannot implicitly erase value of type $pt", id)
+        case 1 =>
+        case _ => if(!pt.canCopy) error(s"Cannot implicitly copy value of type $pt", id)
+      }
+    }
+    consIds.foreach { id =>
+      val pt = id.sym.payloadType
+      usageCount(id.sym) match {
+        case 0 => if(!pt.canCreate) error(s"Cannot implicitly create value of type $pt", id)
+        case 1 =>
+        case _ => error(s"Duplicate assignment", id)
+      }
+    }
+  }
+
+  private[this] def transformReduction(reduced: Vector[Expr], embComps: Vector[EmbeddedExpr],
+    patternIds: Set[Ident]): (Vector[Expr], Vector[EmbeddedExpr]) = {
+    val (reduced2, newEmbComps, newEmbIds, assignedEmbCompSyms) = extractConsEmbComps(reduced)
+    val allEmbCompSyms = assignedEmbCompSyms ++ newEmbIds.values.flatten.map(_.sym)
+    val usageCount = mutable.HashMap.from((patternIds.map(_.sym) ++ allEmbCompSyms).map((_ , 0)))
+    def checkLHS(i: Ident): Unit =
+      if(!allEmbCompSyms.contains(i.sym)) error("Assignment must be to an embedded variable of the reduction", i)
+    val mapIdents: Transform = new Transform {
+      override def apply(n: Ident): Ident = {
+        if(n.sym.isCons || n.sym.isEmpty) n
+        else {
+          val n2 = newEmbIds.get(n.sym) match {
+            case Some(ids) if ids.length > 1 =>
+              error(s"Multiple occurrences of symbol ${n.sym} in cell constructors", n)
+              n
+            case Some(ids) => ids.head
+            case _ => n
+          }
+          if (!n2.sym.isPattern && !allEmbCompSyms.contains(n2.sym)) {
+            error("Unknown symbol (not in pattern or cell constructor)", n)
+            n
+          }
+          usageCount.update(n2.sym, usageCount(n2.sym) + 1)
+          n2
+        }
+      }
+      override def apply(n: EmbeddedAssignment): EmbeddedAssignment = {
+        val n2 = super.apply(n)
+        checkLHS(n2.lhs)
+        n2
+      }
+    }
+    val mappedEmbComps = ArrayBuffer.empty[EmbeddedExpr]
+    embComps.foreach(mappedEmbComps += mapIdents(_))
+    newEmbComps.foreach(mappedEmbComps += mapIdents(_))
+    val unusedNewEmbIds =
+      newEmbIds.iterator.map { case (oldSym, newIds) => (oldSym, newIds.filter(i => usageCount(i.sym) == 0)) }.filter(_._2.nonEmpty).toVector
+    unusedNewEmbIds.foreach { case (oldSym, newIds) =>
+      mappedEmbComps += CreateLabels(oldSym, newIds.iterator.map(_.sym).toVector).setPos(newIds.head.pos)
+      newIds.foreach { i => usageCount.update(i.sym, usageCount(i.sym) + 1) }
+    }
+    checkLinearity(patternIds, newEmbIds.iterator.flatMap(_._2).toVector, usageCount)
+
+//    println("************* Reduction:")
+//    mappedEmbComps.foreach(ShowableNode.print(_))
+//    println("newEmbIds: " + newEmbIds.iterator.map { case (k, v) => s"$k -> ${v.mkString("[", ",", "]")}"}.mkString(", "))
+//    println("unusedNewEmbIds: " + unusedNewEmbIds.iterator.map { case (k, v) => s"$k -> ${v.mkString("[", ",", "]")}"}.mkString(", "))
+//    println("usageCount: " + usageCount.iterator.map { case (k, v) => s"$k -> $v"}.mkString(", "))
+
+    (reduced2, mappedEmbComps.toVector)
+  }
 }

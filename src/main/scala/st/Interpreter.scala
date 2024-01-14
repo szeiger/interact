@@ -206,8 +206,9 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
     def rootCells = (self.freeWires.iterator ++ (cutBuffer.iterator ++ principals.iterator).flatMap { case (c1, c2) => Seq(c1, c2) }).filter(_ != null).toSet
     def getSymbol(c: Cell): Symbol = self.getSymbol(c)
     def getPayload(c: Cell): Any = c match {
-      case c: InterpreterCell => c.getGenericPayload
-      case c => ()
+      case c: IntBox => c.getValue
+      case c: RefBox => c.getValue
+      case c => "???"
     }
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).getOrElse(null)
@@ -236,7 +237,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   def createInterpretedRuleImpl(sym1Id: Int, r: GenericRulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
     new InterpretedRuleImpl(sym1Id, pcs, b.freeWiresPacked, b.connectionsPackedLong,
-      if(b.embeddedComps.isEmpty) null else b.embeddedComps.toArray, b.condition.orNull, next.orNull, r.sym1, r.sym2)
+      if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.condition.orNull, next.orNull, r.sym1, r.sym2)
   }
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {

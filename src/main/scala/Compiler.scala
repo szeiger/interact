@@ -13,6 +13,7 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
     new ExpandRules(global),
     new Curry(global),
     new CleanEmbedded(global),
+    new ResolveEmbedded(global),
     new PlanRules(global)
   )
 

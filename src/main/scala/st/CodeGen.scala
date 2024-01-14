@@ -1,9 +1,10 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
-import de.szeiger.interact.{BranchPlan, CellIdx, BackendConfig, Connection, FreeIdx, GenericRulePlan, Global, Idx, InitialPlan, RuleKey, RulePlan}
-import de.szeiger.interact.ast.{Symbol, Symbols}
+import de.szeiger.interact.{BackendConfig, BranchPlan, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRulePlan, Global, Idx, InitialPlan, IntBox, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RefBox, RuleKey, RulePlan}
+import de.szeiger.interact.ast.{PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
+import org.objectweb.asm.Label
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -13,6 +14,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val riT = tp.c[RuleImpl]
   private val ptwT = tp.c[PerThreadWorker]
   private val cellT = tp.c[Cell]
+  private val intBoxT = tp.i[IntBox]
+  private val refBoxT = tp.i[RefBox]
   private val commonCellT = tp.c(s"$genPackage/CommonCell")
   private val cellCacheT = tp.c(s"$genPackage/CellCache")
   private val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
@@ -25,6 +28,10 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I).V)
   private val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
+  private val intBox_getValue = intBoxT.method("getValue", tp.m().I)
+  private val intBox_setValue = intBoxT.method("setValue", tp.m(tp.I).V)
+  private val refBox_getValue = refBoxT.method("getValue", tp.m()(tp.c[AnyRef]))
+  private val refBox_setValue = refBoxT.method("setValue", tp.m(tp.c[AnyRef]).V)
   private val new_CommonCell = commonCellT.constr(tp.m().V)
 
   private def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
@@ -36,6 +43,10 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private def concreteCellTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/C_${encodeName(sym)}") else cellT
   private def concreteConstrFor(sym: Symbol) = concreteCellTFor(sym).constr(tp.m((0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
   private def concreteReinitFor(sym: Symbol) = concreteCellTFor(sym).method("reinit", tp.m((0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
+  private def concretePayloadFieldFor(sym: Symbol) = concreteCellTFor(sym).field("value", sym.payloadType match {
+    case PayloadType.INT => tp.I
+    case _ => tp.c[AnyRef]
+  })
   private def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
   private def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
   private def cell_singleton(sym: Symbol) = { val tp = concreteCellTFor(sym); tp.field("singleton", tp) }
@@ -44,24 +55,68 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private def cellCache_get(sym: Symbol) = cellCacheT.method(s"get_${encodeName(sym)}", tp.m()(concreteCellTFor(sym)))
   private def cellCache_set(sym: Symbol) = cellCacheT.method(s"set_${encodeName(sym)}", tp.m(concreteCellTFor(sym)).V)
 
-  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, shared: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan]): Unit = {
-    assert(rule.branches.length == 1)
-    val isInitial = rule.isInstanceOf[InitialPlan]
-    val branch = rule.branches.head
+  private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, common: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan]): Unit = {
+    //assert(rule.branches.length == 1)
+    val m = c.method(Acc.PUBLIC | Acc.STATIC, mref.name, mref.desc)
+    val cLeftTp = concreteCellTFor(rule.sym1)
+    val cRightTp = concreteCellTFor(rule.sym2)
+    val cLeft = m.param("cLeft", cLeftTp)
+    val cRight = m.param("cRight", cRightTp)
+    val ptw = m.param("ptw", ptwT, Acc.FINAL)
+    incMetric(s"${c.name}.${m.name}", m, ptw)
+    val methodEnd = if(rule.branches.length > 1) m.newLabel else null
+    rule.branches.foreach { branch =>
+      emitBranchReduce(m: MethodDSL, rule, branch, rule.isInstanceOf[InitialPlan], cLeft, cRight, cLeftTp, cRightTp, ptw, common, rules, methodEnd)
+    }
+    if(methodEnd != null) m.setLabel(methodEnd)
+    m.return_
+  }
+
+  private def emitBranchReduce(m: MethodDSL, rule: GenericRulePlan, branch: BranchPlan, isInitial: Boolean,
+      cLeft: VarIdx, cRight: VarIdx, cLeftTp: ClassOwner, cRightTp: ClassOwner, ptw: VarIdx,
+      common: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan],
+      methodEnd: Label): Unit = {
+    val branchEnd = m.newLabel
+
+    def callPayloadMethod(pc: PayloadMethodApplication)(loadArgs: => Unit): Unit = {
+      val mref = MethodRef(pc.jMethod)
+      if(pc.isStatic) {
+        loadArgs
+        m.invokestatic(mref)
+      } else {
+        m.getstatic(mref.owner.field("MODULE$", mref.owner))
+        loadArgs
+        m.invoke(mref)
+      }
+    }
+
+    branch.condition.foreach { case pc: PayloadMethodApplication =>
+      def adaptPayloadFromCell(cell: VarIdx, cellTp: Owner, cls: Class[_]): Unit = {
+        m.aload(cell)
+        if(cls == classOf[Int]) m.invoke(intBox_getValue, cellTp)
+        else if(cls == classOf[AnyRef]) m.invoke(refBox_getValue, cellTp)
+        else m.invoke(refBox_getValue, cellTp).checkcast(tp.o(cls))
+      }
+      callPayloadMethod(pc) {
+        pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach {
+          case (EmbArg.Const(i: Int), _) => m.iconst(i)
+          case (EmbArg.Const(s: String), _) => m.ldc(s)
+          case (EmbArg.Left, cls) => adaptPayloadFromCell(cLeft, cLeftTp, cls)
+          case (EmbArg.Right, cls) => adaptPayloadFromCell(cRight, cRightTp, cls)
+        }
+      }
+      assert(pc.jMethod.getReturnType == classOf[Boolean])
+      m.ifeq(branchEnd)
+    }
+
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
     val conns = (branch.internalConnsDistinct ++ branch.wireConnsDistinct).filterNot(skipConns.contains)
     def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
-    val m = c.method(Acc.PUBLIC | Acc.STATIC, mref.name, mref.desc)
-    val cLeft = m.param("cLeft", concreteCellTFor(rule.sym1))
-    val cRight = m.param("cRight", concreteCellTFor(rule.sym2))
-    val ptw = m.param("ptw", ptwT, Acc.FINAL)
-    incMetric(s"${c.name}.${m.name}", m, ptw)
-
-    val createOrder = optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)
     //val (uniqueConts, uniqueContPoss) = uniqueContinuationsFor(rule, rules)
 
-    val loopOn1 = reuse1 != -1 && ((rule.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
-    val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
+    //TODO allow local looping over multiple branches
+    val loopOn1 = reuse1 != -1 && ((rule.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch) && rule.branches.length == 1
+    val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch) && rule.branches.length == 1
     val (cont1, cont2, loopStart) = {
       if(loopOn1 || loopOn2) {
         val cont1 = m.aconst_null.storeAnonLocal(concreteCellTFor(rule.sym1))
@@ -71,12 +126,12 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     // Create new cells
-    var statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
+    val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
     var statSingletonUse = 0
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
-    for(idx <- createOrder) {
+    for(idx <- optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)) {
       cells(idx) = branch.cells(idx) match {
         case _ if idx == reuse1 => cLeft
         case _ if idx == reuse2 => cRight
@@ -106,7 +161,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
               } {
                 m.dup
                 loadParams()
-                m.invokevirtual(concreteReinitFor(sym))
+                m.invoke(concreteReinitFor(sym))
                 if(config.collectStats) m.iinc(statCachedCellReuse)
               }
             }
@@ -120,14 +175,14 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     def ldCell(idx: Idx) = idx match {
       case FreeIdx(rhs, p) =>
         m.aload(if(rhs) cRight else cLeft)
-        if(isInitial) m.iconst(p).invokevirtual(cell_auxCell)
+        if(isInitial) m.iconst(p).invoke(cell_auxCell)
         else m.getfield(cell_acell(if(rhs) rule.sym2 else rule.sym1, p))
       case CellIdx(i, _) => m.aload(cells(i))
     }
     def ldPort(idx: Idx) = idx match {
       case FreeIdx(rhs, p) =>
         m.aload(if(rhs) cRight else cLeft)
-        if(isInitial) m.iconst(p).invokevirtual(cell_auxPort)
+        if(isInitial) m.iconst(p).invoke(cell_auxPort)
         else m.getfield(cell_aport(if(rhs) rule.sym2 else rule.sym1, p))
       case CellIdx(_, p) => m.iconst(p)
     }
@@ -160,14 +215,72 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       m
     }
 
+    // Always cache input payloads to support cell reuse (we need to read them anyway)
+    val (cachedPayload1, cachedPayload2) = {
+      def cache(cell: VarIdx, pt: PayloadType, boxTp: Owner): VarIdx = pt match {
+        case PayloadType.VOID => VarIdx.none
+        case PayloadType.INT => m.aload(cell).invoke(intBox_getValue.on(boxTp)).storeAnonLocal(tp.I)
+        case _ => m.aload(cell).invoke(refBox_getValue.on(boxTp)).storeAnonLocal(tp.c[AnyRef])
+      }
+      (cache(cLeft, rule.sym1.payloadType, cLeftTp), cache(cRight, rule.sym2.payloadType, cRightTp))
+    }
+
+    // Compute payloads
+    branch.payloadComps.foreach { pc =>
+      def adaptCachedPayload(cached: VarIdx, cls: Class[_]): Unit = {
+        if(cls == classOf[Int]) m.iload(cached)
+        else if(cls == classOf[AnyRef]) m.aload(cached)
+        else m.aload(cached).checkcast(tp.o(cls))
+      }
+      def loadArg(embArg: EmbArg, cls: Class[_]): Unit = embArg match {
+        case EmbArg.Const(i: Int) => m.iconst(i)
+        case EmbArg.Const(s: String) => m.ldc(s)
+        case EmbArg.Left => adaptCachedPayload(cachedPayload1, cls)
+        case EmbArg.Right => adaptCachedPayload(cachedPayload2, cls)
+        case EmbArg.Cell(idx) => m.aload(cells(idx))
+      }
+      def setCellValue(embArg: EmbArg.Cell, cls: Class[_]): Unit = {
+        val boxTp = concreteCellTFor(branch.cells(embArg.idx))
+        m.aload(cells(embArg.idx)).swap
+        m.invoke((if(cls == classOf[Int]) intBox_setValue else refBox_setValue).on(boxTp))
+      }
+      def loadArgs(pc: PayloadMethodApplication): Unit =
+        pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, cls) => loadArg(embArg, cls) }
+      pc match {
+        case pc: PayloadMethodApplication =>
+          assert(pc.jMethod.getReturnType == Void.TYPE)
+          callPayloadMethod(pc)(loadArgs(pc))
+        case pc: CreateLabelsComp =>
+          m.newInitDup(tp.c[AnyRef].constr(tp.m().V))() //TODO use cells as labels instead of creating unnecessary objects
+          pc.embArgs.foreach { case EmbArg.Cell(idx) =>
+            m.dup.aload(cells(idx)).swap.invoke(refBox_setValue.on(concreteCellTFor(branch.cells(idx))))
+          }
+          m.pop //TODO skip last dup so we don't need to pop it
+        case pc: PayloadAssignment =>
+          assert(pc.payloadType.isDefined)
+          if(pc.payloadType == PayloadType.INT) {
+            loadArg(pc.targetIdx, classOf[IntBox])
+            loadArg(pc.sourceIdx, classOf[Int])
+            m.invoke(intBox_setValue.on(concreteCellTFor(branch.cells(pc.targetIdx.asInstanceOf[EmbArg.Cell].idx))))
+          } else {
+            loadArg(pc.targetIdx, classOf[RefBox])
+            loadArg(pc.sourceIdx, classOf[AnyRef])
+            m.invoke(refBox_setValue.on(concreteCellTFor(branch.cells(pc.targetIdx.asInstanceOf[EmbArg.Cell].idx))))
+          }
+        case pc: PayloadMethodApplicationWithReturn =>
+          callPayloadMethod(pc.method)(loadArgs(pc.method))
+          setCellValue(pc.retIndex.asInstanceOf[EmbArg.Cell], pc.method.jMethod.getReturnType)
+      }
+    }
+
     def createCut(ct1: Idx, ct2: Idx) = {
       m.aload(ptw);
       (ct1, ct2) match {
-        case (_, CellIdx(idx, _)) if shared.contains(branch.cells(idx)) => ldCell(ct2); ldCell(ct1)
-        case (CellIdx(idx, _), _: FreeIdx) if !shared.contains(branch.cells(idx)) => ldCell(ct2); ldCell(ct1)
+        case (_, CellIdx(idx, _)) if common.contains(branch.cells(idx)) => ldCell(ct2); ldCell(ct1)
+        case (CellIdx(idx, _), _: FreeIdx) if !common.contains(branch.cells(idx)) => ldCell(ct2); ldCell(ct1)
         case _ => ldCell(ct1); ldCell(ct2)
       }
-      m.invokevirtual(ptw_createCut)
+      m.invoke(ptw_createCut)
     }
 
     // Connect remaining wires
@@ -177,7 +290,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
         setAux(ct1, ct2)
       if(p1 < 0) {
         ldPort(ct2).if0ThenElse_>= {
-          ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
+          ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
           if(ct1.idx == reuse1 && loopOn1) {
             //println(s"Loop detection: ${rule.sym1} <-> ${rule.sym2}; using sym1")
@@ -207,19 +320,19 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
         }
       } else {
         ldPort(ct2).if0Then_>= {
-          ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
+          ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         }
       }
     }
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
       ldPort(ct1).if0ThenElse_>= {
-        ldBoth(ct1); ldBoth(ct2).invokevirtual(cell_setAux)
+        ldBoth(ct1); ldBoth(ct2).invoke(cell_setAux)
         ldPort(ct2).if0Then_>= {
-          ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
+          ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         }
       } {
         ldPort(ct2).if0ThenElse_>= {
-          ldBoth(ct2); ldBoth(ct1).invokevirtual(cell_setAux)
+          ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
           createCut(ct1, ct2)
         }
@@ -265,7 +378,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       if(cont1 != VarIdx.none) {
         m.aload(cont1).ifNonNullThenElse(m.iconst(1))(m.iconst(0))
       } else m.iconst(0)
-      m.invokevirtual(ptw_recordStats)
+      m.invoke(ptw_recordStats)
     }
 
     if(cont1 != VarIdx.none) {
@@ -276,7 +389,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       }
     }
 
-    m.return_
+    if(methodEnd != null) m.goto(methodEnd)
+    if(branch.condition.isDefined) m.setLabel(branchEnd)
   }
 
   private def findReuse(rule: GenericRulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
@@ -394,7 +508,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   }
 
   private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
-    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invokevirtual(ptw_recordMetric)
+    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invoke(ptw_recordMetric)
 
   private def compileInterface(sym: Symbol): Unit = {
     val ifm = interfaceMethod(sym)
@@ -409,7 +523,12 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       case rk if rk.sym2 == sym => (rk.sym1, rk)
     }.toMap
     val interfaces = (rulePairs.keySet -- common).iterator.map(s => interfaceT(s).className).toArray.sorted
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces)
+    val payloadInterfaces = sym.payloadType match {
+      case PayloadType.INT => Vector(intBoxT.className)
+      case PayloadType.REF | PayloadType.LABEL => Vector(refBoxT.className)
+      case _ => Vector.empty
+    }
+    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces ++ payloadInterfaces)
 
     val (cfields, pfields) = (0 until sym.arity).map(i => (c.field(Acc.PUBLIC, s"acell$i", cellT), c.field(Acc.PUBLIC, s"aport$i", tp.I))).unzip
 
@@ -475,6 +594,14 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       m.return_
     }
 
+    // payload implementation
+    if(sym.payloadType.isDefined) {
+      val field = concretePayloadFieldFor(sym)
+      c.field(Acc.PUBLIC, field)
+      c.setter(field)
+      c.getter(field)
+    }
+
     // generic reduce
     {
       val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_reduce.name, cell_reduce.desc)
@@ -482,20 +609,17 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val ptw = m.param("ptw", ptwT, Acc.FINAL)
       incMetric(s"${c.name}.${m.name}", m, ptw)
       val isShared = common.contains(sym)
-      val ifm = if(isShared) {
-        val i = interfaceMethod(sym)
-        commonCellT.method(i.name, i.desc)
-      } else interfaceMethod(sym)
+      val ifm = if(isShared) interfaceMethod(sym).on(commonCellT) else interfaceMethod(sym)
       m.aload(other)
       m.tryCatchGoto(tp.c[ClassCastException]) {
         m.checkcast(ifm.owner)
       } {
         m.pop
-        m.aload(ptw).aload(m.receiver).aload(other).invokevirtual(ptw_irreducible)
+        m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_irreducible)
         m.return_
       }
       m.aload(m.receiver).aload(ptw)
-      if(isShared) m.invokevirtual(ifm) else m.invokeinterface(ifm)
+      m.invoke(ifm)
       m.return_
     }
 
@@ -517,7 +641,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val m = c.method(Acc.PUBLIC | Acc.FINAL, ifm.name, ifm.desc)
       val other = m.param("other", concreteCellTFor(sym2), Acc.FINAL)
       val ptw = m.param("ptw", ptwT, Acc.FINAL)
-      m.aload(ptw).aload(m.receiver).aload(other).invokevirtual(ptw_irreducible).return_
+      m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_irreducible).return_
     }
     addClass(classLoader, c)
   }
@@ -583,7 +707,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
     // reduce
     {
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce.name, ri_reduce.desc)
+      val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce)
       val c1 = m.param("c1", cellT, Acc.FINAL)
       val c2 = m.param("c2", cellT, Acc.FINAL)
       val ptw = m.param("ptw", ptwT, Acc.FINAL)

@@ -1,7 +1,7 @@
 package de.szeiger.interact.ast
 
 import java.io.{OutputStreamWriter, PrintWriter}
-import de.szeiger.interact.{ConvenientParserInput, Intrinsics, MaybeColors}
+import de.szeiger.interact.{ConvenientParserInput, Runtime, MaybeColors}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -69,7 +69,7 @@ final case class StringLit(s: String) extends EmbeddedExpr {
 }
 final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr], op: Boolean, embTp: EmbeddedType) extends EmbeddedExpr {
   lazy val methodQN = methodQNIds.map(_.s)
-  def className = if(methodQN.length ==1) Intrinsics.getClass.getName else methodQN.init.mkString(".")
+  def className = if(methodQN.length ==1) Runtime.getClass.getName else methodQN.init.mkString(".")
   def methodName = methodQN.last
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (methodQNIds, "method") += (args, "args")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"${methodQN.mkString(".")}, op=$op, embTp=$embTp")
@@ -79,7 +79,7 @@ final case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
   var sym: Symbol = Symbol.NoSymbol
   def setSym(s: Symbol): this.type = { sym = s; this }
   override protected[this] def namedNodes: NamedNodesBuilder = {
-    val msg = if(sym.isDefined) s"$s @ ${System.identityHashCode(sym)}" else s"$s @ <NoSymbol>"
+    val msg = if(sym.isDefined) s"$s @ ${sym.show}" else s"$s @ <NoSymbol>"
     new NamedNodesBuilder(msg)
   }
   def isWildcard = false
@@ -155,11 +155,11 @@ sealed trait CheckedRule extends Statement {
 final case class DerivedRule(sym1: Symbol, sym2: Symbol) extends CheckedRule
 
 final case class MatchRule(id1: Ident, id2: Ident, args1: Vector[Expr], args2: Vector[Expr],
-    emb1: Option[EmbeddedExpr], emb2: Option[EmbeddedExpr], reduction: Vector[Branch]) extends CheckedRule {
+    emb1: Option[Ident], emb2: Option[Ident], branches: Vector[Branch]) extends CheckedRule {
   def sym1 = id1.sym
   def sym2 = id2.sym
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (args1, "args1") += (args2, "args2") += (emb1, "emb1") += (emb2, "emb2") += (reduction, "red")
+    n += (args1, "args1") += (args2, "args2") += (emb1, "emb1") += (emb2, "emb2") += (branches, "red")
 }
 
 object IdentOrAp {
@@ -202,9 +202,12 @@ object PayloadType {
 sealed trait EmbeddedType
 object EmbeddedType {
   final case object Unknown extends EmbeddedType
-  final case class Cell(payloadType: PayloadType) extends EmbeddedType
-  final case class Method(ret: PayloadType, args:Vector[(PayloadType, Boolean /* out */)]) extends EmbeddedType
+  final case class Payload(payloadType: PayloadType) extends EmbeddedType
+  final case class Method(method: java.lang.reflect.Method, ret: EmbeddedType, args:Vector[(EmbeddedType, Boolean /* out */)]) extends EmbeddedType
   final case object Bool extends EmbeddedType
+  final val PayloadInt = Payload(PayloadType.INT)
+  final val PayloadRef = Payload(PayloadType.REF)
+  final val PayloadVoid = Payload(PayloadType.VOID)
 }
 
 final class Label(s: String) {

@@ -42,5 +42,5 @@ class ManagedDummy(name: String) extends LifecycleManaged {
   override def copy(): LifecycleManaged = { copied.incrementAndGet(); this }
 }
 object ManagedDummy {
-  def create(name: String, res: RefBox): Unit = res.setValue(new ManagedDummy(name))
+  def create(name: String, res: RefOutput): Unit = res.setValue(new ManagedDummy(name))
 }

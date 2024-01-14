@@ -7,7 +7,10 @@ import org.objectweb.asm.util.Printer
 
 import scala.collection.mutable.ArrayBuffer
 
-final class VarIdx(val idx: Int) extends AnyVal
+final class VarIdx(val idx: Int) extends AnyVal {
+  def isDefined: Boolean = idx != -1
+  def isEmpty: Boolean = idx == -1
+}
 object VarIdx {
   def none: VarIdx = new VarIdx(-1)
 }
@@ -59,6 +62,19 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
     val m = constructor(access, Desc.m())
     m.aload(m.receiver).invokespecial(superTp, "<init>", Desc.m().V)
     m.return_
+  }
+
+  def getter(field: FieldRef, access: Acc = Acc.PUBLIC | Acc.FINAL, _name: String = null): MethodDSL = {
+    val name = if(_name == null) s"get${field.name.charAt(0).toUpper}${field.name.substring(1)}" else _name
+    val m = method(access, name, Desc.m()(field.desc))
+    m.aload(m.receiver).getfield(field).genReturn(field.desc)
+  }
+
+  def setter(field: FieldRef, access: Acc = Acc.PUBLIC | Acc.FINAL, _name: String = null): MethodDSL = {
+    val name = if(_name == null) s"set${field.name.charAt(0).toUpper}${field.name.substring(1)}" else _name
+    val m = method(access, name, Desc.m(field.desc).V)
+    val p = m.param("value", field.desc, Acc.FINAL)
+    m.aload(m.receiver).genLoad(p, field.desc).putfield(field).return_
   }
 }
 
@@ -175,9 +191,15 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
   def iinc(varIdx: VarIdx, incr: Int = 1): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
 
   def aload(varIdx: VarIdx): this.type = varInsn(ALOAD, varIdx)
-  def astore(varIdx: VarIdx): this.type = { varInsn(ASTORE, varIdx); stored(varIdx); this }
+  def dload(varIdx: VarIdx): this.type = varInsn(DLOAD, varIdx)
+  def fload(varIdx: VarIdx): this.type = varInsn(FLOAD, varIdx)
   def iload(varIdx: VarIdx): this.type = varInsn(ILOAD, varIdx)
+  def lload(varIdx: VarIdx): this.type = varInsn(LLOAD, varIdx)
+  def astore(varIdx: VarIdx): this.type = { varInsn(ASTORE, varIdx); stored(varIdx); this }
+  def dstore(varIdx: VarIdx): this.type = { varInsn(DSTORE, varIdx); stored(varIdx); this }
+  def fstore(varIdx: VarIdx): this.type = { varInsn(FSTORE, varIdx); stored(varIdx); this }
   def istore(varIdx: VarIdx): this.type = { varInsn(ISTORE, varIdx); stored(varIdx); this }
+  def lstore(varIdx: VarIdx): this.type = { varInsn(LSTORE, varIdx); stored(varIdx); this }
 
   def aaload: this.type = insn(AALOAD)
   def aastore: this.type = insn(AASTORE)
@@ -186,11 +208,15 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
 
   def return_ : this.type = insn(RETURN)
   def areturn : this.type = insn(ARETURN)
+  def dreturn : this.type = insn(DRETURN)
+  def freturn : this.type = insn(FRETURN)
   def ireturn : this.type = insn(IRETURN)
+  def lreturn : this.type = insn(LRETURN)
   def dup: this.type = insn(DUP)
   def dup_x1: this.type = insn(DUP_X1)
   def dup_x2: this.type = insn(DUP_X2)
   def pop: this.type = insn(POP)
+  def pop2: this.type = insn(POP2)
   def swap: this.type = insn(SWAP)
   def ior: this.type = insn(IOR)
   def iand: this.type = insn(IAND)
@@ -209,6 +235,22 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
     case i if i >= Byte.MinValue && i <= Byte.MaxValue => intInsn(BIPUSH, i)
     case i if i >= Short.MinValue && i <= Short.MaxValue => intInsn(SIPUSH, i)
     case _ => ldc(i)
+  }
+
+  def genReturn(tp: ValDesc) : this.type = tp.desc match {
+    case "B" | "C" | "I" | "S" | "Z" => ireturn
+    case "D" => dreturn
+    case "F" => freturn
+    case "J" => lreturn
+    case _ => areturn
+  }
+
+  def genLoad(varIdx: VarIdx, tp: ValDesc) : this.type = tp.desc match {
+    case "B" | "C" | "I" | "S" | "Z" => iload(varIdx)
+    case "D" => dload(varIdx)
+    case "F" => fload(varIdx)
+    case "J" => lload(varIdx)
+    case _ => aload(varIdx)
   }
 
   def goto(l: Label): this.type = jumpInsn(GOTO, l)
@@ -308,6 +350,12 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
   def invokevirtual(method: MethodRef): this.type = methodInsn(INVOKEVIRTUAL, method)
   def invokeinterface(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEINTERFACE, owner, name, desc)
   def invokeinterface(method: MethodRef): this.type = methodInsn(INVOKEINTERFACE, method)
+
+  def invoke(method: MethodRef, targetTp: Owner = null): this.type = targetTp match {
+    case null => invoke(method, method.owner)
+    case tp: InterfaceOwner => invokeinterface(method.on(targetTp))
+    case tp: ClassOwner => invokevirtual(method.on(targetTp))
+  }
 
   def new_(tpe: Owner): this.type = typeInsn(NEW, tpe)
   def checkcast(tpe: Owner): this.type = typeInsn(CHECKCAST, tpe)

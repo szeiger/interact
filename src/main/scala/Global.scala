@@ -24,6 +24,13 @@ final class Global(val fconfig: FrontendConfig) {
     hasErrors = true
   }
 
+  def throwError(msg: String, at: Node): Nothing = throwError(msg, at.pos)
+  def throwError(msg: String, at: Position): Nothing = {
+    error(msg, at)
+    throw new ReportedError
+  }
+  def tryError[T](f: => T): Option[T] = try Some(f) catch { case _: ReportedError => None }
+
   def fatal(msg: String, at: Node): Nothing = fatal(msg, at.pos)
   def fatal(msg: String, at: Position): Nothing = {
     accumulated += new Notice(msg, at, Severity.Fatal)
@@ -53,13 +60,16 @@ class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode
     import Notice._
     val b = new StringBuilder
     val sev = if(internal) s"${cRed}Internal Error" else if(isError) s"${cRed}Error" else s"${cYellow}Warning"
+    val msgLines = msg.split('\n')
     if(at.isDefined) {
       val (line, col) = at.input.find(at.offset)
-      b.append(s"$sev: $cNormal${at.file}$cCyan:${line+1}:${col+1}$cNormal: $msg$eol")
+      b.append(s"$sev: $cNormal${at.file}$cCyan:${line+1}:${col+1}$cNormal: ${msgLines.head}$eol")
+      msgLines.tail.foreach { m => b.append(s"$cBlue| $cNormal$m$eol") }
       b.append(s"$cBlue| $cNormal${at.input.getLine(line)}$eol")
       b.append(s"$cBlue| $cGreen${at.input.getCaret(col)}$cNormal")
     } else {
-      b.append(s"$sev: $cNormal $msg$eol")
+      b.append(s"$sev: $cNormal ${msgLines.head}$eol")
+      msgLines.tail.foreach { m => b.append(s"$cBlue| $cNormal$m$eol") }
     }
     if(internal && atNode != null) {
       val out = new StringWriter()
@@ -116,6 +126,8 @@ object CompilerResult {
   def fail(msg: String, at: Position = null, parent: Throwable = null, atNode: Node = null, internal: Boolean = true): Nothing =
     throw new CompilerResult(Vector(new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal)))
 }
+
+class ReportedError extends Exception("Internal error: ReportedError thrown by throwError must be caught by a surrounding tryError")
 
 trait BaseInterpreter {
   def getAnalyzer: Analyzer[_]

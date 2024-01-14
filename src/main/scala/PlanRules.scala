@@ -5,7 +5,7 @@ import de.szeiger.interact.LongBitOps._
 import de.szeiger.interact.ast._
 
 import java.lang.invoke.{MethodHandle, MethodHandles}
-import java.lang.reflect.Modifier
+import java.lang.reflect.{Method, Modifier}
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -17,7 +17,7 @@ class PlanRules(global: Global) extends Transform with Phase {
   import global._
 
   override def apply(n: MatchRule) =
-    Vector(RulePlan(n.sym1, n.sym2, n.reduction.map(r => BranchPlan(dependencyLoader, n, r)), false).setPos(n.pos))
+    Vector(RulePlan(n.sym1, n.sym2, n.branches.map(r => BranchPlan(dependencyLoader, n, r)), false).setPos(n.pos))
 
   override def apply(n: DerivedRule) = {
     if(n.sym1.id == "erase") Vector(deriveErase(n.sym2, n.sym1))
@@ -32,7 +32,7 @@ class PlanRules(global: Global) extends Transform with Phase {
     val cells = Vector.fill(sym.arity)(eraseSym)
     val wireConns: Vector[Connection] = (0 until sym.arity).map(i => Connection(FreeIdx(true, i), CellIdx(i, -1))).toVector
     val embComp = sym.payloadType match {
-      case PayloadType.REF => Vector(new PayloadMethodApplication(dependencyLoader, classOf[Intrinsics.type].getName, "eraseRef", Vector(EmbArg.Right)))
+      case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eraseRef", Vector(EmbArg.Right)))
       case _ => Vector.empty
     }
     RulePlan(eraseSym, sym, Vector(new BranchPlan(0, cells, Vector.empty, wireConns, embComp, None)), true)
@@ -52,7 +52,7 @@ class PlanRules(global: Global) extends Transform with Phase {
       val wireConns1 = Vector(Connection(FreeIdx(false, 0), CellIdx(sym.arity, -1)), Connection(FreeIdx(false, 1), CellIdx(sym.arity+1, -1)))
       val wireConns2 = (0 until sym.arity).map(i => Connection(FreeIdx(true, i), CellIdx(i, -1)))
       val embComp = sym.payloadType match {
-        case PayloadType.REF => Vector(new PayloadMethodApplication(dependencyLoader, classOf[Intrinsics.type].getName, "dupRef", Vector(EmbArg.Right, EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1))))
+        case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "dupRef", Vector(EmbArg.Right, EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1))))
         case _ => Vector.empty
       }
       RulePlan(dupSym, sym, Vector(new BranchPlan(2, cells, internalConns.result(), wireConns1 ++ wireConns2, embComp, None)), true)
@@ -90,24 +90,19 @@ object EmbArg {
   //final case class Temp(idx: Int) extends EmbIdx
 }
 
-trait Box
-trait IntBox extends Box { def getValue: Int; def setValue(i: Int): Unit }
-trait RefBox extends Box { def getValue: AnyRef; def setValue(o: AnyRef): Unit } // Also used for Label
-trait LifecycleManaged { def erase(): Unit; def copy(): LifecycleManaged }
-
 sealed abstract class PayloadComputation(val embArgs: Vector[EmbArg]) {
   def invoke(args: Array[Any]): Any
 }
 
-final class PayloadAssignment(sourceIdx: EmbArg, targetIdx: EmbArg) extends PayloadComputation(Vector(sourceIdx, targetIdx)) {
+final class PayloadAssignment(val sourceIdx: EmbArg, val targetIdx: EmbArg, val payloadType: PayloadType) extends PayloadComputation(Vector(sourceIdx, targetIdx)) {
   def invoke(args: Array[Any]): Unit = args(1) match {
     case b: IntBox => b.setValue(args(0).asInstanceOf[Int])
     case b: RefBox => b.setValue(args(0).asInstanceOf[AnyRef])
   }
-  override def toString: String = s"EmbeddedAssigner($sourceIdx -> $targetIdx)"
+  override def toString: String = s"EmbeddedAssigner($sourceIdx -> $targetIdx, $payloadType)"
 }
 
-final class CreateLabels(name: String, _argIndices: Vector[EmbArg]) extends PayloadComputation(_argIndices) {
+final class CreateLabelsComp(name: String, _argIndices: Vector[EmbArg]) extends PayloadComputation(_argIndices) {
   def invoke(args: Array[Any]): Any = {
     val label = new Label(name)
     args.foreach(_.asInstanceOf[RefBox].setValue(label))
@@ -116,19 +111,24 @@ final class CreateLabels(name: String, _argIndices: Vector[EmbArg]) extends Payl
   override def toString: String = s"EmbeddedCreateLabels($name: ${_argIndices.mkString(", ")})"
 }
 
-final class PayloadMethodApplication(cl: ClassLoader, cls: String, method: String, _argIndices: Vector[EmbArg]) extends PayloadComputation(_argIndices) {
-  private lazy val mh: MethodHandle = {
-    val c = cl.loadClass(cls)
-    val m = c.getMethods.find(_.getName == method).getOrElse(sys.error(s"Method $method not found in $cls"))
-    var mh = MethodHandles.lookup().unreflect(m)
-    if(!Modifier.isStatic(m.getModifiers)) mh = MethodHandles.insertArguments(mh, 0, c.getField("MODULE$").get(null))
-    mh
-  }
-  def invoke(args: Array[Any]): Any = mh.invokeWithArguments(args: _*)
-  override def toString: String = s"EmbeddedMethodApplication($cls#$method(${_argIndices.mkString(", ")}), ${mh.`type`().descriptorString()})"
+final class PayloadMethodApplication(val jMethod: Method, _argIndices: Vector[EmbArg]) extends PayloadComputation(_argIndices) {
+  def isStatic: Boolean = Modifier.isStatic(jMethod.getModifiers)
+  private[this] val mh = MethodHandles.lookup().unreflect(jMethod)
+  private[this] val adaptedmh: MethodHandle =
+    if(isStatic) mh else MethodHandles.insertArguments(mh, 0, jMethod.getDeclaringClass.getField("MODULE$").get(null))
+  def invoke(args: Array[Any]): Any = adaptedmh.invokeWithArguments(args: _*)
+  override def toString: String = s"EmbeddedMethodApplication(${jMethod.getDeclaringClass.getName}#${jMethod.getName}(${_argIndices.mkString(", ")}), ${mh.`type`().descriptorString()})"
 }
 
-final class PayloadMethodApplicationWithReturn(method: PayloadMethodApplication, retIndex: EmbArg) extends PayloadComputation(method.embArgs :+ retIndex) {
+object PayloadMethodApplication {
+  def apply(cl: ClassLoader, cls: String, method: String, _argIndices: Vector[EmbArg]): PayloadMethodApplication = {
+    val c = cl.loadClass(cls)
+    val m = c.getMethods.find(_.getName == method).getOrElse(sys.error(s"Method $method not found in $cls"))
+    new PayloadMethodApplication(m, _argIndices)
+  }
+}
+
+final class PayloadMethodApplicationWithReturn(val method: PayloadMethodApplication, val retIndex: EmbArg) extends PayloadComputation(method.embArgs :+ retIndex) {
   def invoke(args: Array[Any]): Unit = {
     val ret = method.invoke(args.init)
     args.last match {
@@ -145,20 +145,25 @@ object PayloadComputation {
       val ac = apply(cl, emb)(handleArg)
       new PayloadMethodApplicationWithReturn(ac.asInstanceOf[PayloadMethodApplication], handleArg(lhs.sym))
     case EmbeddedAssignment(lhs: Ident, StringLit(v)) =>
-      new PayloadAssignment(EmbArg.Const(v), handleArg(lhs.sym))
+      assert(lhs.sym.payloadType == PayloadType.REF)
+      new PayloadAssignment(EmbArg.Const(v), handleArg(lhs.sym), PayloadType.REF)
     case EmbeddedAssignment(lhs: Ident, IntLit(v)) =>
-      new PayloadAssignment(EmbArg.Const(v), handleArg(lhs.sym))
-    case emb @ EmbeddedApply(_, args, op, _) =>
+      assert(lhs.sym.payloadType == PayloadType.INT)
+      new PayloadAssignment(EmbArg.Const(v), handleArg(lhs.sym), PayloadType.INT)
+    case EmbeddedAssignment(lhs: Ident, rhs: Ident) =>
+      assert(lhs.sym.payloadType == rhs.sym.payloadType)
+      new PayloadAssignment(handleArg(rhs.sym), handleArg(lhs.sym), lhs.sym.payloadType)
+    case emb @ EmbeddedApply(_, args, _, embTp: EmbeddedType.Method) =>
       val embArgs = args.map {
         case IntLit(v) => EmbArg.Const(v)
         case StringLit(v) => EmbArg.Const(v)
         case id: Ident => handleArg(id.sym)
         //TODO resolve nested applications in CleanEmbedded
       }
-      new PayloadMethodApplication(cl, emb.className, emb.methodName, embArgs)
+      new PayloadMethodApplication(embTp.method, embArgs)
     case CreateLabels(base, labels) =>
-      new CreateLabels(base.id, labels.map(handleArg))
-    case _ => CompilerResult.fail(s"Embedded computation must be a method call", atNode = e)
+      new CreateLabelsComp(base.id, labels.map(handleArg))
+    case _ => CompilerResult.fail(s"Unsupported computation", atNode = e)
   }
 }
 
@@ -166,7 +171,7 @@ final class BranchPlan(arity1: Int,
   val cells: Vector[Symbol],
   val internalConnsDistinct: Vector[Connection],
   val wireConnsByWire: Vector[Connection],
-  val embeddedComps: Vector[PayloadComputation],
+  val payloadComps: Vector[PayloadComputation],
   val condition: Option[PayloadComputation]) extends Node {
 
   lazy val wireConnsDistinct: Vector[Connection] = wireConnsByWire.filter {
@@ -275,12 +280,7 @@ object BranchPlan {
         if(sym.isCons) {
           val cellIdx = cells.length
           cells += sym
-          emb.foreach { case id: Ident =>
-            assert(id.sym.isDefined)
-            if(id.sym == emb1) embComps += new PayloadAssignment(EmbArg.Left, EmbArg.Cell(cellIdx))
-            else if(id.sym == emb2) embComps += new PayloadAssignment(EmbArg.Right, EmbArg.Cell(cellIdx))
-            else cellEmbSyms.put(id.sym, EmbArg.Cell(cellIdx))
-          }
+          emb.foreach { case id: Ident => cellEmbSyms.put(id.sym, EmbArg.Cell(cellIdx)) }
           cellIdx
         } else freeLookup(sym)
       }

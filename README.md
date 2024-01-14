@@ -225,27 +225,27 @@ def _ + y = r
 A static JVM method (or a method in a Scala object) can be invoked to perform a computation on embedded values by calling the method with its fully qualified name in an embedded expression in square brackets:
 ```
 def intAdd[int a](_) = r
-  | Int[b] => [de.szeiger.interact.Intrinsics.add(a, b, c)]
+  | Int[b] => [de.szeiger.interact.Runtime.add(a, b, c)]
               Int[c]
 ```
 
-Input parameters (corresponding to variables used in the match) must be of type `int` or a reference type, output parameters (corresponding to variables used in the expansion) must be of type `IntBox` or `RefBox`:
+Input parameters (corresponding to variables used in the match) must be of type `int` or a reference type, output parameters (corresponding to variables used in the expansion) must be of type `IntOutput` or `RefOutput`:
 
 ```
 // Implementation in Scala:
-object Intrinsics {
-  def add(a: Int, b: Int, res: IntBox): Unit =
+object Runtime {
+  def add(a: Int, b: Int, res: IntOutput): Unit =
     res.setValue(a + b)
 }
 ```
 
 It is up to the implementation of such a method to handle copying and deleting in an appropriate way. Since embedded `ref` values can also be copied and deleted by the `dup` and `erase` functions, the values may implement the `LifecycleManaged` interface to implement these methods. Otherwise, references will be shared or dropped from scope as usual on the JVM.
 
-An implementation method may directly return a value instead of using an `IntBox` / `RefBox` output parameter. Such a method can be used directly as an embedded computation of a cell:
+An implementation method may directly return a value instead of using an `IntOutput` / `RefOutput` output parameter. Such a method can be used directly as an embedded computation of a cell:
 
 ```
 def strlen(_) = r
-  | String[s] => Int[de.szeiger.interact.Intrinsics.strlen(s)]
+  | String[s] => Int[de.szeiger.interact.Runtime.strlen(s)]
 ```
 
 Int literals and some basic operators are available in embedded computations, e.g.:

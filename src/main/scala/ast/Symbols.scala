@@ -5,27 +5,28 @@ import scala.collection.mutable
 final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
     val isCons: Boolean = false, val isDef: Boolean = false,
     var payloadType: PayloadType = PayloadType.VOID, val matchContinuationPort: Int = -2,
-    val isEmbedded: Boolean = false) {
+    val isEmbedded: Boolean = false, var isPattern: Boolean = false) {
   def callArity: Int = arity + 1 - returnArity
   def hasPayload: Boolean = payloadType != PayloadType.VOID
   override def toString: String = id
   def isDefined: Boolean = this != Symbol.NoSymbol
   def isEmpty: Boolean = !isDefined
-  def uniqueStr: String = if(isDefined) s"$id @ ${System.identityHashCode(this)}" else "<NoSymbol>"
+  def uniqueStr: String = if(isDefined) s"$id:${System.identityHashCode(this)}" else "<NoSymbol>"
+  def show: String = s"$uniqueStr<$payloadType>"
 }
 
 object Symbol {
   val NoSymbol = new Symbol("<NoSymbol>")
 }
 
-class SymbolGen(prefix: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID) {
+class SymbolGen(prefix2: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID) {
   private[this] var last = 0
-  def apply(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType): Symbol = {
+  def apply(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType, prefix: String = ""): Symbol = {
     last += 1
-    new Symbol(prefix+last, isEmbedded = isEmbedded, payloadType = payloadType)
+    new Symbol(prefix+prefix2+last, isEmbedded = isEmbedded, payloadType = payloadType)
   }
-  def id(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType): Ident = {
-    val s = apply(isEmbedded, payloadType)
+  def id(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType, prefix: String = ""): Ident = {
+    val s = apply(isEmbedded, payloadType, prefix)
     val i = Ident(s.id)
     i.sym = s
     i

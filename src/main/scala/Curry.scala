@@ -40,8 +40,8 @@ class Curry(global: Global) extends Transform with Phase {
         Vector.empty
       case None =>
         val curriedPtp = if(ls.hasPayload) ls.payloadType else rs.payloadType
-        val emb1 = if(ls.hasPayload) Some(mkLocalId("$l").setPos(lid.pos)) else None
-        val emb2 = if(rs.hasPayload) Some(mkLocalId("$r").setPos(rid.pos)) else None
+        val emb1 = if(ls.hasPayload) Some(mkLocalId("$l", true).setPos(lid.pos)) else None
+        val emb2 = if(rs.hasPayload) Some(mkLocalId("$r", true).setPos(rid.pos)) else None
         curryId.sym = globalSymbols.define(curryId.s, isCons = true, arity = ls.arity + rs.arity - 1, payloadType = curriedPtp, matchContinuationPort = idx)
         val largs = (0 until ls.callArity).map(i => mkLocalId(s"$$l$i")).toVector
         val rargs = (0 until rs.callArity).map(i => mkLocalId(s"$$r$i")).toVector
@@ -69,13 +69,20 @@ class Curry(global: Global) extends Transform with Phase {
           val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, false, mr.pos)
           val ApplyCons(cid, cemb, crargs) = mr.args2(idx)
           val clargs = mr.args1 ++ mr.args2.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-          curryRules ++ curry(MatchRule(curryId, cid, clargs, crargs, mr.emb1.orElse(mr.emb2), cemb, mr.reduction).setPos(mr.pos))
+          curryRules ++ curry(MatchRule(curryId, cid, clargs, crargs, mr.emb1.orElse(mr.emb2), checkCEmb(cemb), mr.branches).setPos(mr.pos))
       }
     case idx =>
       val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, true, mr.pos)
       val ApplyCons(cid, cemb, clargs) = mr.args1(idx)
       val crargs = mr.args2 ++ mr.args1.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-      curryRules ++ curry(new MatchRule(curryId, cid, crargs, clargs, mr.emb1.orElse(mr.emb2), cemb, mr.reduction).setPos(mr.pos))
+      curryRules ++ curry(new MatchRule(curryId, cid, crargs, clargs, mr.emb1.orElse(mr.emb2), checkCEmb(cemb), mr.branches).setPos(mr.pos))
+  }
+
+  private[this] def checkCEmb(o: Option[EmbeddedExpr]): Option[Ident] = o.flatMap {
+    case i: Ident => Some(i)
+    case e =>
+      error("Embedded expression in pattern match must be a variable", e)
+      None
   }
 
   override def apply(n: Statement): Vector[Statement] = n match {

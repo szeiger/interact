@@ -160,8 +160,8 @@ abstract class Transform {
     val a22 = mapC(n.args2)(apply)
     val emb12 = mapC(n.emb1)(apply)
     val emb22 = mapC(n.emb2)(apply)
-    val red2 = mapC(n.reduction)(apply)
-    if((i1 eq n.id1) && (i2 eq n.id2) && (a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.reduction)) n
+    val red2 = mapC(n.branches)(apply)
+    if((i1 eq n.id1) && (i2 eq n.id2) && (a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.branches)) n
     else MatchRule(i1, i2, a12, a22, emb12, emb22, red2).setPos(n.pos)
   })
 
