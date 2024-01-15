@@ -22,6 +22,7 @@ class MainTest(spec: String) {
   @Test def testReduceRHS = check("reduce-rhs", expectedSteps = 2, addEraseDup = false)
   @Test def testFib = check("fib")
   @Test def testEmbedded = check("embedded")
+  @Test def testAck = check("ack")
 
   @Test def testLifecycle = {
 

@@ -1,0 +1,37 @@
+cons Z
+cons S(x)
+
+# Direct encoding as in https://github.com/inpla/inpla/blob/main/sample/AckSZ-3_5.in
+# 4182049 reductions (with pre-reduced rhs)
+
+#def ack(a, b) = r
+#  | Z, y => S(y)
+#  | S(x), Z => ack(x, S(Z))
+#  | S(x), S(y) => (x1, x2) = dup(x); ack(x1, ack(S(x2),y))
+
+def ack(_, y) = r
+  | Z => S(y)
+  | S(x) => ack_Sx(y, x)
+
+def ack_Sx(_, x) = r
+  | Z => ack(x, S(Z))
+  | S(y) => (x1, x2) = dup(x); ack(x1, ack_Sx(y, x2))
+
+let res = ack(3n, 8n)
+
+
+# Encoding with pred from https://www.user.tu-berlin.de/o.runge/tfs/workshops/gtvmt08/Program/paper_38.pdf
+# 8360028 reductions
+
+cons Pred(x)
+cons A(r, y) = x
+cons A1(r, y) = x
+match Pred(r) = Z => r = Z
+match Pred(r) = S(x) => r = x
+
+match A(a, b) = Z => a = r; b = S(r)
+match A1(a, b) = Z => a = Pred(A(S(Z), b))
+match A(a, b) = S(x) => a = A1(S(x), b)
+match A1(a, b) = S(y) => (a1, a2) = dup(a); a1 = Pred(A(r1, b)); a2 = A(y, r1)
+
+let A(8n, res2) = 3n

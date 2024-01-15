@@ -82,6 +82,29 @@ class InterpreterBenchmark {
       |let res = fib(29n)
       |""".stripMargin
 
+  private val ack38Src =
+    """def ack(_, y) = r
+      |  | Z => S(y)
+      |  | S(x) => ack_Sx(y, x)
+      |def ack_Sx(_, x) = r
+      |  | Z => ack(x, S(Z))
+      |  | S(y) => (x1, x2) = dup(x); ack(x1, ack_Sx(y, x2))
+      |let res = ack(3n, 8n)
+      |""".stripMargin
+
+  private val ack38bSrc =
+    """cons Pred(x)
+      |cons A(r, y) = x
+      |cons A1(r, y) = x
+      |match Pred(r) = Z => r = Z
+      |match Pred(r) = S(x) => r = x
+      |match A(a, b) = Z => a = r; b = S(r)
+      |match A1(a, b) = Z => a = Pred(A(S(Z), b))
+      |match A(a, b) = S(x) => a = A1(S(x), b)
+      |match A1(a, b) = S(y) => (a1, a2) = dup(a); a1 = Pred(A(r1, b)); a2 = A(y, r1)
+      |let A(8n, res2) = 3n
+      |""".stripMargin
+
   class PreparedInterpreter(source: String) {
     val model: Compiler = new Compiler(Parser.parse(source))
 
@@ -106,6 +129,8 @@ class InterpreterBenchmark {
   private lazy val mult3Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult3Src)
   private lazy val fib22Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib22Src)
   private lazy val fib29Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib29Src)
+  private lazy val ack38Inter: PreparedInterpreter = new PreparedInterpreter(prelude + ack38Src)
+  private lazy val ack38bInter: PreparedInterpreter = new PreparedInterpreter(prelude + ack38bSrc)
 
   @Benchmark
   @OperationsPerInvocation(505402)
@@ -126,6 +151,16 @@ class InterpreterBenchmark {
   @OperationsPerInvocation(478658)
   def fib22(bh: Blackhole): Unit =
     bh.consume(fib22Inter.setup().reduce())
+
+  @Benchmark
+  @OperationsPerInvocation(4182049)
+  def ack38(bh: Blackhole): Unit =
+    bh.consume(ack38Inter.setup().reduce())
+
+//  @Benchmark
+//  @OperationsPerInvocation(8360028)
+//  def ack38b(bh: Blackhole): Unit =
+//    bh.consume(ack38bInter.setup().reduce())
 
 //  @Benchmark
 //  @OperationsPerInvocation(16503015)

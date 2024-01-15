@@ -65,7 +65,7 @@ class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode
       val (line, col) = at.input.find(at.offset)
       b.append(s"$sev: $cNormal${at.file}$cCyan:${line+1}:${col+1}$cNormal: ${msgLines.head}$eol")
       msgLines.tail.foreach { m => b.append(s"$cBlue| $cNormal$m$eol") }
-      b.append(s"$cBlue| $cNormal${at.input.getLine(line)}$eol")
+      b.append(s"$cBlue| $cNormal${at.input.getLine(line).stripTrailing()}$eol")
       b.append(s"$cBlue| $cGreen${at.input.getCaret(col)}$cNormal")
     } else {
       b.append(s"$sev: $cNormal ${msgLines.head}$eol")
