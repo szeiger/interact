@@ -19,7 +19,7 @@ class Prepare(global: Global) extends Phase {
       case _ =>
     }
     val st2 = Transform.mapC(unit.statements)(assign(_, globalSymbols))
-    if(st2 eq unit.statements) unit else unit.copy(st2).setPos(unit.pos)
+    if(st2 eq unit.statements) unit else unit.copy(st2)
   }
 
   private[this] def assign(n: Statement, scope: Symbols): Statement = n match {
@@ -66,7 +66,7 @@ class Prepare(global: Global) extends Phase {
       defs.foreach(refs.collectAll)
       if(refs.hasError)
         error(s"Non-linear use of variable(s) ${refs.err.map(s => s"'$s'").mkString(", ")}", n)
-      n.copy(free = refs.free.filterNot(_.isEmbedded).map(sym => Ident(sym.id).setSym(sym)).toVector.sortBy(_.s)).setPos(n.pos)
+      n.copy(free = refs.free.filterNot(_.isEmbedded).map(sym => Ident(sym.id).setSym(sym)).toVector.sortBy(_.s))
     case _: CheckedRule => n
   }
 

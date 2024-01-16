@@ -13,7 +13,7 @@ import scala.collection.mutable
 // - wildcards in assignments are resolved
 // - only the last expr can be a non-assignment
 // - NatLits are expanded
-class Normalize(global: Global) {
+class NormalizeCondition(global: Global) {
   import global._
 
   private var lastTmp = 0
@@ -41,7 +41,7 @@ class Normalize(global: Global) {
       case Assignment(ls, rs) =>
         if(nested) error("Unexpected nested assignment without wilcard", e)
         Assignment(unnest(ls, false), unnest(rs, false)).setPos(e.pos)
-      case Tuple(es) => Tuple(es.map(unnest(_, true))).setPos(e.pos)
+      case e: Tuple => e.copy(e.exprs.map(unnest(_, true)))
       case IdentOrAp(id, emb, args) =>
         if(id.sym.isCons || args.nonEmpty) {
           val ap = Apply(id, emb, args.map(unnest(_, true))).setPos(e.pos)
@@ -67,7 +67,7 @@ class Normalize(global: Global) {
           buf += Assignment(Tuple(vs).setPos(ls.pos), ls).setPos(ls.pos)
           buf += Assignment(Tuple(vs).setPos(rs.pos), rs).setPos(rs.pos)
         }
-      case Assignment(ls: Apply, rs) => reorder(Assignment(rs, ls).setPos(e.pos))
+      case e @ Assignment(ls: Apply, rs) => reorder(e.copy(rs, ls))
       case Assignment(Tuple(ls), Tuple(rs)) =>
         ls.zip(rs).foreach { case (l, r) => reorder(Assignment(l, r).setPos(e.pos)) }
       case e => buf += e
@@ -97,8 +97,8 @@ class Normalize(global: Global) {
       def f(e: Expr): Expr = e match {
         case e: Ident => vars.remove(e).map { a => f(a.rhs) }.getOrElse(e)
         case e: Tuple => vars.remove(e).map { a => f(a.rhs) }.getOrElse(e)
-        case ApplyCons(target, emb, args) => ApplyCons(target, emb, args.map(f)).setPos(e.pos)
-        case Assignment(l, r) => Assignment(f(r), f(l)).setPos(e.pos)
+        case e @ ApplyCons(target, emb, args) => e.copy(args = args.map(f))
+        case e @ Assignment(l, r) => e.copy(f(r), f(l))
       }
       val e2 = f(es.last)
       (vars.valuesIterator ++ Iterator.single(e2)).toSeq

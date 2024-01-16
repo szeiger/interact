@@ -25,7 +25,8 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
 
   val unit = phases.foldLeft(unit1) { case (u, p) =>
     val u2 = p(u)
-    //ShowableNode.print(u2, name = s"After phase $p")
+    if(fconfig.showAfter.contains(p.phaseName) || fconfig.showAfter.contains("*"))
+      ShowableNode.print(u2, name = s"After phase ${p.phaseName}")
     checkThrow()
     u2
   }
@@ -68,12 +69,14 @@ final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {
-  override def toString(): String = getClass.getName.replaceAll(".*\\.", "")
+  def phaseName: String = getClass.getName.replaceAll(".*\\.", "")
+  override def toString: String = phaseName
 }
 
 case class FrontendConfig(
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true,
+  showAfter: Set[String] = Set.empty, // log AST after these phases
 )
 
 case class BackendConfig(

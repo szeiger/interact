@@ -8,7 +8,7 @@ import de.szeiger.interact.ast._
 class ExpandRules(global: Global) extends Transform with Phase {
   import global._
 
-  val normalize = new Normalize(global)
+  val normalizeCond = new NormalizeCondition(global)
 
   private[this] def wildcardCount(e: Expr): Int = e match {
     case _: Wildcard => 1
@@ -37,7 +37,7 @@ class ExpandRules(global: Global) extends Transform with Phase {
   }
 
   override def apply(d: Def): Vector[Statement] = {
-    d.copy(rules = Vector.empty).setPos(d.pos) +: d.rules.flatMap { r =>
+    d.copy(rules = Vector.empty) +: d.rules.flatMap { r =>
       val dret = Tuple(d.ret).setPos(d.pos)
       checkedMatch(Vector(Assignment(Apply(d.name, d.embeddedId, r.on ++ d.args.drop(r.on.length)).setPos(d.pos), dret).setPos(r.pos)), r.reduced, r.pos)
     }
@@ -68,12 +68,12 @@ class ExpandRules(global: Global) extends Transform with Phase {
   }
 
   private[this] def checkedMatch(on: Vector[Expr], red: Vector[Branch], pos: Position): Vector[Statement] = {
-    val inlined = normalize.toInline(normalize.toANF(on).map(normalize.toConsOrder))
+    val inlined = normalizeCond.toInline(normalizeCond.toANF(on).map(normalizeCond.toConsOrder))
     inlined match {
       case Seq(Assignment(ApplyCons(lid, lemb, largs: Seq[Expr]), ApplyCons(rid, remb, rargs))) =>
         val compl = if(lid.sym.isDef) largs.takeRight(lid.sym.returnArity) else Vector.empty
         val connected = red.map { r =>
-          r.copy(reduced = r.reduced.init :+ connectLastStatement(r.reduced.last, compl.asInstanceOf[Vector[Ident]])).setPos(r.pos)
+          r.copy(reduced = r.reduced.init :+ connectLastStatement(r.reduced.last, compl.asInstanceOf[Vector[Ident]]))
         }
         val mr = MatchRule(lid, rid, largs, rargs, lemb.map(_.asInstanceOf[Ident]), remb.map(_.asInstanceOf[Ident]), connected).setPos(pos)
         Vector(mr)

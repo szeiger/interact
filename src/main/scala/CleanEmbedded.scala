@@ -32,14 +32,14 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
     val branches = mr.branches.map { b =>
       val (reduced2, embRed2) = transformReduction(b.reduced, b.embRed, patternIds)
       val cond2 = b.cond.map(checkCond(_))
-      b.copy(cond = cond2, reduced = reduced2, embRed = embRed2).setPos(b.pos)
+      b.copy(cond = cond2, reduced = reduced2, embRed = embRed2)
     }
-    Vector(mr.copy(branches = branches).setPos(mr.pos))
+    Vector(mr.copy(branches = branches))
   }
 
   override def apply(l: Let): Vector[Statement] = {
     val (es, ees) = transformReduction(l.defs, l.embDefs, Set.empty)
-    Vector(l.copy(defs = es, embDefs = ees).setPos(l.pos))
+    Vector(l.copy(defs = es, embDefs = ees))
   }
 
   // check embedded symbol in pattern and assign payload type to is
@@ -98,7 +98,7 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
               error(s"Embedded value of type ${n.target.sym.payloadType} must be created", n)
             None
         }
-        n.copy(embedded = emb2).setPos(n.pos).asInstanceOf[T]
+        n.copy(embedded = emb2).asInstanceOf[T]
       }
       override def apply(n: Apply): Apply = tr(super.apply(n))
       override def apply(n: ApplyCons): ApplyCons = tr(super.apply(n))

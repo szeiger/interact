@@ -8,8 +8,6 @@ import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicInteger
 
 object TestUtils {
-  val SCALE = 0
-
   def check(testName: String, spec: String, expectedSteps: Int = -1, addEraseDup: Boolean = true): Unit = {
     val basePath = s"src/test/resources/$testName"
     val statements = Parser.parse(Path.of(basePath+".in"))

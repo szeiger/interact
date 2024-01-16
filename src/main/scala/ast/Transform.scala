@@ -21,7 +21,7 @@ abstract class Transform {
     val on2 = mapC(n.on)(apply)
     val red2 = mapC(n.reduced)(apply)
     if((on2 eq n.on) && (red2 eq n.reduced)) n
-    else DefRule(on2, red2).setPos(n.pos)
+    else n.copy(on2, red2)
   }
 
   def apply(n: IdentOrWildcard): IdentOrWildcard = n match {
@@ -34,7 +34,7 @@ abstract class Transform {
     val emb2 = mapC(n.embedded)(apply)
     val args2 = mapC(n.args)(apply)
     if((t2 eq n.target) && (emb2 eq n.embedded) && (args2 eq n.args)) n
-    else Apply(t2, emb2, args2).setPos(n.pos)
+    else n.copy(t2, emb2, args2)
   }
 
   def apply(n: ApplyCons): ApplyCons = {
@@ -42,20 +42,20 @@ abstract class Transform {
     val emb2 = mapC(n.embedded)(apply)
     val args2 = mapC(n.args)(apply)
     if((t2 eq n.target) && (emb2 eq n.embedded) && (args2 eq n.args)) n
-    else ApplyCons(t2, emb2, args2).setPos(n.pos)
+    else n.copy(t2, emb2, args2)
   }
 
   def apply(n: Tuple): Tuple = {
     val e2 = mapC(n.exprs)(apply)
     if(e2 eq n.exprs) n
-    else Tuple(e2).setPos(n.pos)
+    else n.copy(e2)
   }
 
   def apply(n: Assignment): Assignment = {
     val l2 = apply(n.lhs)
     val r2 = apply(n.rhs)
     if((l2 eq n.lhs) && (r2 eq n.rhs)) n
-    else Assignment(l2, r2).setPos(n.pos)
+    else n.copy(l2, r2)
   }
 
   def apply(n: Expr): Expr = n match {
@@ -81,14 +81,14 @@ abstract class Transform {
     val m2 = mapC(n.methodQNIds)(apply)
     val args2 = mapC(n.args)(apply)
     if((m2 eq n.methodQNIds) && (args2 eq n.args)) n
-    else EmbeddedApply(m2, args2, n.op, n.embTp).setPos(n.pos)
+    else n.copy(m2, args2, n.op, n.embTp)
   }
 
   def apply(n: EmbeddedAssignment): EmbeddedAssignment = {
     val l2 = apply(n.lhs)
     val r2 = apply(n.rhs)
     if((l2 eq n.lhs) && (r2 eq n.rhs)) n
-    else EmbeddedAssignment(l2, r2).setPos(n.pos)
+    else n.copy(l2, r2)
   }
 
   def apply(n: CreateLabels): CreateLabels = n
@@ -106,7 +106,7 @@ abstract class Transform {
     val on2 = mapC(n.on)(apply)
     val red2 = mapC(n.reduced)(apply)
     if((on2 eq n.on) && (red2 eq n.reduced)) n
-    else Match(on2, red2).setPos(n.pos)
+    else n.copy(on2, red2)
   })
 
   def apply(n: Cons): Vector[Statement] = Vector({
@@ -116,7 +116,7 @@ abstract class Transform {
     val r2 = mapC(n.ret)(apply)
     val d2 = mapC(n.der)(mapC(_)(apply))
     if((n2 eq n.name) && (a2 eq n.args) && (e2 eq n.embeddedId) && (r2 eq n.ret) && (d2 eq n.der)) n
-    else Cons(n2, a2, n.operator, n.payloadType, e2, r2, d2).setPos(n.pos)
+    else n.copy(n2, a2, n.operator, n.payloadType, e2, r2, d2)
   })
 
   def apply(n: Let): Vector[Statement] = Vector({
@@ -124,7 +124,7 @@ abstract class Transform {
     val e2 = mapC(n.embDefs)(apply)
     val f2 = mapC(n.free)(apply)
     if((d2 eq n.defs) && (e2 eq n.embDefs) && (f2 eq n.free)) n
-    else Let(d2, e2, f2).setPos(n.pos)
+    else n.copy(d2, e2, f2)
   })
 
   def apply(n: Def): Vector[Statement] = Vector({
@@ -134,7 +134,7 @@ abstract class Transform {
     val r2 = mapC(n.ret)(apply)
     val u2 = mapC(n.rules)(apply)
     if((n2 eq n.name) && (a2 eq n.args) && (e2 eq n.embeddedId) && (r2 eq n.ret) && (u2 eq n.rules)) n
-    else Def(n2, a2, n.operator, n.payloadType, e2, r2, u2).setPos(n.pos)
+    else n.copy(n2, a2, n.operator, n.payloadType, e2, r2, u2)
   })
 
   def apply(n: Statement): Vector[Statement] = n match {
@@ -162,13 +162,13 @@ abstract class Transform {
     val emb22 = mapC(n.emb2)(apply)
     val red2 = mapC(n.branches)(apply)
     if((i1 eq n.id1) && (i2 eq n.id2) && (a12 eq n.args1) && (a22 eq n.args2) && (emb12 eq n.emb1) && (emb22 eq n.emb2) && (red2 eq n.branches)) n
-    else MatchRule(i1, i2, a12, a22, emb12, emb22, red2).setPos(n.pos)
+    else n.copy(i1, i2, a12, a22, emb12, emb22, red2)
   })
 
   def apply(n: RulePlan): Vector[Statement] = Vector({
     val b2 = mapC(n.branches)(apply)
     if(b2 eq n.branches) n
-    else RulePlan(n.sym1, n.sym2, b2, n.derived).setPos(n.pos)
+    else n.copy(n.sym1, n.sym2, b2, n.derived)
   })
 
   def apply(n: BranchPlan): BranchPlan = n
@@ -176,7 +176,7 @@ abstract class Transform {
   def apply(n: CompilationUnit): CompilationUnit = {
     val st2 = flatMapC(n.statements)(apply)
     if(st2 eq n.statements) n
-    else CompilationUnit(st2).setPos(n.pos)
+    else n.copy(st2)
   }
 
   def apply(n: Branch): Branch = {
@@ -184,7 +184,7 @@ abstract class Transform {
     val embRed2 = mapC(n.embRed)(apply)
     val red2 = mapC(n.reduced)(apply)
     if((cond2 eq n.cond) && (embRed2 eq n.embRed) && (red2 eq n.reduced)) n
-    else Branch(cond2, embRed2, red2).setPos(n.pos)
+    else n.copy(cond2, embRed2, red2)
   }
 }
 

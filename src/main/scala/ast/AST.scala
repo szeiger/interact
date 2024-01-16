@@ -40,11 +40,14 @@ trait Statement extends Node
 
 final case class CompilationUnit(statements: Vector[Statement]) extends Node {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += statements
+  def copy(statements: Vector[Statement] = statements): CompilationUnit = CompilationUnit(statements).setPos(pos)
 }
 
 final case class Cons(name: Ident, args: Vector[IdentOrWildcard], operator: Boolean, payloadType: PayloadType, embeddedId: Option[Ident], ret: Option[Ident], der: Option[Vector[Ident]]) extends Statement {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (name, "name") += (args, "args") += (embeddedId, "embeddedId") += (ret, "ret") += (der.toSeq.flatten, "der")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"operator=$operator, payloadType=$payloadType")
+  def copy(name: Ident = name, args: Vector[IdentOrWildcard] = args, operator: Boolean = operator, payloadType: PayloadType = payloadType, embeddedId: Option[Ident] = embeddedId, ret: Option[Ident] = ret, der: Option[Vector[Ident]] = der): Cons =
+    Cons(name, args, operator, payloadType, embeddedId, ret, der).setPos(pos)
 }
 
 sealed trait AnyExpr extends Node
@@ -57,15 +60,19 @@ sealed trait IdentOrWildcard extends Expr {
 
 final case class EmbeddedAssignment(lhs: Ident, rhs: EmbeddedExpr) extends EmbeddedExpr {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (lhs, "lhs") += (rhs, "rhs")
+  def copy(lhs: Ident = lhs, rhs: EmbeddedExpr = rhs): EmbeddedAssignment = EmbeddedAssignment(lhs, rhs).setPos(pos)
 }
 final case class CreateLabels(base: Symbol, labels: Vector[Symbol]) extends EmbeddedExpr {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"<createLabels $base -> ${labels.mkString(", ")}>")
+  def copy(base: Symbol = base, labels: Vector[Symbol] = labels): CreateLabels = CreateLabels(base, labels).setPos(pos)
 }
 final case class IntLit(i: Int) extends EmbeddedExpr {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(i.toString)
+  def copy(i: Int = i): IntLit = IntLit(i).setPos(pos)
 }
 final case class StringLit(s: String) extends EmbeddedExpr {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"\"$s\"")
+  def copy(s: String = s): StringLit = StringLit(s).setPos(pos)
 }
 final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[EmbeddedExpr], op: Boolean, embTp: EmbeddedType) extends EmbeddedExpr {
   lazy val methodQN = methodQNIds.map(_.s)
@@ -73,6 +80,8 @@ final case class EmbeddedApply(methodQNIds: Vector[Ident], args: Vector[Embedded
   def methodName = methodQN.last
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (methodQNIds, "method") += (args, "args")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"${methodQN.mkString(".")}, op=$op, embTp=$embTp")
+  def copy(methodQNIds: Vector[Ident] = methodQNIds, args: Vector[EmbeddedExpr] = args, op: Boolean = op, embTp: EmbeddedType = embTp): EmbeddedApply =
+    EmbeddedApply(methodQNIds, args, op, embTp).setPos(pos)
 }
 
 final case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
@@ -83,16 +92,20 @@ final case class Ident(s: String) extends IdentOrWildcard with EmbeddedExpr {
     new NamedNodesBuilder(msg)
   }
   def isWildcard = false
+  def copy(s: String = s): Ident = Ident(s).setPos(pos)
 }
 final case class Wildcard() extends IdentOrWildcard {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder("_")
   def isWildcard = true
+  def copy(): Wildcard = Wildcard().setPos(pos)
 }
 final case class Assignment(lhs: Expr, rhs: Expr) extends Expr {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (lhs, "lhs") += (rhs, "rhs")
+  def copy(lhs: Expr = lhs, rhs: Expr = rhs): Assignment = Assignment(lhs, rhs).setPos(pos)
 }
 final case class Tuple(exprs: Vector[Expr]) extends Expr {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += exprs
+  def copy(exprs: Vector[Expr] = exprs): Tuple = Tuple(exprs).setPos(pos)
 }
 sealed trait AnyApply extends Expr {
   def target: Ident
@@ -109,11 +122,11 @@ object AnyApply {
 
 final case class Apply(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends AnyApply {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
-  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args) = Apply(target, embedded, args)
+  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args) = Apply(target, embedded, args).setPos(pos)
 }
 final case class ApplyCons(target: Ident, embedded: Option[EmbeddedExpr], args: Vector[Expr]) extends AnyApply {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (target, "target") += (embedded, "embedded") += (args, "args")
-  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args) = Apply(target, embedded, args)
+  def copy(target: Ident = target, embedded: Option[EmbeddedExpr] = embedded, args: Vector[Expr] = args) = ApplyCons(target, embedded, args).setPos(pos)
 }
 final case class NatLit(i: Int) extends Expr {
   var sSym, zSym: Symbol = Symbol.NoSymbol
@@ -124,26 +137,35 @@ final case class NatLit(i: Int) extends Expr {
     val z = Apply(Ident("Z").setPos(pos).setSym(zSym), None, Vector.empty).setPos(pos)
     (1 to i).foldLeft(z) { case (z, _) => Apply(Ident("S").setPos(pos).setSym(sSym), None, Vector(z)).setPos(pos) }
   }
+  def copy(i: Int = i): NatLit = NatLit(i).setPos(pos)
 }
 
 final case class Let(defs: Vector[Expr], embDefs: Vector[EmbeddedExpr], free: Vector[Ident]) extends Statement {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (defs, "defs") += (embDefs, "embDefs") += (free, "free")
+  def copy(defs: Vector[Expr] = defs, embDefs: Vector[EmbeddedExpr] = embDefs, free: Vector[Ident] = free): Let =
+    Let(defs, embDefs, free).setPos(pos)
 }
 
 final case class Def(name: Ident, args: Vector[IdentOrWildcard], operator: Boolean, payloadType: PayloadType, embeddedId: Option[Ident], ret: Vector[IdentOrWildcard], rules: Vector[DefRule]) extends Statement {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (name, "name") += (args, "args") += (embeddedId, "embeddedId") += (ret, "ret") += (rules, "rules")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"operator=$operator, payloadType=$payloadType")
+  def copy(name: Ident = name, args: Vector[IdentOrWildcard] = args, operator: Boolean = operator, payloadType: PayloadType = payloadType, embeddedId: Option[Ident] = embeddedId, ret: Vector[IdentOrWildcard] = ret, rules: Vector[DefRule] = rules): Def =
+    Def(name, args, operator, payloadType, embeddedId, ret, rules).setPos(pos)
 }
 final case class DefRule(on: Vector[Expr], reduced: Vector[Branch]) extends Node {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (on, "on") += (reduced, "reduced")
+  def copy(on: Vector[Expr] = on, reduced: Vector[Branch] = reduced): DefRule = DefRule(on, reduced).setPos(pos)
 }
 
 final case class Match(on: Vector[Expr], reduced: Vector[Branch]) extends Statement {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (on, "on") += (reduced, "reduced")
+  def copy(on: Vector[Expr] = on, reduced: Vector[Branch] = reduced): Match = Match(on, reduced).setPos(pos)
 }
 
 final case class Branch(cond: Option[EmbeddedExpr], embRed: Vector[EmbeddedExpr], reduced: Vector[Expr]) extends Node {
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += (cond, "cond") += (embRed, "embRed") += (reduced, "reduced")
+  def copy(cond: Option[EmbeddedExpr] = cond, embRed: Vector[EmbeddedExpr] = embRed, reduced: Vector[Expr] = reduced): Branch =
+    Branch(cond, embRed, reduced).setPos(pos)
 }
 
 sealed trait CheckedRule extends Statement {
@@ -152,7 +174,9 @@ sealed trait CheckedRule extends Statement {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"${sym1.uniqueStr} . ${sym2.uniqueStr}")
 }
 
-final case class DerivedRule(sym1: Symbol, sym2: Symbol) extends CheckedRule
+final case class DerivedRule(sym1: Symbol, sym2: Symbol) extends CheckedRule {
+  def copy(sym1: Symbol = sym1, sym2: Symbol = sym2): DerivedRule = DerivedRule(sym1, sym2).setPos(pos)
+}
 
 final case class MatchRule(id1: Ident, id2: Ident, args1: Vector[Expr], args2: Vector[Expr],
     emb1: Option[Ident], emb2: Option[Ident], branches: Vector[Branch]) extends CheckedRule {
@@ -160,6 +184,9 @@ final case class MatchRule(id1: Ident, id2: Ident, args1: Vector[Expr], args2: V
   def sym2 = id2.sym
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (args1, "args1") += (args2, "args2") += (emb1, "emb1") += (emb2, "emb2") += (branches, "red")
+  def copy(id1: Ident = id1, id2: Ident = id2, args1: Vector[Expr] = args1, args2: Vector[Expr] = args2,
+      emb1: Option[Ident] = emb1, emb2: Option[Ident] = emb2, branches: Vector[Branch] = branches): MatchRule =
+    MatchRule(id1, id2, args1, args2, emb1, emb2, branches).setPos(pos)
 }
 
 object IdentOrAp {

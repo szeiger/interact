@@ -43,12 +43,12 @@ class Curry(global: Global) extends Transform with Phase {
         val emb1 = if(ls.hasPayload) Some(mkLocalId("$l", true).setPos(lid.pos)) else None
         val emb2 = if(rs.hasPayload) Some(mkLocalId("$r", true).setPos(rid.pos)) else None
         curryId.sym = globalSymbols.define(curryId.s, isCons = true, arity = ls.arity + rs.arity - 1, payloadType = curriedPtp, matchContinuationPort = idx)
-        val largs = (0 until ls.callArity).map(i => mkLocalId(s"$$l$i")).toVector
-        val rargs = (0 until rs.callArity).map(i => mkLocalId(s"$$r$i")).toVector
+        val largs = (0 until ls.callArity).map(i => mkLocalId(s"$$l$i").setPos(lid.pos)).toVector
+        val rargs = (0 until rs.callArity).map(i => mkLocalId(s"$$r$i").setPos(rid.pos)).toVector
         val (keepArgs, splitArgs) = if(rhs) (rargs, largs) else (largs, rargs)
         val curryArgs = keepArgs ++ splitArgs.zipWithIndex.filter(_._2 != idx).map(_._1)
         val der = derivedRules(defaultDeriveSyms, curryId.sym, Position.unknown)
-        val fwd = Assignment(Apply(curryId, emb1.orElse(emb2), curryArgs), splitArgs(idx))
+        val fwd = Assignment(Apply(curryId, emb1.orElse(emb2), curryArgs).setPos(at), splitArgs(idx)).setPos(at)
         der :+ MatchRule(lid, rid, largs, rargs, emb1, emb2, Vector(Branch(None, Vector.empty, Vector(fwd)).setPos(at))).setPos(at)
     }
     (curryId, rules)
@@ -66,16 +66,16 @@ class Curry(global: Global) extends Transform with Phase {
           }
           Vector(mr)
         case idx =>
-          val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, false, mr.pos)
+          val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, false, mr.args2(idx).pos)
           val ApplyCons(cid, cemb, crargs) = mr.args2(idx)
           val clargs = mr.args1 ++ mr.args2.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-          curryRules ++ curry(MatchRule(curryId, cid, clargs, crargs, mr.emb1.orElse(mr.emb2), checkCEmb(cemb), mr.branches).setPos(mr.pos))
+          curryRules ++ curry(mr.copy(curryId, cid, clargs, crargs, mr.emb1.orElse(mr.emb2), checkCEmb(cemb), mr.branches))
       }
     case idx =>
-      val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, true, mr.pos)
+      val (curryId, curryRules) = createCurriedDef(mr.id1, mr.id2, idx, true, mr.args1(idx).pos)
       val ApplyCons(cid, cemb, clargs) = mr.args1(idx)
       val crargs = mr.args2 ++ mr.args1.zipWithIndex.filter(_._2 != idx).map(_._1.asInstanceOf[Ident])
-      curryRules ++ curry(new MatchRule(curryId, cid, crargs, clargs, mr.emb1.orElse(mr.emb2), checkCEmb(cemb), mr.branches).setPos(mr.pos))
+      curryRules ++ curry(mr.copy(curryId, cid, crargs, clargs, mr.emb1.orElse(mr.emb2), checkCEmb(cemb), mr.branches))
   }
 
   private[this] def checkCEmb(o: Option[EmbeddedExpr]): Option[Ident] = o.flatMap {

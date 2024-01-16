@@ -23,7 +23,7 @@ class ResolveEmbedded(global: Global) extends Transform with Phase {
     val args = n2.args.map(getReturnType)
     val (clsName, mName, qn) = resolveName(n2)
     val methTp = resolveMethod(n2, clsName, mName, args)
-    val n3 = n2.copy(methodQNIds = qn, embTp = methTp, op = false).setPos(n2.pos)
+    val n3 = n2.copy(methodQNIds = qn, embTp = methTp, op = false)
     //ShowableNode.print(n3, name = "Resolved")
     n3
   }

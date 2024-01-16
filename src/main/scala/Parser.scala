@@ -191,7 +191,7 @@ trait Syntax { this: Parser =>
     P(  positioned("=>" ~ anyExprBlock.map { case (es, ees) => Branch(None, ees, es) })  )
 
   def conditionalReductions[_: P]: P[Vector[Branch]] =
-    P(  ("if" ~ (bracketedEmbeddedExpr ~ simpleReduction).map { case (p, r) => r.copy(cond = Some(p)).setPos(r.pos)}).rep(1).map(_.toVector) ~
+    P(  ("if" ~ (bracketedEmbeddedExpr ~ simpleReduction).map { case (p, r) => r.copy(cond = Some(p))}).rep(1).map(_.toVector) ~
       "else" ~ simpleReduction
     ).map { case (rs, r) => rs :+ r }
 
