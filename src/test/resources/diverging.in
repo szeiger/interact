@@ -1,0 +1,10 @@
+cons A
+cons B
+cons C
+cons D
+
+def f(_) = r
+  | A => f(B)
+  | B => f(C)
+  | C => f(D)
+  | D => f(A)

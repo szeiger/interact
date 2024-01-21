@@ -255,6 +255,7 @@ final class Position(val offset: Int, val file: String, val input: ConvenientPar
 }
 object Position {
   val unknown = new Position(-1, null, null)
+  implicit val ordering: Ordering[Position] = Ordering.by(_.offset)
 }
 
 trait ShowableNode {

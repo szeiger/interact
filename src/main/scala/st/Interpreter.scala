@@ -235,9 +235,10 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
   def createInterpretedRuleImpl(sym1Id: Int, r: GenericRulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
+    val bp = new PackedBranchPlan(b, r)
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
-    new InterpretedRuleImpl(sym1Id, pcs, b.freeWiresPacked, b.connectionsPackedLong,
-      if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.condition.orNull, next.orNull, r.sym1, r.sym2)
+    new InterpretedRuleImpl(sym1Id, pcs, bp.freeWiresPacked, bp.connectionsPackedLong,
+      if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.cond.orNull, next.orNull, r.sym1, r.sym2)
   }
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {

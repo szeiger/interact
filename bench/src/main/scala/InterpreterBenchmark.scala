@@ -148,9 +148,14 @@ class InterpreterBenchmark {
     bh.consume(mult3Inter.setup().reduce())
 
   @Benchmark
-  @OperationsPerInvocation(478658)
+  @OperationsPerInvocation(450002)
   def fib22(bh: Blackhole): Unit =
     bh.consume(fib22Inter.setup().reduce())
+
+//  @Benchmark
+//  @OperationsPerInvocation(15670976)
+//  def fib29(bh: Blackhole): Unit =
+//    bh.consume(fib29Inter.setup().reduce())
 
   @Benchmark
   @OperationsPerInvocation(4182049)
@@ -161,9 +166,4 @@ class InterpreterBenchmark {
 //  @OperationsPerInvocation(8360028)
 //  def ack38b(bh: Blackhole): Unit =
 //    bh.consume(ack38bInter.setup().reduce())
-
-//  @Benchmark
-//  @OperationsPerInvocation(16503015)
-//  def fib29(bh: Blackhole): Unit =
-//    bh.consume(fib29Inter.setup().reduce())
 }

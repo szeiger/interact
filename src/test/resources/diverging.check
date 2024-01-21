@@ -1,0 +1,17 @@
+Error: src\test\resources\diverging.in:7:7: Diverging expansion (f <-> A) => (f <-> B) => (f <-> C) => (f <-> D)
+|   | A => f(B)
+|       ^
+
+Error: src\test\resources\diverging.in:8:7: Diverging expansion (f <-> B) => (f <-> C) => (f <-> D) => (f <-> A)
+|   | B => f(C)
+|       ^
+
+Error: src\test\resources\diverging.in:9:7: Diverging expansion (f <-> C) => (f <-> D) => (f <-> A) => (f <-> B)
+|   | C => f(D)
+|       ^
+
+Error: src\test\resources\diverging.in:10:7: Diverging expansion (f <-> D) => (f <-> A) => (f <-> B) => (f <-> C)
+|   | D => f(A)
+|       ^
+
+4 errors found.

@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialPlan, RulePlan}
+import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialPlan, PackedBranchPlan, RulePlan}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
@@ -271,7 +271,8 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
         else {
           maxW.max(g.maxWires)
           maxC.max(g.maxCells)
-          new InterpretedRuleImpl(getSymbolId(g.sym1), branch.cells.iterator.map(s => intOfShorts(getSymbolId(s), s.arity)).toArray, branch.freeWiresPacked1, branch.freWiresPacked2, branch.connectionsPacked)
+          val bp = new PackedBranchPlan(branch, g)
+          new InterpretedRuleImpl(getSymbolId(g.sym1), branch.cells.iterator.map(s => intOfShorts(getSymbolId(s), s.arity)).toArray, bp.freeWiresPacked1, bp.freWiresPacked2, bp.connectionsPacked)
         }
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri
     }

@@ -90,7 +90,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       }
     }
 
-    branch.condition.foreach { case pc: PayloadMethodApplication =>
+    branch.cond.foreach { case pc: PayloadMethodApplication =>
       def adaptPayloadFromCell(cell: VarIdx, cellTp: Owner, cls: Class[_]): Unit = {
         m.aload(cell)
         if(cls == classOf[Int]) m.invoke(intBox_getValue, cellTp)
@@ -110,7 +110,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
-    val conns = (branch.internalConnsDistinct ++ branch.wireConnsDistinct).filterNot(skipConns.contains)
+    val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
     def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
     //val (uniqueConts, uniqueContPoss) = uniqueContinuationsFor(rule, rules)
 
@@ -131,7 +131,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
-    for(idx <- optimizeCellCreationOrder(branch.cells.length, branch.internalConnsDistinct)) {
+    for(idx <- optimizeCellCreationOrder(branch.cells.length, branch.intConns)) {
       cells(idx) = branch.cells(idx) match {
         case _ if idx == reuse1 => cLeft
         case _ if idx == reuse2 => cRight
@@ -390,7 +390,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     if(methodEnd != null) m.goto(methodEnd)
-    if(branch.condition.isDefined) m.setLabel(branchEnd)
+    if(branch.cond.isDefined) m.setLabel(branchEnd)
   }
 
   private def findReuse(rule: GenericRulePlan, branch: BranchPlan): (Int, Int, Set[Connection]) = {
@@ -403,7 +403,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     def reuseSkip(cellIdx: Int, rhs: Boolean): IndexedSeq[Connection] =
       (0 until branch.cells(cellIdx).arity).flatMap { p =>
         val ci = new CellIdx(cellIdx, p)
-        branch.wireConnsDistinct.collect {
+        branch.extConns.collect {
           case c @ Connection(FreeIdx(rhs2, fi2), ci2) if ci2 == ci && rhs2 == rhs && fi2 == p => c
           case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
         }

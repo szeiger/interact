@@ -14,7 +14,8 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
     new Curry(global),
     new CleanEmbedded(global),
     new ResolveEmbedded(global),
-    new PlanRules(global)
+    new PlanRules(global),
+    new Inline(global),
   )
 
   private[this] val unit1 = if(fconfig.addEraseDup) {

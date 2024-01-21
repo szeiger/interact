@@ -31,3 +31,22 @@ object MaybeColors extends Colors {
 object NoColors extends Colors {
   val cNormal, cBlack, cRed, cGreen, cYellow, cBlue, cMagenta, cCyan, bRed, bGreen, bYellow, bBlue, bMagenta, bCyan = ""
 }
+
+object Colors {
+  def stripColors(s: String): String = {
+    val b = new StringBuilder(s.length)
+    var i = 0
+    while(i < s.length) {
+      s.charAt(i) match {
+        case '\u001B' =>
+          val end = s.indexOf('m', i+1)
+          if(end == -1) i += 1
+          else i = end+1
+        case c =>
+          b.append(c)
+          i += 1
+      }
+    }
+    b.result()
+  }
+}
