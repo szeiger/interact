@@ -78,6 +78,7 @@ object Connection {
 }
 
 sealed abstract class Idx {
+  def port: Int
   def show: String
 }
 object Idx {

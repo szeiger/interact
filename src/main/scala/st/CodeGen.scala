@@ -348,7 +348,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       if(p1 < 0 && p2 < 0)
         createCut(ct1, ct2)
     }
-    conns.foreach {
+    val sortedConns = optimizeConnectionOrder(conns)
+    sortedConns.foreach {
       case Connection(i1: FreeIdx, i2: FreeIdx) => connectFF(i1, i2)
       case Connection(i1: FreeIdx, i2: CellIdx) => connectCF(i2, i1)
       case Connection(i1: CellIdx, i2: FreeIdx) => connectCF(i1, i2)
@@ -505,6 +506,23 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       else take()
     }
     order
+  }
+
+  private def optimizeConnectionOrder(conns: Set[Connection]): Vector[Connection] = {
+    val swapped = conns.iterator.map {
+      case Connection(i1, i2) if i1.port == -1 && i2.port != -1 => Connection(i2, i1)
+      case Connection(i1: CellIdx, i2: FreeIdx) => Connection(i2, i1)
+      case Connection(i1: FreeIdx, i2: FreeIdx) if (i1.rhs && !i2.rhs) || (i1.rhs == i2.rhs && i2.port < i1.port)  => Connection(i2, i1)
+      case Connection(i1: CellIdx, i2: CellIdx) if i2.idx < i1.idx || (i2.idx == i1.idx && i2.port < i1.port) => Connection(i2, i1)
+      case c => c
+    }.toVector
+    swapped.sortBy { c =>
+      c.c1 match {
+        case CellIdx(idx, port) => (0, idx, port)
+        case FreeIdx(false, port) => (1, 0, port)
+        case FreeIdx(true, port) => (2, 0, port)
+      }
+    }
   }
 
   private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =

@@ -7,6 +7,7 @@ import org.objectweb.asm.util.{CheckClassAdapter, Textifier, TraceClassVisitor}
 import org.objectweb.asm.{ClassReader, ClassWriter}
 
 import java.io.{OutputStreamWriter, PrintWriter}
+import java.util.zip.CRC32
 
 abstract class AbstractCodeGen[RI](config: BackendConfig) {
 
@@ -34,12 +35,18 @@ abstract class AbstractCodeGen[RI](config: BackendConfig) {
     encodeName(s.id)
   }
 
+  private[this] def getCRC32(a: Array[Byte]): Long = {
+    val crc = new CRC32
+    crc.update(a)
+    crc.getValue
+  }
+
   protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Class[_] = {
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
     val ca = new CheckClassAdapter(cw)
     cls.accept(ca)
     val raw = cw.toByteArray
-    if(config.logCodeGenSummary) println(s"Generated class ${cls.name} (${raw.length} bytes)")
+    if(config.logCodeGenSummary) println(s"Generated class ${cls.name} (${raw.length} bytes, crc ${getCRC32(raw)})")
     if(config.logGeneratedClasses.exists(cls.name.contains)) {
       val cr = new ClassReader(raw)
       cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
