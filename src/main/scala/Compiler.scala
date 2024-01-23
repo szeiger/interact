@@ -20,7 +20,7 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
 
   private[this] val unit1 = if(fconfig.addEraseDup) {
     val erase = globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
-    val dup = globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2)
+    val dup = globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2, payloadType = PayloadType.LABEL)
     unit0.copy(statements = Vector(DerivedRule(erase, erase), DerivedRule(erase, dup), DerivedRule(dup, dup)) ++ unit0.statements).setPos(unit0.pos)
   } else unit0
 

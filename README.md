@@ -110,7 +110,7 @@ The standard `dup` and `erase` functions are pre-defined, and combinators with a
 
 ```
 def erase(_) = ()
-def dup(x) = (x1, x2)
+def dup[label l](x) = (x1, x2)
 ```
 
 When matching on another function instead of a constructor, a `_` wildcard must be used to mark the first argument (i.e. the principal port) as the designated return value of an assignment expression. The wildcard always expands to the return value of the nearest enclosing assignment. For example: 
@@ -241,6 +241,17 @@ object Runtime {
 
 It is up to the implementation of such a method to handle copying and deleting in an appropriate way. Since embedded `ref` values can also be copied and deleted by the `dup` and `erase` functions, the values may implement the `LifecycleManaged` interface to implement these methods. Otherwise, references will be shared or dropped from scope as usual on the JVM.
 
+Values of type `label` can be created implicitly by using the same variable in one or more cells without an expression to create it:
+
+```
+let (x1, x2) = dup[label1](x) # dup(x) and dup(y) get the same label
+    (y1, y2) = dup[label1](y)
+    (z1, z2) = dup[label2](z) # dup(z) gets a different label
+    (a1, a1) = dup(a)         # dup(a) gets the default label
+```
+
+All labels created in this way are unique per rule reduction or `let` statement.
+
 An implementation method may directly return a value instead of using an `IntOutput` / `RefOutput` output parameter. Such a method can be used directly as an embedded computation of a cell:
 
 ```
@@ -267,4 +278,3 @@ The `else` clause is required, all branches must be defined together, and the or
 
 Current implementation limitations:
 - Currying is not allowed when both sides of the match contain embedded values.
-- Only the `st3.i` interpreter back-end supports embedded values.

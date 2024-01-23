@@ -103,9 +103,10 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
       override def apply(n: Apply): Apply = tr(super.apply(n))
       override def apply(n: ApplyCons): ApplyCons = tr(super.apply(n))
     }
+    val exprs2 = exprs.map(proc(_))
     if(defaultCreate.nonEmpty)
       newEmbComps += CreateLabels(local(isEmbedded = true, payloadType = PayloadType.REF, prefix = "defCr"), defaultCreate.toVector)
-    (exprs.map(proc(_)), newEmbComps.result(), symbolMap, allEmbCompSyms.result())
+    (exprs2, newEmbComps.result(), symbolMap, allEmbCompSyms.result())
   }
 
   private[this] def checkCond(cond: EmbeddedExpr): EmbeddedExpr = {

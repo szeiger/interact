@@ -25,6 +25,7 @@ object Runtime {
   }
 
   def eq(a: AnyRef, b: AnyRef): Boolean = a == b
+  def eqLabel(a: AnyRef, b: AnyRef): Boolean = a eq b
   def eq(a: Int, b: Int): Boolean = a == b
   def intAdd(a: Int, b: Int): Int = a + b
   def intSub(a: Int, b: Int): Int = a - b

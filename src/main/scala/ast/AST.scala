@@ -233,6 +233,7 @@ object EmbeddedType {
   final case class Method(method: java.lang.reflect.Method, ret: EmbeddedType, args:Vector[(EmbeddedType, Boolean /* out */)]) extends EmbeddedType
   final case object Bool extends EmbeddedType
   final val PayloadInt = Payload(PayloadType.INT)
+  final val PayloadLabel = Payload(PayloadType.LABEL)
   final val PayloadRef = Payload(PayloadType.REF)
   final val PayloadVoid = Payload(PayloadType.VOID)
 }

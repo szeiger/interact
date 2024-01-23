@@ -40,8 +40,36 @@ class PlanRules(global: Global) extends Transform with Phase {
 
   private[this] def deriveDup(sym: Symbol, dupSym: Symbol): RulePlan = {
     if(sym == dupSym) {
-      val conns = Set(Connection(FreeIdx(false, 0), FreeIdx(true, 0)), Connection(FreeIdx(false, 1), FreeIdx(true, 1)))
-      RulePlan(dupSym, sym, Vector(new BranchPlan(Vector.empty, conns, Vector.empty, None)), true)
+      val eliminate = new BranchPlan(
+        Vector.empty,
+        Set(
+          Connection(FreeIdx(false, 0), FreeIdx(true, 0)),
+          Connection(FreeIdx(false, 1), FreeIdx(true, 1))
+        ),
+        Vector.empty,
+        Some(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eqLabel", Vector(EmbArg.Left, EmbArg.Right)))
+      )
+      val commute = new BranchPlan(
+        Vector.fill(4)(dupSym),
+        Set(
+          Connection(CellIdx(0, 0), CellIdx(2, 0)),
+          Connection(CellIdx(0, 1), CellIdx(3, 0)),
+          Connection(CellIdx(1, 0), CellIdx(2, 1)),
+          Connection(CellIdx(1, 1), CellIdx(3, 1)),
+          Connection(CellIdx(0, -1), FreeIdx(false, 0)),
+          Connection(CellIdx(1, -1), FreeIdx(false, 1)),
+          Connection(CellIdx(2, -1), FreeIdx(true, 0)),
+          Connection(CellIdx(3, -1), FreeIdx(true, 1)),
+        ),
+        Vector(
+          PayloadAssignment(EmbArg.Right, EmbArg.Cell(0), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Right, EmbArg.Cell(1), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Left, EmbArg.Cell(2), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Left, EmbArg.Cell(3), PayloadType.LABEL),
+        ),
+        None
+      )
+      RulePlan(dupSym, sym, Vector(eliminate, commute), true)
     } else {
       val cells = Vector.fill(sym.arity)(dupSym) ++ Array.fill(2)(sym)
       val conns = Set.newBuilder[Connection]
@@ -56,7 +84,8 @@ class PlanRules(global: Global) extends Transform with Phase {
         case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "dupRef", Vector(EmbArg.Right, EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1))))
         case _ => Vector.empty
       }
-      RulePlan(dupSym, sym, Vector(new BranchPlan(cells, conns.result(), embComp, None)), true)
+      val copyLabel = (for(i <- 0 until sym.arity) yield PayloadAssignment(EmbArg.Left, EmbArg.Cell(i), PayloadType.LABEL)).toVector
+      RulePlan(dupSym, sym, Vector(new BranchPlan(cells, conns.result(), copyLabel ++ embComp, None)), true)
     }
   }
 }

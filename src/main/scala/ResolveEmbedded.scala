@@ -21,15 +21,16 @@ class ResolveEmbedded(global: Global) extends Transform with Phase {
   override def apply(_n: EmbeddedApply): EmbeddedApply = {
     val n2 = super.apply(_n)
     val args = n2.args.map(getReturnType)
-    val (clsName, mName, qn) = resolveName(n2)
+    val (clsName, mName, qn) = {
+      if(n2.op && args.length == 2 && args(0)._1 == EmbeddedType.PayloadLabel && args(1)._1 == EmbeddedType.PayloadLabel) ResolveEmbedded.eqLabel
+      else if(n2.op) ResolveEmbedded.operators(n2.methodQN.head)
+      else (n2.className, n2.methodName, n2.methodQNIds)
+    }
     val methTp = resolveMethod(n2, clsName, mName, args)
     val n3 = n2.copy(methodQNIds = qn, embTp = methTp, op = false)
     //ShowableNode.print(n3, name = "Resolved")
     n3
   }
-
-  private[this] def resolveName(e: EmbeddedApply): (String, String, Vector[Ident]) =
-    if(e.op) ResolveEmbedded.operators(e.methodQN.head) else (e.className, e.methodName, e.methodQNIds)
 
   private[this] def getReturnType(ee: EmbeddedExpr): (EmbeddedType, Boolean /* out */) = ee match {
     case _: StringLit => (EmbeddedType.PayloadRef, false)
@@ -97,6 +98,7 @@ object ResolveEmbedded {
   private[this] val runtimeName = Runtime.getClass.getName
   private[this] val intrinsicsQN = runtimeName.split('.').toVector
   private[this] def mkOp(m: String) = (runtimeName, m, (intrinsicsQN :+ m).map(Ident(_)))
+  private val eqLabel = mkOp("eqLabel")
   private val operators = Map(
     "==" -> mkOp("eq"),
     "+" -> mkOp("intAdd"),
