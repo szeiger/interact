@@ -25,7 +25,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val cell_auxPort = cellT.method("auxPort", tp.m(tp.I).I)
   private val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
   private val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
-  private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I).V)
+  private val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I).V)
   private val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   private val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   private val intBox_getValue = intBoxT.method("getValue", tp.m().I)
@@ -127,7 +127,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
     // Create new cells
     val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
-    var statSingletonUse = 0
+    var statSingletonUse, statLabelCreate = 0
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
@@ -226,7 +226,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     // Compute payloads
-    branch.payloadComps.foreach { pc =>
+    {
       def adaptCachedPayload(cached: VarIdx, cls: Class[_]): Unit = {
         if(cls == classOf[Int]) m.iload(cached)
         else if(cls == classOf[AnyRef]) m.aload(cached)
@@ -246,16 +246,20 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       }
       def loadArgs(pc: PayloadMethodApplication): Unit =
         pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, cls) => loadArg(embArg, cls) }
-      pc match {
+      val (createLabels, others) = branch.payloadComps.partition(_.isInstanceOf[CreateLabelsComp])
+      findLabels(cells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], reuse1, reuse2).foreach { case (pc, idx) =>
+        if(idx == -1) m.newInitDup(tp.c[AnyRef].constr(tp.m().V))()
+        else m.aload(cells(idx))
+        pc.embArgs.indices.foreach { i =>
+          val EmbArg.Cell(idx) = pc.embArgs(i)
+          if(i != pc.embArgs.length-1) m.dup
+          m.aload(cells(idx)).swap.invoke(refBox_setValue.on(concreteCellTFor(branch.cells(idx))))
+        }
+      }
+      others.foreach {
         case pc: PayloadMethodApplication =>
           assert(pc.jMethod.getReturnType == Void.TYPE)
           callPayloadMethod(pc)(loadArgs(pc))
-        case pc: CreateLabelsComp =>
-          m.newInitDup(tp.c[AnyRef].constr(tp.m().V))() //TODO use cells as labels instead of creating unnecessary objects
-          pc.embArgs.foreach { case EmbArg.Cell(idx) =>
-            m.dup.aload(cells(idx)).swap.invoke(refBox_setValue.on(concreteCellTFor(branch.cells(idx))))
-          }
-          m.pop //TODO skip last dup so we don't need to pop it
         case pc: PayloadAssignment =>
           assert(pc.payloadType.isDefined)
           if(pc.payloadType == PayloadType.INT) {
@@ -379,7 +383,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       if(cont1 != VarIdx.none) {
         m.aload(cont1).ifNonNullThenElse(m.iconst(1))(m.iconst(0))
       } else m.iconst(0)
-      m.invoke(ptw_recordStats)
+      m.iconst(statLabelCreate).invoke(ptw_recordStats)
     }
 
     if(cont1 != VarIdx.none) {
@@ -440,6 +444,31 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
     val (r1, r2, skip) = bestReuse2
     (r1.map(_._1).getOrElse(-1), r2.map(_._1).getOrElse(-1), skip)
+  }
+
+  // Find suitable cell objects to reuse as labels. Returns cell index or -1 for new object per CreateLabelsComp
+  private def findLabels(cellCount: Int, creators: Vector[CreateLabelsComp], reuse1: Int, reuse2: Int): Vector[(CreateLabelsComp, Int)] = {
+    var used = new Array[Boolean](cellCount)
+    if(reuse1 != -1) used(reuse1) = true
+    if(reuse2 != -1) used(reuse2) = true
+    val assignments = Array.fill[Int](creators.length)(-1)
+    // prefer cells the label gets assigned to
+    for(i <- creators.indices) {
+      val indices = creators(i).embArgs.collect { case EmbArg.Cell(idx) => idx }
+      indices.find(!used(_)).foreach { idx =>
+        used(idx) = true
+        assignments(i) = idx
+      }
+    }
+    // try to pick arbitrary free cells as a fallback
+    for(i <- creators.indices if assignments(i) == -1) {
+      val free = used.iterator.zipWithIndex.find(!_._1).map(_._2).headOption
+      free.foreach { idx =>
+        used(idx) = true
+        assignments(i) = idx
+      }
+    }
+    creators.zip(assignments)
   }
 
   // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
