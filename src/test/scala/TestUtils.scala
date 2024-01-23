@@ -22,7 +22,7 @@ object TestUtils {
       inter.getAnalyzer.log(new PrintStream(out, true, StandardCharsets.UTF_8), color = false)
       (out.toString(StandardCharsets.UTF_8), true, inter.getMetrics.getSteps)
     } catch {
-      case ex: CompilerResult => (Colors.stripColors(ex.getMessage), false, -1)
+      case ex: CompilerResult => (Colors.stripColors(ex.getMessage).replace("src\\test\\resources\\", "src/test/resources/"), false, -1)
     }
     val checkFile = Path.of(basePath+".check")
     if(Files.exists(checkFile)) {
