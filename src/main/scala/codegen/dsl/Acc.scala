@@ -2,36 +2,41 @@ package de.szeiger.interact.codegen.dsl
 
 import org.objectweb.asm.Opcodes._
 
-final class Acc(val acc: Int) extends AnyVal {
+trait AccessFlags extends Any {
+  protected[this] def acc: Int
+  def PUBLIC       = new Acc(acc | ACC_PUBLIC)
+  def PRIVATE      = new Acc(acc | ACC_PRIVATE)
+  def PROTECTED    = new Acc(acc | ACC_PROTECTED)
+  def STATIC       = new Acc(acc | ACC_STATIC)
+  def FINAL        = new Acc(acc | ACC_FINAL)
+  def SUPER        = new Acc(acc | ACC_SUPER)
+  def SYNCHRONIZED = new Acc(acc | ACC_SYNCHRONIZED)
+  def OPEN         = new Acc(acc | ACC_OPEN)
+  def TRANSITIVE   = new Acc(acc | ACC_TRANSITIVE)
+  def VOLATILE     = new Acc(acc | ACC_VOLATILE)
+  def BRIDGE       = new Acc(acc | ACC_BRIDGE)
+  def STATIC_PHASE = new Acc(acc | ACC_STATIC_PHASE)
+  def VARARGS      = new Acc(acc | ACC_VARARGS)
+  def TRANSIENT    = new Acc(acc | ACC_TRANSIENT)
+  def NATIVE       = new Acc(acc | ACC_NATIVE)
+  def INTERFACE    = new Acc(acc | ACC_INTERFACE)
+  def ABSTRACT     = new Acc(acc | ACC_ABSTRACT)
+  def STRICT       = new Acc(acc | ACC_STRICT)
+  def SYNTHETIC    = new Acc(acc | ACC_SYNTHETIC)
+  def ANNOTATION   = new Acc(acc | ACC_ANNOTATION)
+  def ENUM         = new Acc(acc | ACC_ENUM)
+  def MANDATED     = new Acc(acc | ACC_MANDATED)
+  def MODULE       = new Acc(acc | ACC_MODULE)
+  def RECORD       = new Acc(acc | ACC_RECORD)
+  def DEPRECATED   = new Acc(acc | ACC_DEPRECATED)
+}
+
+final class Acc(val acc: Int) extends AnyVal with AccessFlags {
   def | (other: Acc): Acc = new Acc(acc | other.acc)
   def has (other: Acc): Boolean = (acc & other.acc) == other.acc
 }
 
-object Acc {
-  val none         = new Acc(0)
-  val PUBLIC       = new Acc(ACC_PUBLIC)
-  val PRIVATE      = new Acc(ACC_PRIVATE)
-  val PROTECTED    = new Acc(ACC_PROTECTED)
-  val STATIC       = new Acc(ACC_STATIC)
-  val FINAL        = new Acc(ACC_FINAL)
-  val SUPER        = new Acc(ACC_SUPER)
-  val SYNCHRONIZED = new Acc(ACC_SYNCHRONIZED)
-  val OPEN         = new Acc(ACC_OPEN)
-  val TRANSITIVE   = new Acc(ACC_TRANSITIVE)
-  val VOLATILE     = new Acc(ACC_VOLATILE)
-  val BRIDGE       = new Acc(ACC_BRIDGE)
-  val STATIC_PHASE = new Acc(ACC_STATIC_PHASE)
-  val VARARGS      = new Acc(ACC_VARARGS)
-  val TRANSIENT    = new Acc(ACC_TRANSIENT)
-  val NATIVE       = new Acc(ACC_NATIVE)
-  val INTERFACE    = new Acc(ACC_INTERFACE)
-  val ABSTRACT     = new Acc(ACC_ABSTRACT)
-  val STRICT       = new Acc(ACC_STRICT)
-  val SYNTHETIC    = new Acc(ACC_SYNTHETIC)
-  val ANNOTATION   = new Acc(ACC_ANNOTATION)
-  val ENUM         = new Acc(ACC_ENUM)
-  val MANDATED     = new Acc(ACC_MANDATED)
-  val MODULE       = new Acc(ACC_MODULE)
-  val RECORD       = new Acc(ACC_RECORD)
-  val DEPRECATED   = new Acc(ACC_DEPRECATED)
+object Acc extends AccessFlags {
+  protected[this] def acc = 0
+  def none: Acc = new Acc(0)
 }

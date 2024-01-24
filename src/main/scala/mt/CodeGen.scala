@@ -61,10 +61,10 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
     val sidLookupT = tp.i[SymbolIdLookup]
     val new_implClass = ConstructorRef(implClassT, tp.m(Seq.fill(names.length)(tp.I): _*).V)
     val sidLookup_getSymbolId = MethodRef(sidLookupT, "getSymbolId", tp.m(tp.c[String]).I)
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, factClassName, riFactoryT)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, factClassName, riFactoryT)
     c.emptyNoArgsConstructor(Acc.PUBLIC)
     val m = c.method(Acc.PUBLIC, "apply", tp.m(sidLookupT)(tp.c[Object]))
-    val lookup = m.param("lookup", sidLookupT, Acc.FINAL)
+    val lookup = m.param("lookup", sidLookupT)
     m.newInitDup(new_implClass) {
       names.foreach { n => m.aload(lookup).ldc(n).invokeinterface(sidLookup_getSymbolId) }
     }
@@ -74,15 +74,14 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
 
   private def createRuleClassBase(implClassName: String, sids: Map[Symbol, Int]): (ClassDSL, IndexedSeq[FieldRef]) = {
     val sidCount = sids.size
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, implClassName, riT)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, implClassName, riT)
     val sidFields = for(i <- 0 until sidCount) yield c.field(Acc.PRIVATE | Acc.FINAL, s"sid$i", tp.I)
-    val constrDesc = tp.m(Seq.fill(sidCount)(tp.I): _*).V
 
     // init
     {
-      val m = c.method(Acc.PUBLIC, "<init>", constrDesc)
+      val m = c.constructor(Acc.PUBLIC, tp.m(Seq.fill(sidCount)(tp.I): _*))
       for(i <- 0 until sidCount) {
-        val sid = m.param(s"sid$i", tp.I, Acc.FINAL)
+        val sid = m.param(s"sid$i", tp.I)
         m.aload(m.receiver).iload(sid).putfield(sidFields(i))
       }
       m.aload(m.receiver).invokespecial(c.superTp, "<init>", tp.m().V)
@@ -140,8 +139,8 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
     val needs2 = g.arity2 > 0 || reuse2 >= 0
 
     val m = c.method(Acc.PUBLIC, "reduce", tp.m(wrT, ptwT).V)
-    val wr   = m.param("wr", wrT, Acc.FINAL)
-    val ptw  = m.param("ptw", ptwT, Acc.FINAL)
+    val wr   = m.param("wr", wrT)
+    val ptw  = m.param("ptw", ptwT)
 
     def getAuxRef(a: Int, p: Int): m.type = {
       if(a < cell_aref.length)
@@ -156,19 +155,19 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
     }
     def storeCastCell(name: String, arity: Int, start: Label = null): VarIdx = {
       if(arity < cellSpecTs.length) m.checkcast(cellSpecTs(arity))
-      val v = m.storeLocal(name, cellT, Acc.FINAL, start = start)
+      val v = m.storeLocal(cellT, name, start = start)
       v
     }
 
     val deferred = ArrayBuffer.empty[VarIdx]
 
     m.aload(wr).invokevirtual(wr_cell)
-    val cut1 = m.storeLocal("cut1", cellT, Acc.FINAL)
+    val cut1 = m.storeLocal(cellT, "cut1")
     m.aload(wr).invokevirtual(wr_oppo).invokevirtual(wr_cell)
-    val cut2 = m.storeLocal("cut2", cellT, Acc.FINAL)
+    val cut2 = m.storeLocal(cellT, "cut2")
     m.aload(cut1).invokevirtual(cell_symId)
     m.aload(m.receiver).getfield(sidFields(0))
-    m.ifThenElseI_== {
+    m.ifI_==.thnElse {
       if(needs1) m.aload(cut1)
       if(needs2) m.aload(cut2)
     } {
@@ -182,14 +181,14 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
     val lhs = (0 until g.arity1).map { idx =>
       m.aload(cLeft)
       getAuxRef(g.arity1, idx)
-      m.storeLocal(s"lhs$idx", wrT, Acc.FINAL)
+      m.storeLocal(wrT, s"lhs$idx")
     }
     val rhs = (0 until g.arity2).map { idx =>
       m.aload(cRight)
       getAuxRef(g.arity2, idx)
-      m.storeLocal(s"rhs$idx", wrT, Acc.FINAL)
+      m.storeLocal(wrT, s"rhs$idx")
     }
-    var reuseWire = if(fullReuseConn != null) VarIdx.none else m.aload(cLeft).invokevirtual(cell_pref).storeAnonLocal(wrT)
+    var reuseWire = if(fullReuseConn != null) VarIdx.none else m.aload(cLeft).invokevirtual(cell_pref).storeLocal(wrT)
     var reuseWireDeferred: (VarIdx, Int) = null
 
     def updateSym(cell: VarIdx, sym: Symbol): Unit = {
@@ -216,7 +215,7 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
             m.iconst(sym.arity)
           }
         }
-        m.storeLocal(s"c$idx", cellT, Acc.FINAL)
+        m.storeLocal(cellT, s"c$idx")
     }
     allConns.foreach { case conn @ Connection(idx1, idx2) =>
       def connectWW(i1: FreeIdx, i2: FreeIdx): Unit = {
@@ -263,7 +262,7 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
         if(i1.port < 0) m.invokevirtual(cell_pref)
         else getAuxRef(branch.cells(i1.idx).arity, i1.port)
         m.invokevirtual(wr_oppo)
-        val o = m.dup.storeAnonLocal(wrT)
+        val o = m.dup.storeLocal(wrT)
         m.aload(cells(i2.idx))
         ptwConnectLL(branch.cells(i2.idx).arity, i2.port)
         reuseWireDeferred = (o, (if(i1.port < 0) 1 else 0) + (if(i2.port < 0) 1 else 0))

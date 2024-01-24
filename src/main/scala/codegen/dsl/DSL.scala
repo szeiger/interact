@@ -15,8 +15,15 @@ object VarIdx {
   def none: VarIdx = new VarIdx(-1)
 }
 
+object DSL {
+  def newClass(access: Acc, name: String, superTp: ClassOwner = ClassOwner[Object], interfaces: Array[String] = null, sourceFile: String = null): ClassDSL =
+    new ClassDSL(access.SUPER, name, superTp, interfaces, sourceFile)
+  def newInterface(access: Acc, name: String, interfaces: Array[String] = null, sourceFile: String = null): ClassDSL =
+    new ClassDSL(access.INTERFACE.ABSTRACT, name, ClassOwner[Object], interfaces, sourceFile)
+}
+
 final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = ClassOwner[Object],
-  interfaces: Array[String] = null, sourceFile: String = null, version: Int = V1_8) {
+  interfaces: Array[String] = null, sourceFile: String = null) {
   private[this] val fields = ArrayBuffer.empty[Field]
   private[this] val methods = ArrayBuffer.empty[MethodDSL]
 
@@ -28,9 +35,8 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
 
   private[this] class Field(val access: Acc, val name: String, val desc: ValDesc, val value: Any)
 
-  def accept(v: ClassVisitor): Unit = {
-    val effectiveAcc = if(access.has(Acc.INTERFACE)) access | Acc.ABSTRACT else access | Acc.SUPER
-    v.visit(version, effectiveAcc.acc, name, null, superTp.className, interfaces)
+  def accept(v: ClassVisitor, version: Int = V1_8): Unit = {
+    v.visit(version, access.acc, name, null, superTp.className, interfaces)
     if(sourceFile != null) v.visitSource(sourceFile, null)
     fields.foreach(f => v.visitField(f.access.acc, f.name, f.desc.desc, null, f.value))
     methods.foreach(_.accept(v, this))
@@ -64,13 +70,13 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
     m.return_
   }
 
-  def getter(field: FieldRef, access: Acc = Acc.PUBLIC | Acc.FINAL, _name: String = null): MethodDSL = {
+  def getter(field: FieldRef, access: Acc = Acc.PUBLIC.FINAL, _name: String = null): MethodDSL = {
     val name = if(_name == null) s"get${field.name.charAt(0).toUpper}${field.name.substring(1)}" else _name
     val m = method(access, name, Desc.m()(field.desc))
     m.aload(m.receiver).getfield(field).genReturn(field.desc)
   }
 
-  def setter(field: FieldRef, access: Acc = Acc.PUBLIC | Acc.FINAL, _name: String = null): MethodDSL = {
+  def setter(field: FieldRef, access: Acc = Acc.PUBLIC.FINAL, _name: String = null): MethodDSL = {
     val name = if(_name == null) s"set${field.name.charAt(0).toUpper}${field.name.substring(1)}" else _name
     val m = method(access, name, Desc.m(field.desc).V)
     val p = m.param("value", field.desc, Acc.FINAL)
@@ -78,7 +84,7 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   }
 }
 
-final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
+final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   private[this] val params = ArrayBuffer.empty[Local]
   private[this] val locals = ArrayBuffer.empty[Local]
   private[this] val code = ArrayBuffer.empty[AbstractInsnNode]
@@ -103,24 +109,17 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
   def newLabel: Label = new Label
   def setLabel(l: Label = new Label): Label = { insn(new LabelNode(l)); l }
 
-  private[this] def store(v: VarIdx, desc: ValDesc): VarIdx = {
-    desc.desc.charAt(0) match {
-      case 'L' | '[' => astore(v)
-      case 'I' => istore(v)
-      case _ => ???
-    }
-    v
-  }
-  def local(name: String, desc: ValDesc, access: Acc = Acc.none, start: Label = null, end: Label = this.end): VarIdx = {
+  def local(desc: ValDesc, name: String = null, start: Label = null, end: Label = this.end): VarIdx = {
     val idx = locals.length + argsCount - (if(isStatic) 1 else 0)
-    val l = new Local(name, desc, access, idx, start, end)
+    val l = new Local(name, desc, Acc.none, idx, start, end)
     locals.addOne(l)
     new VarIdx(idx)
   }
-  def storeLocal(name: String, desc: ValDesc, access: Acc = Acc.none, start: Label = null, end: Label = this.end): VarIdx =
-    store(local(name, desc, access, start, end), desc)
-  def anonLocal: VarIdx = local(null, null)
-  def storeAnonLocal(desc: ValDesc): VarIdx = storeLocal(null, desc)
+  def storeLocal(desc: ValDesc, name: String = null, start: Label = null, end: Label = this.end): VarIdx = {
+    val v = local(desc, name, start, end)
+    genStore(v, desc)
+    v
+  }
 
   def accept(v: ClassVisitor, cls: ClassDSL): Unit = {
     val mv = v.visitMethod(access.acc, name, desc.desc, null, null)
@@ -253,6 +252,14 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
     case _ => aload(varIdx)
   }
 
+  def genStore(varIdx: VarIdx, tp: ValDesc): this.type = tp.desc match {
+    case "B" | "C" | "I" | "S" | "Z" => istore(varIdx)
+    case "D" => dstore(varIdx)
+    case "F" => fstore(varIdx)
+    case "J" => lstore(varIdx)
+    case _ => astore(varIdx)
+  }
+
   def goto(l: Label): this.type = jumpInsn(GOTO, l)
   def if_icmpeq(l: Label): this.type = jumpInsn(IF_ICMPEQ, l)
   def if_icmpne(l: Label): this.type = jumpInsn(IF_ICMPNE, l)
@@ -270,63 +277,55 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) {
   def ifnull(l: Label): this.type = jumpInsn(IFNULL, l)
   def ifnonnull(l: Label): this.type = jumpInsn(IFNONNULL, l)
 
-  private[this] def ifThenElse(opcode: Int, cont: => Unit, skip: => Unit): this.type = {
-    val lElse, lEndif = new Label
-    jumpInsn(opcode, lElse); cont; goto(lEndif)
-    setLabel(lElse); skip
-    setLabel(lEndif)
-    this
+  final class IfDSL(posOpcode: Int, negOpcode: Int) {
+    def thnElse(cont: => Unit)(skip: => Unit): self.type = {
+      val lElse, lEndif = new Label
+      jumpInsn(negOpcode, lElse); cont; goto(lEndif)
+      setLabel(lElse); skip
+      setLabel(lEndif)
+      self
+    }
+    def thn(cont: => Unit): self.type = {
+      val lEndif = new Label
+      jumpInsn(negOpcode, lEndif)
+      cont
+      setLabel(lEndif)
+      self
+    }
+    def jump(l: Label): self.type = jumpInsn(posOpcode, l)
   }
-  private[this] def ifThen(opcode: Int, cont: => Unit): this.type = {
-    val lEndif = new Label
-    jumpInsn(opcode, lEndif)
-    cont
-    setLabel(lEndif)
-    this
-  }
-  def ifThenI_== (cont: => Unit): this.type = ifThen(IF_ICMPNE, cont)
-  def ifThenI_!= (cont: => Unit): this.type = ifThen(IF_ICMPEQ, cont)
-  def ifThenI_< (cont: => Unit): this.type = ifThen(IF_ICMPGE, cont)
-  def ifThenI_> (cont: => Unit): this.type = ifThen(IF_ICMPLE, cont)
-  def ifThenI_<= (cont: => Unit): this.type = ifThen(IF_ICMPGT, cont)
-  def ifThenI_>= (cont: => Unit): this.type = ifThen(IF_ICMPLT, cont)
-  def if0Then_== (cont: => Unit): this.type = ifThen(IFNE, cont)
-  def if0Then_!= (cont: => Unit): this.type = ifThen(IFEQ, cont)
-  def if0Then_< (cont: => Unit): this.type = ifThen(IFGE, cont)
-  def if0Then_> (cont: => Unit): this.type = ifThen(IFLE, cont)
-  def if0Then_<= (cont: => Unit): this.type = ifThen(IFGT, cont)
-  def if0Then_>= (cont: => Unit): this.type = ifThen(IFLT, cont)
 
-  def ifThenElseI_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPNE, cont, skip)
-  def ifThenElseI_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPEQ, cont, skip)
-  def ifThenElseI_< (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPGE, cont, skip)
-  def ifThenElseI_> (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPLE, cont, skip)
-  def ifThenElseI_<= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPGT, cont, skip)
-  def ifThenElseI_>= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ICMPLT, cont, skip)
-  def if0ThenElse_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFNE, cont, skip)
-  def if0ThenElse_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFEQ, cont, skip)
-  def if0ThenElse_< (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFGE, cont, skip)
-  def if0ThenElse_> (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFLE, cont, skip)
-  def if0ThenElse_<= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFGT, cont, skip)
-  def if0ThenElse_>= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFLT, cont, skip)
+  def if_==     : IfDSL = new IfDSL(IFEQ, IFNE)
+  def if_!=     : IfDSL = new IfDSL(IFNE, IFEQ)
+  def if_<      : IfDSL = new IfDSL(IFLT, IFGE)
+  def if_>      : IfDSL = new IfDSL(IFGT, IFLE)
+  def if_<=     : IfDSL = new IfDSL(IFLE, IFGT)
+  def if_>=     : IfDSL = new IfDSL(IFGE, IFLT)
 
-  def ifThenA_== (cont: => Unit): this.type = ifThen(IF_ACMPNE, cont)
-  def ifThenA_!= (cont: => Unit): this.type = ifThen(IF_ACMPEQ, cont)
-  def ifNullThen (cont: => Unit): this.type = ifThen(IFNONNULL, cont)
-  def ifNonNullThen (cont: => Unit): this.type = ifThen(IFNULL, cont)
+  def ifI_==    : IfDSL = new IfDSL(IF_ICMPEQ, IF_ICMPNE)
+  def ifI_!=    : IfDSL = new IfDSL(IF_ICMPNE, IF_ICMPEQ)
+  def ifI_<     : IfDSL = new IfDSL(IF_ICMPLT, IF_ICMPGE)
+  def ifI_>     : IfDSL = new IfDSL(IF_ICMPGT, IF_ICMPLE)
+  def ifI_<=    : IfDSL = new IfDSL(IF_ICMPLE, IF_ICMPGT)
+  def ifI_>=    : IfDSL = new IfDSL(IF_ICMPGE, IF_ICMPLT)
 
-  def ifThenElseA_== (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPNE, cont, skip)
-  def ifThenElseA_!= (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IF_ACMPEQ, cont, skip)
-  def ifNullThenElse (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFNONNULL, cont, skip)
-  def ifNonNullThenElse (cont: => Unit)(skip: => Unit): this.type = ifThenElse(IFNULL, cont, skip)
+  def ifA_==    : IfDSL = new IfDSL(IF_ACMPEQ, IF_ACMPNE)
+  def ifA_!=    : IfDSL = new IfDSL(IF_ACMPNE, IF_ACMPEQ)
+  def ifNull    : IfDSL = new IfDSL(IFNULL, IFNONNULL)
+  def ifNonNull : IfDSL = new IfDSL(IFNONNULL, IFNULL)
 
-  def forRange(from: Int, until: Int, incr: Int = 1)(f: VarIdx => Unit): this.type = {
+  def forRange(range: Range)(f: VarIdx => Unit): this.type = {
     val start, end = newLabel
-    val i = iconst(from).storeAnonLocal(Desc.I)
+    val i = iconst(range.start).storeLocal(Desc.I)
     setLabel(start)
-    iload(i).iconst(until).if_icmpge(end)
+    iload(i).iconst(range.end)
+    if(range.step > 0) {
+      if(range.isInclusive) if_icmpgt(end) else if_icmpge(end)
+    } else {
+      if(range.isInclusive) if_icmplt(end) else if_icmple(end)
+    }
     f(i)
-    iinc(i, incr)
+    iinc(i, range.step)
     goto(start)
     setLabel(end)
     this

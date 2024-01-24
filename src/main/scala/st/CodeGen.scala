@@ -57,12 +57,12 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
   private def implementStaticReduce(c: ClassDSL, rule: GenericRulePlan, mref: MethodRef, common: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan]): Unit = {
     //assert(rule.branches.length == 1)
-    val m = c.method(Acc.PUBLIC | Acc.STATIC, mref.name, mref.desc)
+    val m = c.method(Acc.PUBLIC.STATIC, mref.name, mref.desc)
     val cLeftTp = concreteCellTFor(rule.sym1)
     val cRightTp = concreteCellTFor(rule.sym2)
     val cLeft = m.param("cLeft", cLeftTp)
     val cRight = m.param("cRight", cRightTp)
-    val ptw = m.param("ptw", ptwT, Acc.FINAL)
+    val ptw = m.param("ptw", ptwT)
     incMetric(s"${c.name}.${m.name}", m, ptw)
     val methodEnd = if(rule.branches.length > 1) m.newLabel else null
     rule.branches.foreach { branch =>
@@ -119,14 +119,14 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch) && rule.branches.length == 1
     val (cont1, cont2, loopStart) = {
       if(loopOn1 || loopOn2) {
-        val cont1 = m.aconst_null.storeAnonLocal(concreteCellTFor(rule.sym1))
-        val cont2 = m.aconst_null.storeAnonLocal(concreteCellTFor(rule.sym2))
+        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(rule.sym1))
+        val cont2 = m.aconst_null.storeLocal(concreteCellTFor(rule.sym2))
         (cont1, cont2, m.setLabel())
       } else (VarIdx.none, VarIdx.none, null)
     }
 
     // Create new cells
-    val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeAnonLocal(tp.I) else VarIdx.none
+    val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeLocal(tp.I) else VarIdx.none
     var statSingletonUse, statLabelCreate = 0
     val cells = mutable.ArraySeq.fill[VarIdx](branch.cells.length)(VarIdx.none)
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
@@ -154,7 +154,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
               m.newInitDup(constr)(loadParams())
               if(config.collectStats) m.iinc(statCellAllocations)
             } else {
-              m.invokestatic(cellCache_get(sym)).dup.ifNullThenElse {
+              m.invokestatic(cellCache_get(sym)).dup.ifNull.thnElse {
                 m.pop
                 m.newInitDup(constr)(loadParams())
                 if(config.collectStats) m.iinc(statCellAllocations)
@@ -166,7 +166,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
               }
             }
           }
-          m.storeLocal(s"c$idx", constr.tpe)
+          m.storeLocal(constr.tpe, s"c$idx")
       }
     }
     //println(s"Connected ${cellPortsConnected.size} of ${cellPortsConnected.size+cellPortsNotConnected} ports")
@@ -194,17 +194,17 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       val sym = branch.cells(idx.idx)
       if(idx.idx == reuse1) {
         ldCell(ct2)
-        reuse1Buffer(idx.port*2) = m.storeAnonLocal(cellT)
+        reuse1Buffer(idx.port*2) = m.storeLocal(cellT)
         if(setPort) {
           ldPort(ct2)
-          reuse1Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
+          reuse1Buffer(idx.port*2+1) = m.storeLocal(tp.I)
         }
       } else if(idx.idx == reuse2) {
         ldCell(ct2)
-        reuse2Buffer(idx.port*2) = m.storeAnonLocal(cellT)
+        reuse2Buffer(idx.port*2) = m.storeLocal(cellT)
         if(setPort) {
           ldPort(ct2)
-          reuse2Buffer(idx.port*2+1) = m.storeAnonLocal(tp.I)
+          reuse2Buffer(idx.port*2+1) = m.storeLocal(tp.I)
         }
       } else {
         m.aload(cells(idx.idx))
@@ -219,8 +219,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     val (cachedPayload1, cachedPayload2) = {
       def cache(cell: VarIdx, pt: PayloadType, boxTp: Owner): VarIdx = pt match {
         case PayloadType.VOID => VarIdx.none
-        case PayloadType.INT => m.aload(cell).invoke(intBox_getValue.on(boxTp)).storeAnonLocal(tp.I)
-        case _ => m.aload(cell).invoke(refBox_getValue.on(boxTp)).storeAnonLocal(tp.c[AnyRef])
+        case PayloadType.INT => m.aload(cell).invoke(intBox_getValue.on(boxTp)).storeLocal(tp.I)
+        case _ => m.aload(cell).invoke(refBox_getValue.on(boxTp)).storeLocal(tp.c[AnyRef])
       }
       (cache(cLeft, rule.sym1.payloadType, cLeftTp), cache(cRight, rule.sym2.payloadType, cRightTp))
     }
@@ -293,7 +293,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       if(isReuse(ct1) && p1 >= 0)
         setAux(ct1, ct2)
       if(p1 < 0) {
-        ldPort(ct2).if0ThenElse_>= {
+        ldPort(ct2).if_>=.thnElse {
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
           if(ct1.idx == reuse1 && loopOn1) {
@@ -323,19 +323,19 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
           } else createCut(ct1, ct2)
         }
       } else {
-        ldPort(ct2).if0Then_>= {
+        ldPort(ct2).if_>=.thn {
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         }
       }
     }
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = {
-      ldPort(ct1).if0ThenElse_>= {
+      ldPort(ct1).if_>=.thnElse {
         ldBoth(ct1); ldBoth(ct2).invoke(cell_setAux)
-        ldPort(ct2).if0Then_>= {
+        ldPort(ct2).if_>=.thn {
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         }
       } {
-        ldPort(ct2).if0ThenElse_>= {
+        ldPort(ct2).if_>=.thnElse {
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
           createCut(ct1, ct2)
@@ -381,13 +381,13 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     if(config.collectStats) {
       m.aload(ptw).iload(statCellAllocations).iload(statCachedCellReuse).iconst(statSingletonUse)
       if(cont1 != VarIdx.none) {
-        m.aload(cont1).ifNonNullThenElse(m.iconst(1))(m.iconst(0))
+        m.aload(cont1).ifNonNull.thnElse(m.iconst(1))(m.iconst(0))
       } else m.iconst(0)
       m.iconst(statLabelCreate).invoke(ptw_recordStats)
     }
 
     if(cont1 != VarIdx.none) {
-      m.aload(cont1).ifNonNullThen {
+      m.aload(cont1).ifNonNull.thn {
         m.aload(cont1).astore(cLeft).aload(cont2).astore(cRight)
         m.aconst_null.dup.astore(cont1).astore(cont2)
         m.goto(loopStart)
@@ -559,8 +559,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
   private def compileInterface(sym: Symbol): Unit = {
     val ifm = interfaceMethod(sym)
-    val c = new ClassDSL(Acc.PUBLIC | Acc.INTERFACE, ifm.owner.className)
-    c.method(Acc.PUBLIC | Acc.ABSTRACT, ifm.name, ifm.desc)
+    val c = DSL.newInterface(Acc.PUBLIC, ifm.owner.className)
+    c.method(Acc.PUBLIC.ABSTRACT, ifm.name, ifm.desc)
     addClass(classLoader, c)
   }
 
@@ -575,16 +575,16 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       case PayloadType.REF | PayloadType.LABEL => Vector(refBoxT.className)
       case _ => Vector.empty
     }
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces ++ payloadInterfaces)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces ++ payloadInterfaces)
 
     val (cfields, pfields) = (0 until sym.arity).map(i => (c.field(Acc.PUBLIC, s"acell$i", cellT), c.field(Acc.PUBLIC, s"aport$i", tp.I))).unzip
 
     // accessors
-    c.method(Acc.PUBLIC | Acc.FINAL, cell_arity).iconst(sym.arity).ireturn
+    c.method(Acc.PUBLIC.FINAL, cell_arity).iconst(sym.arity).ireturn
 
     {
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_auxCell)
-      val p1 = m.param("p1", tp.I, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, cell_auxCell)
+      val p1 = m.param("p1", tp.I)
       sym.arity match {
         case 0 => m.aconst_null.areturn
         case 1 => m.aload(m.receiver).getfield(cfields(0)).areturn
@@ -593,8 +593,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     {
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_auxPort)
-      val p1 = m.param("p1", tp.I, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, cell_auxPort)
+      val p1 = m.param("p1", tp.I)
       sym.arity match {
         case 0 => m.iconst(0).ireturn
         case 1 => m.aload(m.receiver).getfield(pfields(0)).ireturn
@@ -603,10 +603,10 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     {
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_setAux)
-      val p1 = m.param("p1", tp.I, Acc.FINAL)
-      val c2 = m.param("c2", cellT, Acc.FINAL)
-      val p2 = m.param("p2", tp.I, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, cell_setAux)
+      val p1 = m.param("p1", tp.I)
+      val c2 = m.param("c2", cellT)
+      val p2 = m.param("p2", tp.I)
       sym.arity match {
         case 0 => m.return_
         case 1 => m.aload(m.receiver).dup.aload(c2).putfield(cfields(0)).iload(p2).putfield(pfields(0)).return_
@@ -626,7 +626,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       m.return_
       if(isSingleton(sym)) {
         val fref = cell_singleton(sym)
-        c.field(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, fref)
+        c.field(Acc.PUBLIC.STATIC.FINAL, fref)
         c.clinit().newInitDup(concreteConstrFor(sym))().putstatic(fref).return_
       }
     }
@@ -651,9 +651,9 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
     // generic reduce
     {
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, cell_reduce.name, cell_reduce.desc)
-      val other = m.param("other", cellT, Acc.FINAL)
-      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, cell_reduce.name, cell_reduce.desc)
+      val other = m.param("other", cellT)
+      val ptw = m.param("ptw", ptwT)
       incMetric(s"${c.name}.${m.name}", m, ptw)
       val isShared = common.contains(sym)
       val ifm = if(isShared) interfaceMethod(sym).on(commonCellT) else interfaceMethod(sym)
@@ -673,9 +673,9 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     // interface methods
     rulePairs.foreach { case (sym2, rk) =>
       val ifm = interfaceMethod(sym2)
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, ifm.name, ifm.desc)
-      val other = m.param("other", concreteCellTFor(sym2), Acc.FINAL)
-      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
+      val other = m.param("other", concreteCellTFor(sym2))
+      val ptw = m.param("ptw", ptwT)
       incMetric(s"${c.name}.${m.name}", m, ptw)
       val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
       if(rk.sym1 == sym) m.aload(m.receiver).aload(other)
@@ -685,18 +685,18 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     // unsupported common operations (when using config.allCommon)
     (common -- rulePairs.keySet).foreach { sym2 =>
       val ifm = interfaceMethod(sym2)
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, ifm.name, ifm.desc)
-      val other = m.param("other", concreteCellTFor(sym2), Acc.FINAL)
-      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
+      val other = m.param("other", concreteCellTFor(sym2))
+      val ptw = m.param("ptw", ptwT)
       m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_irreducible).return_
     }
     addClass(classLoader, c)
   }
 
   private def compileCommonCell(common: scala.collection.Set[Symbol]): Unit = {
-    val c = new ClassDSL(Acc.PUBLIC | Acc.ABSTRACT, commonCellT.className, cellT)
+    val c = DSL.newClass(Acc.PUBLIC.ABSTRACT, commonCellT.className, cellT)
     c.emptyNoArgsConstructor(Acc.PROTECTED)
-    common.foreach(sym => c.method(Acc.PUBLIC | Acc.ABSTRACT, interfaceMethod(sym)))
+    common.foreach(sym => c.method(Acc.PUBLIC.ABSTRACT, interfaceMethod(sym)))
     addClass(classLoader, c)
   }
 
@@ -730,17 +730,17 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       b <- r.branches.iterator
       s <- b.cells.iterator
     } yield s) ++ (rules.keysIterator.map(_.sym1) ++ rules.keysIterator.map(_.sym1)).filter(_.isDefined)).toVector.distinct.sortBy(_.id)
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, cellCacheT.className)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, cellCacheT.className)
     c.emptyNoArgsConstructor(Acc.PRIVATE)
-    syms.foreach { sym => c.field(Acc.PRIVATE | Acc.STATIC, cellCache_var(sym)) }
+    syms.foreach { sym => c.field(Acc.PRIVATE.STATIC, cellCache_var(sym)) }
     syms.foreach { sym =>
-      val m = c.method(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, cellCache_get(sym))
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, cellCache_get(sym))
       val f = cellCache_var(sym)
       m.getstatic(f).aconst_null.putstatic(f).areturn
     }
     syms.foreach { sym =>
-      val m = c.method(Acc.PUBLIC | Acc.STATIC | Acc.FINAL, cellCache_set(sym))
-      val cell = m.param("cell", concreteCellTFor(sym), Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, cellCache_set(sym))
+      val cell = m.param("cell", concreteCellTFor(sym))
       m.aload(cell).putstatic(cellCache_var(sym)).return_
     }
     addClass(classLoader, c)
@@ -748,16 +748,16 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
   private def compileInitial(rule: InitialPlan, initialIndex: Int): RuleImpl = {
     val staticMR = initialRuleT_static_reduce(initialIndex)
-    val c = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className, riT)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className, riT)
     c.emptyNoArgsConstructor(Acc.PUBLIC)
     implementStaticReduce(c, rule, staticMR, Set.empty, Map.empty)
 
     // reduce
     {
-      val m = c.method(Acc.PUBLIC | Acc.FINAL, ri_reduce)
-      val c1 = m.param("c1", cellT, Acc.FINAL)
-      val c2 = m.param("c2", cellT, Acc.FINAL)
-      val ptw = m.param("ptw", ptwT, Acc.FINAL)
+      val m = c.method(Acc.PUBLIC.FINAL, ri_reduce)
+      val c1 = m.param("c1", cellT)
+      val c2 = m.param("c2", cellT)
+      val ptw = m.param("ptw", ptwT)
       m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
     }
 
@@ -767,7 +767,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
   private def compileRule(rule: RulePlan, shared: scala.collection.Set[Symbol], rules: scala.collection.Map[RuleKey, RulePlan]): Class[_] = {
     val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
-    val ric = new ClassDSL(Acc.PUBLIC | Acc.FINAL, staticMR.owner.className)
+    val ric = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
     implementStaticReduce(ric, rule, staticMR, shared, rules)
     addClass(classLoader, ric)
