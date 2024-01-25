@@ -4,7 +4,12 @@ import org.objectweb.asm.Type
 
 import scala.reflect.ClassTag
 
-trait Desc { def desc: String }
+trait Desc {
+  def desc: String
+  def isArray: Boolean = desc.startsWith("[")
+  def isMethod: Boolean = desc.startsWith("(")
+  def isClass: Boolean = desc.startsWith("L")
+}
 trait MethodDesc extends Desc
 trait ValDesc extends Desc {
   def a: ValDesc = new Desc.ValDescImpl("["+desc)

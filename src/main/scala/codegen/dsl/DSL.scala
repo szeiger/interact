@@ -2,7 +2,7 @@ package de.szeiger.interact.codegen.dsl
 
 import org.objectweb.asm.{ClassVisitor, Label, Type}
 import org.objectweb.asm.Opcodes._
-import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, MethodInsnNode, TableSwitchInsnNode, TryCatchBlockNode, TypeInsnNode, VarInsnNode}
+import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, LookupSwitchInsnNode, MethodInsnNode, MultiANewArrayInsnNode, TableSwitchInsnNode, TryCatchBlockNode, TypeInsnNode, VarInsnNode}
 import org.objectweb.asm.util.Printer
 
 import scala.collection.mutable.ArrayBuffer
@@ -73,14 +73,14 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   def getter(field: FieldRef, access: Acc = Acc.PUBLIC.FINAL, _name: String = null): MethodDSL = {
     val name = if(_name == null) s"get${field.name.charAt(0).toUpper}${field.name.substring(1)}" else _name
     val m = method(access, name, Desc.m()(field.desc))
-    m.aload(m.receiver).getfield(field).genReturn(field.desc)
+    m.aload(m.receiver).getfield(field).xreturn(field.desc)
   }
 
   def setter(field: FieldRef, access: Acc = Acc.PUBLIC.FINAL, _name: String = null): MethodDSL = {
     val name = if(_name == null) s"set${field.name.charAt(0).toUpper}${field.name.substring(1)}" else _name
     val m = method(access, name, Desc.m(field.desc).V)
     val p = m.param("value", field.desc, Acc.FINAL)
-    m.aload(m.receiver).genLoad(p, field.desc).putfield(field).return_
+    m.aload(m.receiver).xload(p, field.desc).putfield(field).return_
   }
 }
 
@@ -117,7 +117,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   }
   def storeLocal(desc: ValDesc, name: String = null, start: Label = null, end: Label = this.end): VarIdx = {
     val v = local(desc, name, start, end)
-    genStore(v, desc)
+    xstore(v, desc)
     v
   }
 
@@ -160,12 +160,14 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
     mv.visitEnd()
   }
 
-  private[this] def stored(v: VarIdx): Unit = {
-    val idx = if(isStatic) v.idx + 1 else v.idx
+  private[this] def storeVarInsn(opcode: Int, varIdx: VarIdx): this.type = {
+    varInsn(opcode, varIdx)
+    val idx = if(isStatic) varIdx.idx + 1 else varIdx.idx
     if(idx >= argsCount && idx - argsCount < locals.length) {
       val l = locals(idx - argsCount)
       if(l.startPos == -1) l.startPos = code.length
     }
+    this
   }
 
   private[this] def insn(i: AbstractInsnNode): this.type = { code.addOne(i); this }
@@ -173,37 +175,44 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   private[this] def insn(opcode: Int): this.type = insn(new InsnNode(opcode))
   private[this] def intInsn(opcode: Int, operand: Int): this.type = insn(new IntInsnNode(opcode, operand))
   private[this] def jumpInsn(opcode: Int, label: Label): this.type = insn(new JumpInsnNode(opcode, new LabelNode(label)))
-  private[this] def fieldInsn(opcode: Int, owner: Owner, name: String, desc: ValDesc): this.type =
-    insn(new FieldInsnNode(opcode, owner.className, name, desc.desc))
+  private[this] def fieldInsn(opcode: Int, owner: Owner, name: String, desc: ValDesc): this.type = insn(new FieldInsnNode(opcode, owner.className, name, desc.desc))
   private[this] def fieldInsn(opcode: Int, field: FieldRef): this.type = fieldInsn(opcode, field.owner, field.name, field.desc)
-  private[this] def methodInsn(opcode: Int, owner: Owner, name: String, desc: MethodDesc): this.type =
-    insn(new MethodInsnNode(opcode, owner.className, name, desc.desc, owner.isInterface))
-  private[this] def methodInsn(opcode: Int, method: MethodRef): this.type =
-    methodInsn(opcode, method.owner, method.name, method.desc)
-  private[this] def methodInsn(opcode: Int, method: ConstructorRef): this.type =
-    methodInsn(opcode, method.tpe, "<init>", method.desc)
+  private[this] def methodInsn(opcode: Int, owner: Owner, name: String, desc: MethodDesc): this.type = insn(new MethodInsnNode(opcode, owner.className, name, desc.desc, owner.isInterface))
+  private[this] def methodInsn(opcode: Int, method: MethodRef): this.type = methodInsn(opcode, method.owner, method.name, method.desc)
+  private[this] def methodInsn(opcode: Int, method: ConstructorRef): this.type = methodInsn(opcode, method.tpe, "<init>", method.desc)
   private[this] def typeInsn(opcode: Int, tpe: Owner): this.type = insn(new TypeInsnNode(opcode, tpe.className))
 
   def line(lineNumber: Int, l: Label = setLabel()): this.type = insn(new LineNumberNode(lineNumber, new LabelNode(l)))
-
-  def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
-  def iinc(varIdx: VarIdx, incr: Int = 1): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
 
   def aload(varIdx: VarIdx): this.type = varInsn(ALOAD, varIdx)
   def dload(varIdx: VarIdx): this.type = varInsn(DLOAD, varIdx)
   def fload(varIdx: VarIdx): this.type = varInsn(FLOAD, varIdx)
   def iload(varIdx: VarIdx): this.type = varInsn(ILOAD, varIdx)
   def lload(varIdx: VarIdx): this.type = varInsn(LLOAD, varIdx)
-  def astore(varIdx: VarIdx): this.type = { varInsn(ASTORE, varIdx); stored(varIdx); this }
-  def dstore(varIdx: VarIdx): this.type = { varInsn(DSTORE, varIdx); stored(varIdx); this }
-  def fstore(varIdx: VarIdx): this.type = { varInsn(FSTORE, varIdx); stored(varIdx); this }
-  def istore(varIdx: VarIdx): this.type = { varInsn(ISTORE, varIdx); stored(varIdx); this }
-  def lstore(varIdx: VarIdx): this.type = { varInsn(LSTORE, varIdx); stored(varIdx); this }
+
+  def astore(varIdx: VarIdx): this.type = storeVarInsn(ASTORE, varIdx)
+  def dstore(varIdx: VarIdx): this.type = storeVarInsn(DSTORE, varIdx)
+  def fstore(varIdx: VarIdx): this.type = storeVarInsn(FSTORE, varIdx)
+  def istore(varIdx: VarIdx): this.type = storeVarInsn(ISTORE, varIdx)
+  def lstore(varIdx: VarIdx): this.type = storeVarInsn(LSTORE, varIdx)
 
   def aaload: this.type = insn(AALOAD)
-  def aastore: this.type = insn(AASTORE)
+  def baload: this.type = insn(BALOAD)
+  def caload: this.type = insn(CALOAD)
+  def daload: this.type = insn(DALOAD)
+  def faload: this.type = insn(FALOAD)
   def iaload: this.type = insn(IALOAD)
+  def laload: this.type = insn(LALOAD)
+  def saload: this.type = insn(SALOAD)
+
+  def aastore: this.type = insn(AASTORE)
+  def bastore: this.type = insn(BASTORE)
+  def castore: this.type = insn(CASTORE)
+  def dastore: this.type = insn(DASTORE)
+  def fastore: this.type = insn(FASTORE)
   def iastore: this.type = insn(IASTORE)
+  def lastore: this.type = insn(LASTORE)
+  def sastore: this.type = insn(SASTORE)
 
   def return_ : this.type = insn(RETURN)
   def areturn : this.type = insn(ARETURN)
@@ -211,17 +220,90 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   def freturn : this.type = insn(FRETURN)
   def ireturn : this.type = insn(IRETURN)
   def lreturn : this.type = insn(LRETURN)
+
+  def dadd: this.type = insn(DADD)
+  def fadd: this.type = insn(FADD)
+  def iadd: this.type = insn(IADD)
+  def ladd: this.type = insn(LADD)
+  def dmul: this.type = insn(DMUL)
+  def fmul: this.type = insn(FMUL)
+  def imul: this.type = insn(IMUL)
+  def lmul: this.type = insn(LMUL)
+  def dsub: this.type = insn(DSUB)
+  def fsub: this.type = insn(FSUB)
+  def isub: this.type = insn(ISUB)
+  def lsub: this.type = insn(LSUB)
+  def ddiv: this.type = insn(DDIV)
+  def fdiv: this.type = insn(FDIV)
+  def idiv: this.type = insn(IDIV)
+  def ldiv: this.type = insn(LDIV)
+  def dneg: this.type = insn(DNEG)
+  def fneg: this.type = insn(FNEG)
+  def ineg: this.type = insn(INEG)
+  def lneg: this.type = insn(LNEG)
+  def drem: this.type = insn(DREM)
+  def frem: this.type = insn(FREM)
+  def irem: this.type = insn(IREM)
+  def lrem: this.type = insn(LREM)
+  def ishl: this.type = insn(ISHL)
+  def ishr: this.type = insn(ISHR)
+  def iushr: this.type = insn(IUSHR)
+  def lshl: this.type = insn(LSHL)
+  def lshr: this.type = insn(LSHR)
+  def lushr: this.type = insn(LUSHR)
+
+  def iand: this.type = insn(IAND)
+  def land: this.type = insn(LAND)
+  def ior: this.type = insn(IOR)
+  def lor: this.type = insn(LOR)
+  def ixor: this.type = insn(IXOR)
+  def lxor: this.type = insn(LXOR)
+
+  def d2f: this.type = insn(D2F)
+  def d2i: this.type = insn(D2I)
+  def d2l: this.type = insn(D2L)
+  def f2d: this.type = insn(F2D)
+  def f2i: this.type = insn(F2I)
+  def f2l: this.type = insn(F2L)
+  def i2b: this.type = insn(I2B)
+  def i2c: this.type = insn(I2C)
+  def i2d: this.type = insn(I2D)
+  def i2f: this.type = insn(I2F)
+  def i2l: this.type = insn(I2L)
+  def i2s: this.type = insn(I2S)
+  def l2d: this.type = insn(L2D)
+  def l2f: this.type = insn(L2F)
+  def l2i: this.type = insn(L2I)
+
+  def newarray(tp: ValDesc): this.type = tp.desc match {
+    case "B" => intInsn(NEWARRAY, T_BYTE)
+    case "Z" => intInsn(NEWARRAY, T_BOOLEAN)
+    case "C" => intInsn(NEWARRAY, T_CHAR)
+    case "I" => intInsn(NEWARRAY, T_INT)
+    case "S" => intInsn(NEWARRAY, T_SHORT)
+    case "D" => intInsn(NEWARRAY, T_DOUBLE)
+    case "F" => intInsn(NEWARRAY, T_FLOAT)
+    case "J" => intInsn(NEWARRAY, T_LONG)
+    case s"L$s;" => typeInsn(ANEWARRAY, Desc.c(s)) // internal class name for classes
+    case s => typeInsn(ANEWARRAY, Desc.c(s)) // descriptor for arrays
+  }
+  def multianewarray(tp: ValDesc, dims: Int): this.type = {
+    assert(tp.isArray) // multianewarray expects the full array type, not its component type
+    if(dims == 1) newarray(Desc.c(tp.desc.substring(1)))
+    else insn(new MultiANewArrayInsnNode(tp.desc, dims))
+  }
+
   def dup: this.type = insn(DUP)
   def dup_x1: this.type = insn(DUP_X1)
   def dup_x2: this.type = insn(DUP_X2)
+  def dup2: this.type = insn(DUP2)
+  def dup2_x1: this.type = insn(DUP2_X1)
+  def dup2_x2: this.type = insn(DUP2_X2)
   def pop: this.type = insn(POP)
   def pop2: this.type = insn(POP2)
   def swap: this.type = insn(SWAP)
-  def ior: this.type = insn(IOR)
-  def iand: this.type = insn(IAND)
-  def ixor: this.type = insn(IXOR)
+
   def aconst_null: this.type = insn(ACONST_NULL)
-  def iadd: this.type = insn(IADD)
 
   def iconst(i: Int): this.type = i match {
     case -1 => insn(ICONST_M1)
@@ -236,7 +318,35 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
     case _ => ldc(i)
   }
 
-  def genReturn(tp: ValDesc) : this.type = tp.desc match {
+  def dconst(d: Double): this.type = d match {
+    case 0 => insn(DCONST_0)
+    case 1 => insn(DCONST_1)
+    case _ => ldc(d)
+  }
+
+  def fconst(f: Float): this.type = f match {
+    case 0 => insn(FCONST_0)
+    case 1 => insn(FCONST_1)
+    case 2 => insn(FCONST_2)
+    case _ => ldc(f)
+  }
+
+  def lconst(l: Long): this.type = l match {
+    case 0 => insn(LCONST_0)
+    case 1 => insn(LCONST_1)
+    case _ => ldc(l)
+  }
+
+  def const(value: Any): this.type = value match {
+    case null => aconst_null
+    case i: Int => iconst(i)
+    case l: Long => lconst(l)
+    case d: Double => dconst(d)
+    case f: Float => fconst(f)
+    case x => ldc(x)
+  }
+
+  def xreturn(tp: ValDesc) : this.type = tp.desc match {
     case "B" | "C" | "I" | "S" | "Z" => ireturn
     case "D" => dreturn
     case "F" => freturn
@@ -244,7 +354,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
     case _ => areturn
   }
 
-  def genLoad(varIdx: VarIdx, tp: ValDesc) : this.type = tp.desc match {
+  def xload(varIdx: VarIdx, tp: ValDesc) : this.type = tp.desc match {
     case "B" | "C" | "I" | "S" | "Z" => iload(varIdx)
     case "D" => dload(varIdx)
     case "F" => fload(varIdx)
@@ -252,13 +362,48 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
     case _ => aload(varIdx)
   }
 
-  def genStore(varIdx: VarIdx, tp: ValDesc): this.type = tp.desc match {
+  def xstore(varIdx: VarIdx, tp: ValDesc): this.type = tp.desc match {
     case "B" | "C" | "I" | "S" | "Z" => istore(varIdx)
     case "D" => dstore(varIdx)
     case "F" => fstore(varIdx)
     case "J" => lstore(varIdx)
     case _ => astore(varIdx)
   }
+
+  def xaload(tp: ValDesc): this.type = tp.desc match {
+    case "B" | "Z" => baload
+    case "C" => caload
+    case "I" => iaload
+    case "S" => saload
+    case "D" => daload
+    case "F" => faload
+    case "J" => laload
+    case _ => aaload
+  }
+
+  def xastore(tp: ValDesc): this.type = tp.desc match {
+    case "B" | "Z" => bastore
+    case "C" => castore
+    case "I" => iastore
+    case "S" => sastore
+    case "D" => dastore
+    case "F" => fastore
+    case "J" => lastore
+    case _ => aastore
+  }
+
+  def dcmpg: this.type = insn(DCMPG)
+  def dcmpl: this.type = insn(DCMPL)
+  def fcmpg: this.type = insn(FCMPG)
+  def fcmpl: this.type = insn(FCMPL)
+  def lcmp: this.type = insn(LCMP)
+
+  def ldc(value: Any): this.type = insn(new LdcInsnNode(value))
+  def iinc(varIdx: VarIdx, incr: Int = 1): this.type = { assert(varIdx != VarIdx.none); insn(new IincInsnNode(varIdx.idx, incr)) }
+  def arraylength: this.type = insn(ARRAYLENGTH)
+  def athrow: this.type = insn(ATHROW)
+  def monitorenter: this.type = insn(MONITORENTER)
+  def monitorexit: this.type = insn(MONITOREXIT)
 
   def goto(l: Label): this.type = jumpInsn(GOTO, l)
   def if_icmpeq(l: Label): this.type = jumpInsn(IF_ICMPEQ, l)
@@ -349,6 +494,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   def invokevirtual(method: MethodRef): this.type = methodInsn(INVOKEVIRTUAL, method)
   def invokeinterface(owner: Owner, name: String, desc: MethodDesc): this.type = methodInsn(INVOKEINTERFACE, owner, name, desc)
   def invokeinterface(method: MethodRef): this.type = methodInsn(INVOKEINTERFACE, method)
+  //TODO: invokedynamic
 
   def invoke(method: MethodRef, targetTp: Owner = null): this.type = targetTp match {
     case null => invoke(method, method.owner)
@@ -359,6 +505,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   def new_(tpe: Owner): this.type = typeInsn(NEW, tpe)
   def checkcast(tpe: Owner): this.type = typeInsn(CHECKCAST, tpe)
   def instanceof(tpe: Owner): this.type = typeInsn(INSTANCEOF, tpe)
+  def nop: this.type = insn(NOP)
 
   def newInitDup(tpe: Owner, desc: MethodDesc)(f: => Unit): this.type = {
     new_(tpe)
@@ -395,13 +542,22 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
 
   def tableswitch(min: Int, max: Int, deflt: Label, labels: Seq[Label]): this.type =
     insn(new TableSwitchInsnNode(min, max, new LabelNode(deflt), labels.map(new LabelNode(_)): _*))
-  def tableSwitch(min: Int, blocks: (() => _)*): this.type = {
-    val labels = blocks.map(_ => newLabel)
-    tableswitch(min, min+blocks.length-2, labels.last, labels.init)
-    blocks.zip(labels).foreach { case (b, l) =>
+  def lookupswitch(keys: Array[Int], deflt: Label, labels: Seq[Label]): this.type =
+    insn(new LookupSwitchInsnNode(new LabelNode(deflt), keys, labels.iterator.map(new LabelNode(_)).toArray))
+
+  def tableSwitch(range: Range)(f: => Option[Int] => _): this.type = {
+    val min = range.start
+    val max = if(range.isInclusive) range.end else range.end-1
+    assert(range.step == 1)
+    val labels = (min to max).map(_ => newLabel)
+    val deflt = newLabel
+    tableswitch(min, max, deflt, labels)
+    labels.zipWithIndex.foreach { case (l, i) =>
       setLabel(l)
-      b()
+      f(Some(min+i))
     }
+    setLabel(deflt)
+    f(None)
     this
   }
 }

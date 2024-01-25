@@ -588,7 +588,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       sym.arity match {
         case 0 => m.aconst_null.areturn
         case 1 => m.aload(m.receiver).getfield(cfields(0)).areturn
-        case a => m.aload(m.receiver).iload(p1).tableSwitch(0, (0 until a).map { i => () => m.getfield(cfields(i)).areturn }: _*)
+        case a => m.aload(m.receiver).iload(p1).tableSwitch(0 until a-1) { io => m.getfield(cfields(io.getOrElse(a-1))).areturn }
       }
     }
 
@@ -598,7 +598,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       sym.arity match {
         case 0 => m.iconst(0).ireturn
         case 1 => m.aload(m.receiver).getfield(pfields(0)).ireturn
-        case a => m.aload(m.receiver).iload(p1).tableSwitch(0, (0 until a).map { i => () => m.getfield(pfields(i)).ireturn }: _*)
+        case a => m.aload(m.receiver).iload(p1).tableSwitch(0 until a-1) { io => m.getfield(pfields(io.getOrElse(a-1))).ireturn }
       }
     }
 
@@ -610,7 +610,10 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       sym.arity match {
         case 0 => m.return_
         case 1 => m.aload(m.receiver).dup.aload(c2).putfield(cfields(0)).iload(p2).putfield(pfields(0)).return_
-        case a => m.aload(m.receiver).dup.iload(p1).tableSwitch(0, (0 until a).map { i => () => m.aload(c2).putfield(cfields(i)).iload(p2).putfield(pfields(i)).return_ }: _*)
+        case a => m.aload(m.receiver).dup.iload(p1).tableSwitch(0 until a-1) { io =>
+          val i = io.getOrElse(a-1)
+          m.aload(c2).putfield(cfields(i)).iload(p2).putfield(pfields(i)).return_
+        }
       }
     }
 
