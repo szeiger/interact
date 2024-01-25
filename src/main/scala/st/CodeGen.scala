@@ -448,6 +448,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
 
   // Find suitable cell objects to reuse as labels. Returns cell index or -1 for new object per CreateLabelsComp
   private def findLabels(cellCount: Int, creators: Vector[CreateLabelsComp], reuse1: Int, reuse2: Int): Vector[(CreateLabelsComp, Int)] = {
+    //TODO don't use cells from cell cache as labels
     var used = new Array[Boolean](cellCount)
     if(reuse1 != -1) used(reuse1) = true
     if(reuse2 != -1) used(reuse2) = true
@@ -635,7 +636,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     // reinit
-    if(sym.arity > 0) {
+    if(sym.arity > 0 || sym.payloadType.isDefined) {
       val m = c.method(Acc.PUBLIC, concreteReinitFor(sym))
       val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
       aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
