@@ -1,8 +1,8 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
-import de.szeiger.interact.{BackendConfig, BranchPlan, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRulePlan, Global, Idx, InitialPlan, IntBox, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RefBox, RuleKey, RulePlan}
-import de.szeiger.interact.ast.{PayloadType, Symbol, Symbols}
+import de.szeiger.interact.{BackendConfig, BranchPlan, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRulePlan, Global, Idx, InitialPlan, IntBox, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RefBox, RuleKey, RulePlan, Runtime}
+import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
@@ -78,15 +78,26 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       methodEnd: Label): Unit = {
     val branchEnd = m.newLabel
 
-    def callPayloadMethod(pc: PayloadMethodApplication)(loadArgs: => Unit): Unit = {
-      val mref = MethodRef(pc.jMethod)
-      if(pc.isStatic) {
-        loadArgs
-        m.invokestatic(mref)
-      } else {
-        m.getstatic(mref.owner.field("MODULE$", mref.owner))
-        loadArgs
-        m.invoke(mref)
+    def callPayloadMethod(pc: PayloadMethodApplication, elseTarget: Label = null)(loadArgs: => Unit): Unit = {
+      val RuntimeCls = classOf[Runtime.type].getName
+      (pc.jMethod.getDeclaringClass.getName, pc.jMethod.getName, pc.embTp.args) match {
+        case (RuntimeCls, "eq", Vector((EmbeddedType.PayloadInt, false), (EmbeddedType.PayloadInt, false))) if elseTarget != null =>
+          loadArgs
+          m.ifI_!=.jump(elseTarget)
+        case (RuntimeCls, "eqLabel", Vector((EmbeddedType.PayloadLabel, false), (EmbeddedType.PayloadLabel, false))) if elseTarget != null =>
+          loadArgs
+          m.ifA_!=.jump(elseTarget)
+        case _ =>
+          val mref = MethodRef(pc.jMethod)
+          if(pc.isStatic) {
+            loadArgs
+            m.invokestatic(mref)
+          } else {
+            m.getstatic(mref.owner.field("MODULE$", mref.owner))
+            loadArgs
+            m.invoke(mref)
+          }
+          if(elseTarget != null) m.ifeq(elseTarget)
       }
     }
 
@@ -97,7 +108,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
         else if(cls == classOf[AnyRef]) m.invoke(refBox_getValue, cellTp)
         else m.invoke(refBox_getValue, cellTp).checkcast(tp.o(cls))
       }
-      callPayloadMethod(pc) {
+      assert(pc.jMethod.getReturnType == classOf[Boolean])
+      callPayloadMethod(pc, branchEnd) {
         pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach {
           case (EmbArg.Const(i: Int), _) => m.iconst(i)
           case (EmbArg.Const(s: String), _) => m.ldc(s)
@@ -105,8 +117,6 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
           case (EmbArg.Right, cls) => adaptPayloadFromCell(cRight, cRightTp, cls)
         }
       }
-      assert(pc.jMethod.getReturnType == classOf[Boolean])
-      m.ifeq(branchEnd)
     }
 
     val (reuse1, reuse2, skipConns) = findReuse(rule, branch)

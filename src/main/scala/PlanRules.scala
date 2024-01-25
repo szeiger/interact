@@ -32,7 +32,8 @@ class PlanRules(global: Global) extends Transform with Phase {
     val cells = Vector.fill(sym.arity)(eraseSym)
     val conns = (0 until sym.arity).map(i => Connection(FreeIdx(true, i), CellIdx(i, -1))).toSet
     val embComp = sym.payloadType match {
-      case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eraseRef", Vector(EmbArg.Right)))
+      case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eraseRef", Vector(EmbArg.Right),
+        EmbeddedType.PayloadVoid, Vector((EmbeddedType.PayloadRef, false))))
       case _ => Vector.empty
     }
     RulePlan(eraseSym, sym, Vector(new BranchPlan(cells, conns, embComp, None)), true)
@@ -47,7 +48,8 @@ class PlanRules(global: Global) extends Transform with Phase {
           Connection(FreeIdx(false, 1), FreeIdx(true, 1))
         ),
         Vector.empty,
-        Some(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eqLabel", Vector(EmbArg.Left, EmbArg.Right)))
+        Some(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eqLabel", Vector(EmbArg.Left, EmbArg.Right),
+          EmbeddedType.Bool, Vector((EmbeddedType.PayloadLabel, false), (EmbeddedType.PayloadLabel, false))))
       )
       val commute = new BranchPlan(
         Vector.fill(4)(dupSym),
@@ -81,7 +83,10 @@ class PlanRules(global: Global) extends Transform with Phase {
       conns += Connection(FreeIdx(false, 1), CellIdx(sym.arity+1, -1))
       conns ++= (0 until sym.arity).map(i => Connection(FreeIdx(true, i), CellIdx(i, -1)))
       val embComp = sym.payloadType match {
-        case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "dupRef", Vector(EmbArg.Right, EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1))))
+        case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "dupRef",
+          Vector(EmbArg.Right, EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1)),
+          EmbeddedType.PayloadVoid,
+          Vector((EmbeddedType.PayloadRef, false), (EmbeddedType.PayloadRef, true), (EmbeddedType.PayloadRef, true))))
         case _ => Vector.empty
       }
       val copyLabel = (for(i <- 0 until sym.arity) yield PayloadAssignment(EmbArg.Left, EmbArg.Cell(i), PayloadType.LABEL)).toVector
@@ -158,7 +163,8 @@ final case class CreateLabelsComp(name: String, embArgs: Vector[EmbArg]) extends
   override def toString: String = s"EmbeddedCreateLabels(${namedNodes.msg})"
 }
 
-final case class PayloadMethodApplication(jMethod: Method, embArgs: Vector[EmbArg]) extends PayloadComputation {
+final case class PayloadMethodApplication(embTp: EmbeddedType.Method, embArgs: Vector[EmbArg]) extends PayloadComputation {
+  def jMethod = embTp.method
   def isStatic: Boolean = Modifier.isStatic(jMethod.getModifiers)
   private[this] val mh = MethodHandles.lookup().unreflect(jMethod)
   private[this] val adaptedmh: MethodHandle =
@@ -169,10 +175,10 @@ final case class PayloadMethodApplication(jMethod: Method, embArgs: Vector[EmbAr
 }
 
 object PayloadMethodApplication {
-  def apply(cl: ClassLoader, cls: String, method: String, embArgs: Vector[EmbArg]): PayloadMethodApplication = {
+  def apply(cl: ClassLoader, cls: String, method: String, embArgs: Vector[EmbArg], ret: EmbeddedType, args: Vector[(EmbeddedType, Boolean)]): PayloadMethodApplication = {
     val c = cl.loadClass(cls)
     val m = c.getMethods.find(_.getName == method).getOrElse(sys.error(s"Method $method not found in $cls"))
-    new PayloadMethodApplication(m, embArgs)
+    new PayloadMethodApplication(EmbeddedType.Method(m, ret, args), embArgs)
   }
 }
 
@@ -210,7 +216,7 @@ object PayloadComputation {
         case id: Ident => handleArg(id.sym)
         //TODO resolve nested applications in CleanEmbedded
       }
-      new PayloadMethodApplication(embTp.method, embArgs)
+      new PayloadMethodApplication(embTp, embArgs)
     case CreateLabels(base, labels) =>
       new CreateLabelsComp(base.id, labels.map(handleArg))
     case _ => CompilerResult.fail(s"Unsupported computation", atNode = e)
