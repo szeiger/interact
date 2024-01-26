@@ -175,8 +175,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   }
 }
 
-final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RulePlan],
-  config: BackendConfig, initialRules: Iterable[InitialPlan]) extends BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RuleWiring],
+  config: BackendConfig, initialRules: Iterable[InitialRuleWiring]) extends BaseInterpreter { self =>
 
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
@@ -234,8 +234,8 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 
-  def createInterpretedRuleImpl(sym1Id: Int, r: GenericRulePlan, b: BranchPlan, next: Option[RuleImpl]): RuleImpl = {
-    val bp = new PackedBranchPlan(b, r)
+  def createInterpretedRuleImpl(sym1Id: Int, r: GenericRuleWiring, b: BranchWiring, next: Option[RuleImpl]): RuleImpl = {
+    val bp = new PackedBranchWiring(b, r)
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
     new InterpretedRuleImpl(sym1Id, pcs, bp.freeWiresPacked, bp.connectionsPackedLong,
       if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.cond.orNull, next.orNull, r.sym1, r.sym2)
@@ -243,8 +243,8 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     if(config.compile) {
-      val cg = new CodeGen("generated", new LocalClassLoader, config)
-      val (initial, classToSym) = cg.compile(rules, initialRules, globals)
+      val cg = new CodeGen("generated", new LocalClassLoader, config, rules, initialRules, globals)
+      val (initial, classToSym) = cg.compile()
       (null, 0, initial, classToSym)
     } else {
       val ris = new Array[RuleImpl](1 << (symBits << 1))

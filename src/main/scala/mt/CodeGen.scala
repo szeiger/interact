@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader}
-import de.szeiger.interact.{CellIdx, BackendConfig, Connection, FreeIdx, RulePlan}
+import de.szeiger.interact.{CellIdx, BackendConfig, Connection, FreeIdx, RuleWiring}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -39,7 +39,7 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
   private val new_CellSpec_I = cellSpecTs.map(_.constr(tp.m(tp.I).V))
   private val new_WireRef_LILI = wrT.constr(tp.m(cellT, tp.I, cellT, tp.I).V)
 
-  def compileRule(g: RulePlan, cl: LocalClassLoader): RuleImplFactory[RuleImpl] = {
+  def compileRule(g: RuleWiring, cl: LocalClassLoader): RuleImplFactory[RuleImpl] = {
     val name1 = encodeName(g.sym1)
     val name2 = encodeName(g.sym2)
     val implClassName = s"$genPackage/Rule_$name1$$_$name2"
@@ -90,7 +90,7 @@ class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen
     (c, sidFields)
   }
 
-  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: RulePlan): Unit = {
+  protected def implementRuleClass(c: ClassDSL, sids: Map[Symbol, Int], sidFields: IndexedSeq[FieldRef], g: RuleWiring): Unit = {
     assert(g.branches.length == 1)
     val branch = g.branches.head
     val internalConns = branch.intConns.toArray

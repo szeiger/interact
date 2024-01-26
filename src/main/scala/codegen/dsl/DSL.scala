@@ -84,7 +84,10 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   }
 }
 
-final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
+final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends IfDSL { self =>
+  protected[this] def ifEndLabel: Label = new Label
+  protected[this] def method: MethodDSL = this
+
   private[this] val params = ArrayBuffer.empty[Local]
   private[this] val locals = ArrayBuffer.empty[Local]
   private[this] val code = ArrayBuffer.empty[AbstractInsnNode]
@@ -174,7 +177,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = { assert(varIdx != VarIdx.none); insn(new VarInsnNode(opcode, varIdx.idx)) }
   private[this] def insn(opcode: Int): this.type = insn(new InsnNode(opcode))
   private[this] def intInsn(opcode: Int, operand: Int): this.type = insn(new IntInsnNode(opcode, operand))
-  private[this] def jumpInsn(opcode: Int, label: Label): this.type = insn(new JumpInsnNode(opcode, new LabelNode(label)))
+  private[dsl] def jumpInsn(opcode: Int, label: Label): this.type = insn(new JumpInsnNode(opcode, new LabelNode(label)))
   private[this] def fieldInsn(opcode: Int, owner: Owner, name: String, desc: ValDesc): this.type = insn(new FieldInsnNode(opcode, owner.className, name, desc.desc))
   private[this] def fieldInsn(opcode: Int, field: FieldRef): this.type = fieldInsn(opcode, field.owner, field.name, field.desc)
   private[this] def methodInsn(opcode: Int, owner: Owner, name: String, desc: MethodDesc): this.type = insn(new MethodInsnNode(opcode, owner.className, name, desc.desc, owner.isInterface))
@@ -422,43 +425,6 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
   def ifnull(l: Label): this.type = jumpInsn(IFNULL, l)
   def ifnonnull(l: Label): this.type = jumpInsn(IFNONNULL, l)
 
-  final class IfDSL(posOpcode: Int, negOpcode: Int) {
-    def thnElse(cont: => Unit)(skip: => Unit): self.type = {
-      val lElse, lEndif = new Label
-      jumpInsn(negOpcode, lElse); cont; goto(lEndif)
-      setLabel(lElse); skip
-      setLabel(lEndif)
-      self
-    }
-    def thn(cont: => Unit): self.type = {
-      val lEndif = new Label
-      jumpInsn(negOpcode, lEndif)
-      cont
-      setLabel(lEndif)
-      self
-    }
-    def jump(l: Label): self.type = jumpInsn(posOpcode, l)
-  }
-
-  def if_==     : IfDSL = new IfDSL(IFEQ, IFNE)
-  def if_!=     : IfDSL = new IfDSL(IFNE, IFEQ)
-  def if_<      : IfDSL = new IfDSL(IFLT, IFGE)
-  def if_>      : IfDSL = new IfDSL(IFGT, IFLE)
-  def if_<=     : IfDSL = new IfDSL(IFLE, IFGT)
-  def if_>=     : IfDSL = new IfDSL(IFGE, IFLT)
-
-  def ifI_==    : IfDSL = new IfDSL(IF_ICMPEQ, IF_ICMPNE)
-  def ifI_!=    : IfDSL = new IfDSL(IF_ICMPNE, IF_ICMPEQ)
-  def ifI_<     : IfDSL = new IfDSL(IF_ICMPLT, IF_ICMPGE)
-  def ifI_>     : IfDSL = new IfDSL(IF_ICMPGT, IF_ICMPLE)
-  def ifI_<=    : IfDSL = new IfDSL(IF_ICMPLE, IF_ICMPGT)
-  def ifI_>=    : IfDSL = new IfDSL(IF_ICMPGE, IF_ICMPLT)
-
-  def ifA_==    : IfDSL = new IfDSL(IF_ACMPEQ, IF_ACMPNE)
-  def ifA_!=    : IfDSL = new IfDSL(IF_ACMPNE, IF_ACMPEQ)
-  def ifNull    : IfDSL = new IfDSL(IFNULL, IFNONNULL)
-  def ifNonNull : IfDSL = new IfDSL(IFNONNULL, IFNULL)
-
   def forRange(range: Range)(f: VarIdx => Unit): this.type = {
     val start, end = newLabel
     val i = iconst(range.start).storeLocal(Desc.I)
@@ -560,4 +526,53 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) { self =>
     f(None)
     this
   }
+}
+
+trait IfDSL {
+  protected[this] def ifEndLabel: Label
+  protected[this] def method: MethodDSL
+
+  def if_==     : ThenDSL = new ThenDSL(IFEQ, IFNE, method, ifEndLabel)
+  def if_!=     : ThenDSL = new ThenDSL(IFNE, IFEQ, method, ifEndLabel)
+  def if_<      : ThenDSL = new ThenDSL(IFLT, IFGE, method, ifEndLabel)
+  def if_>      : ThenDSL = new ThenDSL(IFGT, IFLE, method, ifEndLabel)
+  def if_<=     : ThenDSL = new ThenDSL(IFLE, IFGT, method, ifEndLabel)
+  def if_>=     : ThenDSL = new ThenDSL(IFGE, IFLT, method, ifEndLabel)
+
+  def ifI_==    : ThenDSL = new ThenDSL(IF_ICMPEQ, IF_ICMPNE, method, ifEndLabel)
+  def ifI_!=    : ThenDSL = new ThenDSL(IF_ICMPNE, IF_ICMPEQ, method, ifEndLabel)
+  def ifI_<     : ThenDSL = new ThenDSL(IF_ICMPLT, IF_ICMPGE, method, ifEndLabel)
+  def ifI_>     : ThenDSL = new ThenDSL(IF_ICMPGT, IF_ICMPLE, method, ifEndLabel)
+  def ifI_<=    : ThenDSL = new ThenDSL(IF_ICMPLE, IF_ICMPGT, method, ifEndLabel)
+  def ifI_>=    : ThenDSL = new ThenDSL(IF_ICMPGE, IF_ICMPLT, method, ifEndLabel)
+
+  def ifA_==    : ThenDSL = new ThenDSL(IF_ACMPEQ, IF_ACMPNE, method, ifEndLabel)
+  def ifA_!=    : ThenDSL = new ThenDSL(IF_ACMPNE, IF_ACMPEQ, method, ifEndLabel)
+  def ifNull    : ThenDSL = new ThenDSL(IFNULL, IFNONNULL, method, ifEndLabel)
+  def ifNonNull : ThenDSL = new ThenDSL(IFNONNULL, IFNULL, method, ifEndLabel)
+}
+
+final class ThenDSL(posOpcode: Int, negOpcode: Int, m: MethodDSL, l1: Label) {
+  def and(load: => Unit): IfDSL = {
+    m.jumpInsn(negOpcode, l1)
+    load
+    new IfDSL {
+      protected[this] def ifEndLabel: Label = l1
+      protected[this] def method: MethodDSL = m
+    }
+  }
+  def thnElse(cont: => Unit)(skip: => Unit): MethodDSL = {
+    val l2 = new Label
+    m.jumpInsn(negOpcode, l1); cont; m.goto(l2)
+    m.setLabel(l1); skip
+    m.setLabel(l2)
+    m
+  }
+  def thn(cont: => Unit): MethodDSL = {
+    m.jumpInsn(negOpcode, l1)
+    cont
+    m.setLabel(l1)
+    m
+  }
+  def jump(l: Label): MethodDSL = m.jumpInsn(posOpcode, l)
 }

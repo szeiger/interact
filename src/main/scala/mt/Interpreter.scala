@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialPlan, PackedBranchPlan, RulePlan}
+import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialRuleWiring, PackedBranchWiring, RuleWiring}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
@@ -204,8 +204,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def wireAllocationCount: Int = connections.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: BackendConfig, compData: Iterable[Let],
-  compInitial: Iterable[InitialPlan]) extends BaseInterpreter with SymbolIdLookup { self =>
+final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: BackendConfig, compData: Iterable[Let],
+  compInitial: Iterable[InitialRuleWiring]) extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val scope: Analyzer[Cell] = new Analyzer[Cell] {
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = Iterator.empty //TODO
@@ -271,7 +271,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RulePlan], config: Bac
         else {
           maxW.max(g.maxWires)
           maxC.max(g.maxCells)
-          val bp = new PackedBranchPlan(branch, g)
+          val bp = new PackedBranchWiring(branch, g)
           new InterpretedRuleImpl(getSymbolId(g.sym1), branch.cells.iterator.map(s => intOfShorts(getSymbolId(s), s.arity)).toArray, bp.freeWiresPacked1, bp.freWiresPacked2, bp.connectionsPacked)
         }
       ris(mkRuleKey(getSymbolId(g.sym1), getSymbolId(g.sym2))) = ri

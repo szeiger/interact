@@ -1,6 +1,6 @@
 package de.szeiger.interact.ast
 
-import de.szeiger.interact.{BranchPlan, Connection, CreateLabelsComp, EmbArg, InitialPlan, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RulePlan}
+import de.szeiger.interact.{BranchWiring, Connection, CreateLabelsComp, EmbArg, InitialRuleWiring, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RuleWiring}
 
 abstract class Transform {
   import Transform._
@@ -143,8 +143,8 @@ abstract class Transform {
     case n: Let => apply(n)
     case n: Def => apply(n)
     case n: CheckedRule => apply(n)
-    case n: RulePlan => apply(n)
-    case n: InitialPlan => apply(n)
+    case n: RuleWiring => apply(n)
+    case n: InitialRuleWiring => apply(n)
   }
 
   def apply(n: CheckedRule): Vector[Statement] = n match {
@@ -166,19 +166,19 @@ abstract class Transform {
     else n.copy(i1, i2, a12, a22, emb12, emb22, red2)
   })
 
-  def apply(n: RulePlan): Vector[Statement] = Vector({
+  def apply(n: RuleWiring): Vector[Statement] = Vector({
     val b2 = mapC(n.branches)(apply)
     if(b2 eq n.branches) n
     else n.copy(n.sym1, n.sym2, b2, n.derived)
   })
 
-  def apply(n: InitialPlan): Vector[Statement] = Vector({
+  def apply(n: InitialRuleWiring): Vector[Statement] = Vector({
     val b2 = apply(n.branch)
     if(b2 eq n.branch) n
     else n.copy(branch = b2)
   })
 
-  def apply(n: BranchPlan): BranchPlan = {
+  def apply(n: BranchWiring): BranchWiring = {
     val co2 = flatMapC(n.conns)(apply)
     val pc2 = flatMapOC(n.payloadComps)(apply)
     val cn2 = flatMapOC(n.cond)(apply)

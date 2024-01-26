@@ -6,7 +6,6 @@ import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import org.junit.runners.Parameterized.Parameters
 
-import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.CollectionConverters._
 
 @RunWith(classOf[Parameterized])
@@ -24,10 +23,6 @@ class MainTest(spec: String) {
   @Test def testEmbedded = check("embedded")
   @Test def testAck = check("ack", expectedSteps = 12542077)
   @Test def testDiverging = check("diverging", fail = true)
-
-  @Test def testLifecycle = {
-
-  }
 }
 
 object MainTest {

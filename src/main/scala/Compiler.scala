@@ -14,7 +14,7 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
     new Curry(global),
     new CleanEmbedded(global),
     new ResolveEmbedded(global),
-    new PlanRules(global),
+    new CreateWiring(global),
     new Inline(global),
   )
 
@@ -32,13 +32,13 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
     u2
   }
 
-  private[this] val rulePlans = mutable.Map.empty[RuleKey, RulePlan]
+  private[this] val rulePlans = mutable.Map.empty[RuleKey, RuleWiring]
   private[this] val data = mutable.ArrayBuffer.empty[Let]
-  private[this] val initialPlans = mutable.ArrayBuffer.empty[InitialPlan]
+  private[this] val initialPlans = mutable.ArrayBuffer.empty[InitialRuleWiring]
   unit.statements.foreach {
-    case i: InitialPlan => initialPlans += i
+    case i: InitialRuleWiring => initialPlans += i
     case l: Let => data += l
-    case g: RulePlan =>
+    case g: RuleWiring =>
       val key = new RuleKey(g.sym1, g.sym2)
       if(rulePlans.put(key, g).isDefined) error(s"Duplicate rule ${g.sym1} <-> ${g.sym2}", g)
   }

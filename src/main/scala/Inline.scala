@@ -13,7 +13,7 @@ class Inline(global: Global) extends Phase {
 
   def apply(n: CompilationUnit): CompilationUnit = {
     val inlinableRules = n.statements.iterator.collect {
-      case r: RulePlan if r.branches.length == 1 && r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty =>
+      case r: RuleWiring if r.branches.length == 1 && r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty =>
         //TODO inline branches with conditions and merge with parent branches
         //TODO support embedded computations
         (r.key, r)
@@ -21,7 +21,7 @@ class Inline(global: Global) extends Phase {
     val directInlinable = (for {
       (k, r) <- inlinableRules.iterator
     } yield k -> findInlinable(r.branches.head, inlinableRules).iterator.map(_._3).toVector).toMap
-    def verify(r: RulePlan, used: Set[RuleKey], usedList: List[RuleKey]): Unit = {
+    def verify(r: RuleWiring, used: Set[RuleKey], usedList: List[RuleKey]): Unit = {
       if(used.contains(r.key)) error(s"Diverging expansion ${usedList.reverse.map(k => s"($k)").mkString(" => ")}", r.branches.head)
       else {
         val direct = directInlinable.getOrElse(r.key, Vector.empty)
@@ -35,14 +35,14 @@ class Inline(global: Global) extends Phase {
 
     val proc: Transform = new Transform {
       override def apply(n: Statement): Vector[Statement] = n match {
-        case n: RulePlan => super.apply(n)
+        case n: RuleWiring => super.apply(n)
         case n => Vector(n)
       }
-      @tailrec final override def apply(n: BranchPlan): BranchPlan = {
+      @tailrec final override def apply(n: BranchWiring): BranchWiring = {
         val pairs = findInlinable(n, inlinableRules)
         if(pairs.isEmpty) n
         else {
-          def inlineAll(n: BranchPlan, ps: List[(Int, Int, RulePlan)]): BranchPlan = ps match {
+          def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
             case (c1, c2, r) :: ps =>
               val (n2, mapping) = inline(n, c1, c2, r)
               inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
@@ -56,14 +56,14 @@ class Inline(global: Global) extends Phase {
     proc(n)
   }
 
-  private[this] def findInlinable(n: BranchPlan, rules: Map[RuleKey, RulePlan]): Set[(Int, Int, RulePlan)] =
+  private[this] def findInlinable(n: BranchWiring, rules: Map[RuleKey, RuleWiring]): Set[(Int, Int, RuleWiring)] =
     n.intConns.iterator.collect { case Connection(CellIdx(c1, -1), CellIdx(c2, -1)) =>
       (c1, c2, rules.get(new RuleKey(n.cells(c1), n.cells(c2))))
     }.collect { case (c1, c2, Some(r)) =>
       if(n.cells(c1) == r.sym1)  (c1, c2, r) else (c2, c1, r)
     }.toSet
 
-  private[this] def inline(b: BranchPlan, c1: Int, c2: Int, r: RulePlan): (BranchPlan, Map[Int, Int]) = {
+  private[this] def inline(b: BranchWiring, c1: Int, c2: Int, r: RuleWiring): (BranchWiring, Map[Int, Int]) = {
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
     val ib = r.branches.head
     val outerCellsIndexed = b.cells.iterator.zipWithIndex.filter { case (_, i) => i != c1 && i != c2 }.toVector
