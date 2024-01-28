@@ -1,14 +1,16 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.Symbol
+import de.szeiger.interact.ast.{PayloadType, Symbol}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 class BranchPlan(val reuse1: Int, val reuse2: Int,
+  val cond: Option[PayloadComputation],
   val sortedConns: Vector[Connection],
   val createLabelComps: Vector[(CreateLabelsComp, Int)],
   val otherPayloadComps: Vector[PayloadComputation],
+  val payloadTemp: Vector[(PayloadType, Boolean)],
   val cellCreateInstructions: Vector[CreateInstruction],
   val cellCount: Int,
   val cellPortsConnected: mutable.HashSet[CellIdx],
@@ -44,7 +46,6 @@ class PlanRules(config: BackendConfig) {
     var statSingletonUse = 0
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
-
     val cellsCreated = new Array[Boolean](branch.cells.length)
     instructions ++= (for(idx <- cellCreationOrder) yield {
       val instr = branch.cells(idx) match {
@@ -60,11 +61,36 @@ class PlanRules(config: BackendConfig) {
       cellsCreated(idx) = true
       instr
     })
-
+    val payloadTemp = computePayloadTemp(branch.cond.toVector ++ branch.payloadComps)
     val loopOn1 = reuse1 != -1 && ((rule.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
     val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
-    new BranchPlan(reuse1, reuse2, sortedConns, createLabelComps, otherPayloadComps,
+    new BranchPlan(reuse1, reuse2, branch.cond, sortedConns, createLabelComps, otherPayloadComps, payloadTemp,
       instructions.result(), branch.cells.length, cellPortsConnected, statSingletonUse, loopOn1, loopOn2)
+  }
+
+  // Find all temporary payload variables and whether or not they need to be boxed
+  private def computePayloadTemp(pcs: Iterable[PayloadComputation]): Vector[(PayloadType, Boolean)] = {
+    val payloadTemp = ArrayBuffer.empty[(PayloadType, Boolean)]
+    def getPayloadTemp(i: Int) = if(i < payloadTemp.length) payloadTemp(i) else null
+    def setPayloadTemp(i: Int, pt: PayloadType, boxed: Boolean): Unit = {
+      while(payloadTemp.length < i+1) payloadTemp += null
+      payloadTemp(i) = ((pt, boxed))
+    }
+    def assign(ea: EmbArg, box: Boolean): Unit = ea match {
+      case EmbArg.Temp(idx, pt) =>
+        val old = getPayloadTemp(idx)
+        setPayloadTemp(idx, pt, if(old == null) box else old._2 || box)
+      case _ =>
+    }
+    def f(pc: PayloadComputation): Unit = pc match {
+      case PayloadMethodApplication(embTp, args) => args.zip(embTp.args.map(_._2)).foreach { case (a, out) => assign(a, out) }
+      case PayloadMethodApplicationWithReturn(m, ret) => f(m); assign(ret, false)
+      case PayloadAssignment(src, target, _) => assign(src, false); assign(target, false)
+      case CreateLabelsComp(_, args) => args.foreach(assign(_, false))
+    }
+    pcs.foreach(f)
+    payloadTemp.foreach(t => assert(t != null))
+    payloadTemp.toVector
   }
 
   private def findReuse(rule: GenericRuleWiring, branch: BranchWiring): (Int, Int, Set[Connection]) = {

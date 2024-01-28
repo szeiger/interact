@@ -137,7 +137,7 @@ object EmbArg {
   final case class Const(v: Any) extends EmbArg {
     override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$v")
   }
-  //final case class Temp(idx: Int) extends EmbIdx
+  final case class Temp(idx: Int, pt: PayloadType) extends EmbArg
 }
 
 sealed abstract class PayloadComputation extends Node {

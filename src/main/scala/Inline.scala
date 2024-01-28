@@ -13,9 +13,8 @@ class Inline(global: Global) extends Phase {
 
   def apply(n: CompilationUnit): CompilationUnit = {
     val inlinableRules = n.statements.iterator.collect {
-      case r: RuleWiring if r.branches.length == 1 && r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty =>
+      case r: RuleWiring if r.branches.length == 1 =>
         //TODO inline branches with conditions and merge with parent branches
-        //TODO support embedded computations
         (r.key, r)
     }.toMap
     val directInlinable = (for {
@@ -63,15 +62,22 @@ class Inline(global: Global) extends Phase {
       if(n.cells(c1) == r.sym1)  (c1, c2, r) else (c2, c1, r)
     }.toSet
 
-  private[this] def inline(b: BranchWiring, c1: Int, c2: Int, r: RuleWiring): (BranchWiring, Map[Int, Int]) = {
+  private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring): (BranchWiring, Map[Int, Int]) = {
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
-    val ib = r.branches.head
-    val outerCellsIndexed = b.cells.iterator.zipWithIndex.filter { case (_, i) => i != c1 && i != c2 }.toVector
+    val ib = inner.branches.head
+    val outerCellsIndexed = outer.cells.iterator.zipWithIndex.filter { case (_, i) => i != c1 && i != c2 }.toVector
     val outerCells = outerCellsIndexed.map(_._1)
     val outerCellsMapping = outerCellsIndexed.iterator.map(_._2).zipWithIndex.map { case (iold, inew) => iold -> inew }.toMap
+    val innerCellOffset = outerCells.length
     val innerMapping = mutable.HashMap.empty[Idx, Idx]
+    val newTempOffset = tempCount(outer.payloadComps ++ outer.cond)
+    val c1Temp = if(outer.cells(c1).payloadType.isDefined) EmbArg.Temp(newTempOffset, outer.cells(c1).payloadType) else null
+    val c2Temp = if(outer.cells(c2).payloadType.isDefined) EmbArg.Temp(if(c1Temp != null) newTempOffset+1 else newTempOffset, outer.cells(c2).payloadType) else null
+    val innerTempOffset = newTempOffset + (if(c1Temp != null) 1 else 0) + (if(c2Temp != null) 1 else 0)
     val relabelOuter: Transform = new Transform {
       override def apply(n: EmbArg): EmbArg = n match {
+        case EmbArg.Cell(i) if i == c1 => c1Temp
+        case EmbArg.Cell(i) if i == c2 => c2Temp
         case EmbArg.Cell(i) => EmbArg.Cell(outerCellsMapping(i))
         case n => n
       }
@@ -93,10 +99,12 @@ class Inline(global: Global) extends Phase {
         else Set(Connection(remapO(n.c1), remapO(n.c2)))
       }
     }
-    val innerCellOffset = outerCells.length
     val relabelInner: Transform = new Transform {
       override def apply(n: EmbArg): EmbArg = n match {
+        case EmbArg.Left => c1Temp
+        case EmbArg.Right => c2Temp
         case EmbArg.Cell(i) => EmbArg.Cell(i + innerCellOffset)
+        case n @ EmbArg.Temp(i, _) => n.copy(i + innerTempOffset)
         case n => n
       }
       override def apply(n: Connection): Set[Connection] = {
@@ -107,9 +115,18 @@ class Inline(global: Global) extends Phase {
         Set(Connection(remap(n.c1), remap(n.c2)))
       }
     }
-    val b2 = b.copy(cells = outerCells ++ ib.cells,
-      conns = b.conns.flatMap(relabelOuter(_)) ++ ib.conns.flatMap(relabelInner(_)),
-      payloadComps = b.payloadComps.flatMap(relabelOuter(_)) ++ ib.payloadComps.flatMap(relabelInner(_)))
+    val b2 = outer.copy(cells = outerCells ++ ib.cells,
+      conns = outer.conns.flatMap(relabelOuter(_)) ++ ib.conns.flatMap(relabelInner(_)),
+      payloadComps = outer.payloadComps.flatMap(relabelOuter(_)) ++ ib.payloadComps.flatMap(relabelInner(_)))
     (b2, outerCellsMapping)
   }
+
+  private[this] def tempCount(pcs: Iterable[PayloadComputation]): Int =
+    (for {
+      pc <- pcs.iterator
+      ea <- pc.embArgs.iterator
+    } yield { ea match {
+      case ea: EmbArg.Temp => ea.idx + 1
+      case _ => 0
+    }}).maxOption.getOrElse(0)
 }

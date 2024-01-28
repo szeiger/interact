@@ -1,7 +1,7 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
-import de.szeiger.interact.{BackendConfig, BranchPlan, BranchWiring, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRuleWiring, GetSingletonCell, Global, Idx, InitialRuleWiring, IntBox, NewCell, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, PlanRules, RefBox, Reuse1, Reuse2, RuleKey, RuleWiring, Runtime}
+import de.szeiger.interact.{BackendConfig, BranchPlan, BranchWiring, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRuleWiring, GetSingletonCell, Global, Idx, InitialRuleWiring, IntBox, IntBoxImpl, NewCell, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, PlanRules, RefBox, RefBoxImpl, Reuse1, Reuse2, RuleKey, RuleWiring, Runtime}
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -19,6 +19,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val cellT = tp.c[Cell]
   private val intBoxT = tp.i[IntBox]
   private val refBoxT = tp.i[RefBox]
+  private val intBoxImplT = tp.c[IntBoxImpl]
+  private val refBoxImplT = tp.c[RefBoxImpl]
   private val commonCellT = tp.c(s"$genPackage/CommonCell")
   private val cellCacheT = tp.c(s"$genPackage/CellCache")
   private val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
@@ -36,6 +38,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private val refBox_getValue = refBoxT.method("getValue", tp.m()(tp.c[AnyRef]))
   private val refBox_setValue = refBoxT.method("setValue", tp.m(tp.c[AnyRef]).V)
   private val new_CommonCell = commonCellT.constr(tp.m().V)
+  private val new_IntBoxImpl = intBoxImplT.constr(tp.m().V)
+  private val new_RefBoxImpl = refBoxImplT.constr(tp.m().V)
 
   private def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
     tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(concreteCellTFor(sym1), concreteCellTFor(sym2), ptwT).V)
@@ -77,10 +81,9 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
   private def emitBranchReduce(m: MethodDSL, rule: GenericRuleWiring, branch: BranchWiring, isInitial: Boolean,
       cLeft: VarIdx, cRight: VarIdx, cLeftTp: ClassOwner, cRightTp: ClassOwner, ptw: VarIdx, methodStart: Label, methodEnd: Label): Unit = {
     val be = planner(rule, branch, rules)
-
     val branchEnd = m.newLabel
 
-    branch.cond.foreach { case pc: PayloadMethodApplication =>
+    be.cond.foreach { case pc: PayloadMethodApplication =>
       def adaptPayloadFromCell(cell: VarIdx, cellTp: Owner, cls: Class[_]): Unit = {
         m.aload(cell)
         if(cls == classOf[Int]) m.invoke(intBox_getValue, cellTp)
@@ -107,7 +110,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
     val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeLocal(tp.I) else VarIdx.none
-    val cells = mutable.ArraySeq.fill[VarIdx](be.cellCount)(VarIdx.none)
+    val cells = Array.fill[VarIdx](be.cellCount)(VarIdx.none)
     val reuse1Buffer = Array.fill[VarIdx](rule.arity1*2)(VarIdx.none)
     val reuse2Buffer = Array.fill[VarIdx](rule.arity2*2)(VarIdx.none)
 
@@ -291,6 +294,17 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
 
   private def computePayloads(m: MethodDSL, be: BranchPlan, cells: scala.collection.Seq[VarIdx], cLeft: VarIdx, cRight: VarIdx, pt1: PayloadType, pt2: PayloadType): Unit = {
+    val temp = be.payloadTemp.map {
+      //TODO use cached boxes
+      case (PayloadType.INT, true) => m.newInitDup(new_IntBoxImpl)().storeLocal(intBoxImplT)
+      case (PayloadType.INT, false) => m.local(tp.I)
+      case (_, true) => m.newInitDup(new_RefBoxImpl)().storeLocal(refBoxImplT)
+      case (_, false) => m.local(tp.c[AnyRef])
+    }
+    def unboxedTemp(ea: EmbArg): Option[VarIdx] = ea match {
+      case EmbArg.Temp(idx, _) if !be.payloadTemp(idx)._2 => Some(temp(idx))
+      case _ => None
+    }
     def cache(cell: VarIdx, pt: PayloadType): VarIdx = pt match {
       case PayloadType.VOID => VarIdx.none
       case PayloadType.INT => m.aload(cell).invoke(intBox_getValue).storeLocal(tp.I)
@@ -298,26 +312,45 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
     }
     val cachedPayload1 = cache(cLeft, pt1)
     val cachedPayload2 = cache(cRight, pt2)
-    be.createLabelComps.foreach { case (pc, idx) =>
-      if(idx == -1) m.newInitDup(tp.c[AnyRef].constr(tp.m().V))()
-      else m.aload(cells(idx))
-      pc.embArgs.indices.foreach { i =>
-        val EmbArg.Cell(idx) = pc.embArgs(i)
-        if(i != pc.embArgs.length-1) m.dup
-        m.aload(cells(idx)).swap.invoke(refBox_setValue)
-      }
-    }
-    def adaptCachedPayload(cached: VarIdx, cls: Class[_]): Unit = {
-      if(cls == classOf[Int]) m.iload(cached)
-      else if(cls == classOf[AnyRef]) m.aload(cached)
-      else m.aload(cached).checkcast(tp.o(cls))
-    }
     def loadArg(embArg: EmbArg, cls: Class[_]): Unit = embArg match {
       case EmbArg.Const(i: Int) => m.iconst(i)
       case EmbArg.Const(s: String) => m.ldc(s)
       case EmbArg.Left => adaptCachedPayload(cachedPayload1, cls)
       case EmbArg.Right => adaptCachedPayload(cachedPayload2, cls)
       case EmbArg.Cell(idx) => m.aload(cells(idx))
+      case EmbArg.Temp(idx, _) => adaptTempPayload(idx, cls)
+    }
+    be.createLabelComps.foreach { case (pc, idx) =>
+      if(idx == -1) m.newInitDup(tp.c[AnyRef].constr(tp.m().V))()
+      else m.aload(cells(idx))
+      pc.embArgs.indices.foreach { i =>
+        if(i != pc.embArgs.length-1) m.dup
+        unboxedTemp(pc.embArgs(i)) match {
+          case Some(vi) =>
+            m.astore(vi)
+          case None =>
+            loadArg(pc.embArgs(i), classOf[RefBox])
+            m.swap.invoke(refBox_setValue)
+        }
+      }
+    }
+    def adaptCachedPayload(cached: VarIdx, cls: Class[_]): Unit = {
+      if(cls == classOf[Int]) m.iload(cached)
+      else {
+        m.aload(cached)
+        if(cls != classOf[AnyRef]) m.checkcast(tp.o(cls))
+      }
+    }
+    def adaptTempPayload(idx: Int, cls: Class[_]): Unit = {
+      if(cls == classOf[Int]) {
+        if(be.payloadTemp(idx)._2) m.aload(temp(idx)).invoke(intBox_getValue)
+        else m.iload(temp(idx))
+      } else if(cls == classOf[IntBox] || cls == classOf[RefBox]) m.aload(temp(idx))
+      else {
+        if(be.payloadTemp(idx)._2) m.aload(temp(idx)).invoke(refBox_getValue)
+        else m.aload(temp(idx))
+        if(cls != classOf[AnyRef]) m.checkcast(tp.o(cls))
+      }
     }
     def setCellValue(embArg: EmbArg.Cell, cls: Class[_]): Unit =
       m.aload(cells(embArg.idx)).swap.invoke(if(cls == classOf[Int]) intBox_setValue else refBox_setValue)
@@ -330,17 +363,35 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Backend
       case pc: PayloadAssignment =>
         assert(pc.payloadType.isDefined)
         if(pc.payloadType == PayloadType.INT) {
-          loadArg(pc.targetIdx, classOf[IntBox])
-          loadArg(pc.sourceIdx, classOf[Int])
-          m.invoke(intBox_setValue)
+          unboxedTemp(pc.targetIdx) match {
+            case Some(vi) =>
+              loadArg(pc.sourceIdx, classOf[Int])
+              m.istore(vi)
+            case None =>
+              loadArg(pc.targetIdx, classOf[IntBox])
+              loadArg(pc.sourceIdx, classOf[Int])
+              m.invoke(intBox_setValue)
+          }
         } else {
-          loadArg(pc.targetIdx, classOf[RefBox])
-          loadArg(pc.sourceIdx, classOf[AnyRef])
-          m.invoke(refBox_setValue)
+          unboxedTemp(pc.targetIdx) match {
+            case Some(vi) =>
+              loadArg(pc.sourceIdx, classOf[AnyRef])
+              m.astore(vi)
+            case None =>
+              loadArg(pc.targetIdx, classOf[RefBox])
+              loadArg(pc.sourceIdx, classOf[AnyRef])
+              m.invoke(refBox_setValue)
+          }
         }
       case pc: PayloadMethodApplicationWithReturn =>
         callPayloadMethod(m, pc.method)(loadArgs(pc.method))
-        setCellValue(pc.retIndex.asInstanceOf[EmbArg.Cell], pc.method.jMethod.getReturnType)
+        unboxedTemp(pc.retIndex) match {
+          case Some(vi) =>
+            if(pc.method.embTp.ret == EmbeddedType.PayloadInt) m.istore(vi)
+            else m.astore(vi)
+          case None =>
+            setCellValue(pc.retIndex.asInstanceOf[EmbArg.Cell], pc.method.jMethod.getReturnType)
+        }
     }
   }
 

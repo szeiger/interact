@@ -6,6 +6,18 @@ trait RefOutput { def setValue(o: AnyRef): Unit }
 trait RefBox extends RefOutput { def getValue: AnyRef } // Also used for Label
 trait LifecycleManaged { def erase(): Unit; def copy(): LifecycleManaged }
 
+// Standalone boxes used for boxed temporary values in inlined payload computations
+final class IntBoxImpl extends IntBox {
+  private[this] var value: Int = _
+  def getValue: Int = value
+  def setValue(v: Int): Unit = value = v
+}
+final class RefBoxImpl extends RefBox {
+  private[this] var value: AnyRef = _
+  def getValue: AnyRef = value
+  def setValue(v: AnyRef): Unit = value = v
+}
+
 object Runtime {
   def add(a: Int, b: Int, res: IntOutput): Unit = res.setValue(a + b)
   def mult(a: Int, b: Int, res: IntOutput): Unit = res.setValue(a * b)
