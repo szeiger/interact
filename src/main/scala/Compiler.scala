@@ -4,8 +4,8 @@ import de.szeiger.interact.ast._
 
 import scala.collection.mutable
 
-class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig()) {
-  val global = new Global(_fconfig)
+class Compiler(unit0: CompilationUnit, _config: Config = Config()) {
+  val global = new Global(_config)
   import global._
 
   private[this] val phases: Vector[Phase] = Vector(
@@ -18,7 +18,7 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
     new Inline(global),
   )
 
-  private[this] val unit1 = if(fconfig.addEraseDup) {
+  private[this] val unit1 = if(config.addEraseDup) {
     val erase = globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
     val dup = globalSymbols.define("dup", isCons = true, isDef = true, arity = 2, returnArity = 2, payloadType = PayloadType.LABEL)
     unit0.copy(statements = Vector(DerivedRule(erase, erase), DerivedRule(erase, dup), DerivedRule(dup, dup)) ++ unit0.statements).setPos(unit0.pos)
@@ -26,7 +26,7 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
 
   val unit = phases.foldLeft(unit1) { case (u, p) =>
     val u2 = p(u)
-    if(fconfig.showAfter.contains(p.phaseName) || fconfig.showAfter.contains("*"))
+    if(config.showAfter.contains(p.phaseName) || config.showAfter.contains("*"))
       ShowableNode.print(u2, name = s"After phase ${p.phaseName}")
     checkThrow()
     u2
@@ -44,20 +44,9 @@ class Compiler(unit0: CompilationUnit, _fconfig: FrontendConfig = FrontendConfig
   }
   checkThrow()
 
-  def createMTInterpreter(bconfig: BackendConfig = BackendConfig()) : mt.Interpreter =
-    new mt.Interpreter(globalSymbols, rulePlans.values, bconfig, data, initialPlans)
-
-  def createSTInterpreter(bconfig: BackendConfig = BackendConfig()) : st.Interpreter =
-    new st.Interpreter(globalSymbols, rulePlans, bconfig, initialPlans)
-
-  def createInterpreter(spec: String, bconfig: BackendConfig = BackendConfig()): BaseInterpreter = {
-    spec match {
-      case s"st.i" => createSTInterpreter(bconfig.copy(compile = false))
-      case s"st.c" => createSTInterpreter(bconfig.copy(compile = true))
-      case s"mt${mode}.i" => createMTInterpreter(bconfig.copy(compile = false, numThreads = mode.toInt))
-      case s"mt${mode}.c" => createMTInterpreter(bconfig.copy(compile = true, numThreads = mode.toInt))
-    }
-  }
+  def createInterpreter(config: Config = global.config): BaseInterpreter =
+    if(config.multiThreaded) new mt.Interpreter(globalSymbols, rulePlans.values, config, data, initialPlans)
+    else new st.Interpreter(globalSymbols, rulePlans, config, initialPlans)
 }
 
 final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
@@ -74,14 +63,15 @@ trait Phase extends (CompilationUnit => CompilationUnit) {
   override def toString: String = phaseName
 }
 
-case class FrontendConfig(
+case class Config(
+  // Frontend
+  compile: Boolean = true,
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true,
   showAfter: Set[String] = Set.empty, // log AST after these phases
-)
 
-case class BackendConfig(
-  compile: Boolean = true,
+  // Backend
+  multiThreaded: Boolean = false,
   numThreads: Int = 0, // mt
   collectStats: Boolean = false,
   useCellCache: Boolean = false, // st.c
@@ -93,3 +83,12 @@ case class BackendConfig(
   inlineUniqueContinuations: Boolean = true, // st.c
   reuseCells: Boolean = true, // st.c
 )
+
+object Config {
+  def apply(spec: String): Config = spec match {
+    case s"st.i" => Config(compile = false, multiThreaded = false)
+    case s"st.c" => Config(compile = true, multiThreaded = false)
+    case s"mt${mode}.i" => Config(compile = false, multiThreaded = true, numThreads = mode.toInt)
+    case s"mt${mode}.c" => Config(compile = true, multiThreaded = true, numThreads = mode.toInt)
+  }
+}

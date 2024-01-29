@@ -1,14 +1,14 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader}
-import de.szeiger.interact.{CellIdx, BackendConfig, Connection, FreeIdx, RuleWiring}
+import de.szeiger.interact.{CellIdx, Config, Connection, FreeIdx, RuleWiring}
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
 import scala.collection.mutable.ArrayBuffer
 
-class CodeGen(genPackage: String, config: BackendConfig) extends AbstractCodeGen[RuleImpl](config) {
+class CodeGen(genPackage: String, config: Config) extends AbstractCodeGen[RuleImpl](config) {
   private val MAX_SPEC_CELL = 2
   private val interpreterPackage = "de/szeiger/interact/mt"
   private val riT = tp.c(s"$interpreterPackage/RuleImpl")

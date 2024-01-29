@@ -1,6 +1,6 @@
 package de.szeiger.interact.codegen
 
-import de.szeiger.interact.BackendConfig
+import de.szeiger.interact.Config
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.util.{CheckClassAdapter, Textifier, TraceClassVisitor}
@@ -9,7 +9,7 @@ import org.objectweb.asm.{ClassReader, ClassWriter}
 import java.io.{OutputStreamWriter, PrintWriter}
 import java.util.zip.CRC32
 
-abstract class AbstractCodeGen[RI](config: BackendConfig) {
+abstract class AbstractCodeGen[RI](config: Config) {
 
   private def encodeName(s: String): String = {
     val b = new StringBuilder()

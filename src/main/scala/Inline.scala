@@ -13,7 +13,7 @@ class Inline(global: Global) extends Phase {
 
   def apply(n: CompilationUnit): CompilationUnit = {
     val inlinableRules = n.statements.iterator.collect {
-      case r: RuleWiring if r.branches.length == 1 =>
+      case r: RuleWiring if r.branches.length == 1 && (config.compile || (r.sym1.payloadType.isEmpty && r.sym1.payloadType.isEmpty)) =>
         //TODO inline branches with conditions and merge with parent branches
         (r.key, r)
     }.toMap

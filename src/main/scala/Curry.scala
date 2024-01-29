@@ -9,7 +9,7 @@ class Curry(global: Global) extends Transform with Phase {
   import global._
 
   private[this] lazy val defaultDeriveSyms =
-    fconfig.defaultDerive.iterator.map(globalSymbols.get).filter(_.exists(_.isCons)).map(_.get).toVector
+    config.defaultDerive.iterator.map(globalSymbols.get).filter(_.exists(_.isCons)).map(_.get).toVector
 
   private[this] def derivedRules(syms1: Vector[Symbol], sym2: Symbol, pos: Position): Vector[DerivedRule] =
     syms1.flatMap { sym =>

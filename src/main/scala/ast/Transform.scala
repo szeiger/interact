@@ -182,8 +182,9 @@ abstract class Transform {
     val co2 = flatMapC(n.conns)(apply)
     val pc2 = flatMapOC(n.payloadComps)(apply)
     val cn2 = flatMapOC(n.cond)(apply)
-    if((co2 eq n.conns) && (pc2 eq n.payloadComps) && (cn2 eq n.cond)) n
-    else n.copy(n.cells, co2, pc2, cn2)
+    val bw2 = mapC(n.branches)(apply)
+    if((co2 eq n.conns) && (pc2 eq n.payloadComps) && (cn2 eq n.cond) && (bw2 eq n.branches)) n
+    else n.copy(n.cells, co2, pc2, cn2, bw2)
   }
 
   def apply(n: Connection): Set[Connection] = Set(n)

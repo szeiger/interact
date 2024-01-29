@@ -1,7 +1,7 @@
 package de.szeiger.interact.mt
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Analyzer, BackendConfig, BaseInterpreter, Compiler, ExecutionMetrics, InitialRuleWiring, PackedBranchWiring, RuleWiring}
+import de.szeiger.interact.{Analyzer, BaseInterpreter, Compiler, Config, ExecutionMetrics, InitialRuleWiring, PackedBranchWiring, RuleWiring}
 import de.szeiger.interact.ast.{CheckedRule, EmbeddedExpr, Let, Symbol, Symbols}
 import de.szeiger.interact.mt.workers.{Worker, Workers}
 import de.szeiger.interact.BitOps._
@@ -204,7 +204,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   def wireAllocationCount: Int = connections.length
 }
 
-final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: BackendConfig, compData: Iterable[Let],
+final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: Config, compData: Iterable[Let],
   compInitial: Iterable[InitialRuleWiring]) extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val scope: Analyzer[Cell] = new Analyzer[Cell] {

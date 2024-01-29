@@ -31,7 +31,7 @@ object PlanRules {
   def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty
 }
 
-class PlanRules(config: BackendConfig) {
+class PlanRules(config: Config) {
   import PlanRules._
 
   def apply(rule: GenericRuleWiring, branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): BranchPlan = {

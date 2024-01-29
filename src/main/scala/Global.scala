@@ -6,7 +6,7 @@ import java.io.{PrintWriter, StringWriter}
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
-final class Global(val fconfig: FrontendConfig) {
+final class Global(val config: Config) {
   final val globalSymbols = new Symbols
 
   private[this] var hasErrors: Boolean = false

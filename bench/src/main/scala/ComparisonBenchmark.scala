@@ -46,8 +46,8 @@ class ComparisonBenchmark {
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {
-    val model: Compiler = new Compiler(Parser.parse(source))
-    val inter = model.createInterpreter(spec)
+    val model: Compiler = new Compiler(Parser.parse(source), Config(spec))
+    val inter = model.createInterpreter()
     def setup(): BaseInterpreter = {
       inter.initData()
       inter

@@ -1,14 +1,14 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
-import de.szeiger.interact.{BackendConfig, BranchPlan, BranchWiring, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRuleWiring, GetSingletonCell, Global, Idx, InitialRuleWiring, IntBox, IntBoxImpl, NewCell, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, PlanRules, RefBox, RefBoxImpl, Reuse1, Reuse2, RuleKey, RuleWiring, Runtime}
+import de.szeiger.interact.{Config, BranchPlan, BranchWiring, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRuleWiring, GetSingletonCell, Global, Idx, InitialRuleWiring, IntBox, IntBoxImpl, NewCell, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, PlanRules, RefBox, RefBoxImpl, Reuse1, Reuse2, RuleKey, RuleWiring, Runtime}
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
 import scala.collection.mutable
 
-class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: BackendConfig,
+class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
   rules: scala.collection.Map[RuleKey, RuleWiring], initialRules: Iterable[InitialRuleWiring], globals: Symbols) extends AbstractCodeGen[RuleImpl](config) {
 
   val common = findCommonPartners()

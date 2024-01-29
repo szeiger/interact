@@ -106,10 +106,10 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {
-    val model: Compiler = new Compiler(Parser.parse(source))
+    val model: Compiler = new Compiler(Parser.parse(source), Config(spec))
 
     {
-      val i = model.createInterpreter(spec, BackendConfig(collectStats = true, logCodeGenSummary = true))
+      val i = model.createInterpreter(model.global.config.copy(collectStats = true, logCodeGenSummary = true))
       i.initData()
       println()
       i.reduce()
@@ -117,7 +117,7 @@ class InterpreterBenchmark {
       println()
     }
 
-    val inter = model.createInterpreter(spec, BackendConfig(logGeneratedClasses = None))
+    val inter = model.createInterpreter()
     def setup(): BaseInterpreter = {
       inter.initData()
       inter

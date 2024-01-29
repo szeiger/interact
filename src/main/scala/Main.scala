@@ -15,7 +15,7 @@ object Main extends App {
     val unit = Parser.parse(Path.of(args(0)))
     ShowableNode.print(unit)
     //statements.foreach(println)
-    val model = new Compiler(unit)
+    val model = new Compiler(unit, Config(compile = false, collectStats = true))
 
     //println("Constructors:")
     //model.constrs.foreach(c => println(s"  ${c.show}"))
@@ -28,7 +28,7 @@ object Main extends App {
     //ShowableNode.print(model.unit)
 
     ShowableNode.print(model.unit)
-    val inter = model.createSTInterpreter(BackendConfig(compile = false, collectStats = true))
+    val inter = model.createInterpreter()
     inter.initData()
     println("Initial state:")
     inter.getAnalyzer.log(System.out)

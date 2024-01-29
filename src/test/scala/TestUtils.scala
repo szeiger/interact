@@ -13,8 +13,8 @@ object TestUtils {
     val basePath = s"src/test/resources/$testName"
     val statements = Parser.parse(Path.of(basePath+".in"))
     val (result, success, steps) = try {
-      val model = new Compiler(statements, FrontendConfig(addEraseDup = addEraseDup, showAfter = Set.empty))
-      val inter = model.createInterpreter(spec, BackendConfig(collectStats = true))
+      val model = new Compiler(statements, Config(spec).copy(addEraseDup = addEraseDup, showAfter = Set()))
+      val inter = model.createInterpreter(model.global.config.copy(collectStats = true))
       inter.initData()
       inter.reduce()
       if(inter.getMetrics != null) inter.getMetrics.logStats()

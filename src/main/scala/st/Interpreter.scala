@@ -176,7 +176,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 }
 
 final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RuleWiring],
-  config: BackendConfig, initialRules: Iterable[InitialRuleWiring]) extends BaseInterpreter { self =>
+  config: Config, initialRules: Iterable[InitialRuleWiring]) extends BaseInterpreter { self =>
 
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
