@@ -214,6 +214,7 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
       if(port == -1) principals.get(c).map((_, -1)).getOrElse(null)
       else (c.auxCell(port), c.auxPort(port))
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
+    def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
   }
 
   def initData(): Unit = {

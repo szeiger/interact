@@ -1,6 +1,6 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.{PayloadType, Symbol}
+import de.szeiger.interact.ast.{NamedNodesBuilder, Node, NodesBuilder, PayloadType, Symbol}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -15,17 +15,30 @@ class BranchPlan(val reuse1: Int, val reuse2: Int,
   val cellCount: Int,
   val cellPortsConnected: mutable.HashSet[CellIdx],
   val statSingletonUse: Int,
-  val loopOn1: Boolean, val loopOn2: Boolean) {
+  val loopOn1: Boolean, val loopOn2: Boolean) extends Node {
 
   val statLabelCreate: Int = createLabelComps.count(_._2 == -1)
   def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
+
+  def show: String = s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, cellCount=$cellCount"
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
+    n += (cond, "cond") += (cellCreateInstructions, "cc") += (sortedConns, "c") += (createLabelComps.map(_._1), "lab") += (otherPayloadComps, "pay")
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 
-sealed trait CreateInstruction
-case class GetSingletonCell(cellIdx: Int, sym: Symbol) extends CreateInstruction
-case class Reuse1(cellIdx: Int) extends CreateInstruction
-case class Reuse2(cellIdx: Int) extends CreateInstruction
-case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateInstruction
+sealed trait CreateInstruction extends Node
+case class GetSingletonCell(cellIdx: Int, sym: Symbol) extends CreateInstruction {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym")
+}
+case class Reuse1(cellIdx: Int) extends CreateInstruction {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx")
+}
+case class Reuse2(cellIdx: Int) extends CreateInstruction {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx")
+}
+case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateInstruction {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym, [${args.map(_.show).mkString(", ")}]")
+}
 
 object PlanRules {
   def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty

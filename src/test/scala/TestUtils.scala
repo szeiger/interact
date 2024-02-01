@@ -9,12 +9,12 @@ import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicInteger
 
 object TestUtils {
-  def check(testName: String, spec: String, expectedSteps: Int = -1, addEraseDup: Boolean = true, fail: Boolean = false): Unit = {
+  def check(testName: String, expectedSteps: Int = -1, fail: Boolean = false, config: Config = Config.defaultConfig): Unit = {
     val basePath = s"src/test/resources/$testName"
     val statements = Parser.parse(Path.of(basePath+".in"))
     val (result, success, steps) = try {
-      val model = new Compiler(statements, Config(spec).copy(addEraseDup = addEraseDup, showAfter = Set()))
-      val inter = model.createInterpreter(model.global.config.copy(collectStats = true))
+      val model = new Compiler(statements, config.copy(collectStats = true))
+      val inter = model.createInterpreter()
       inter.initData()
       inter.reduce()
       if(inter.getMetrics != null) inter.getMetrics.logStats()

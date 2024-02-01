@@ -1,0 +1,26 @@
+cons A(x)
+cons B
+cons C(x)
+cons D
+
+match A(x) = B => C(x) = D; A(D) = C(D)
+match C(x) = D => x = D
+
+let A(res) = B
+
+
+cons Int[int]
+
+def f(_) = r
+  | Int[i] if [i == 0] => g(Int[i + 10])
+           else        => g(Int[i + 20])
+
+def g(_) = r
+  | Int[i] if [i == 10] => Int[1]
+           if [i == 21] => Int[2]
+           else         => Int[i]
+
+let
+  res1 = f(Int[0])
+  res2 = f(Int[1])
+  res22 = f(Int[2])

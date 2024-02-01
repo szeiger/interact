@@ -1,8 +1,8 @@
 package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
-import de.szeiger.interact.{Config, BranchPlan, BranchWiring, CellIdx, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRuleWiring, GetSingletonCell, Global, Idx, InitialRuleWiring, IntBox, IntBoxImpl, NewCell, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, PlanRules, RefBox, RefBoxImpl, Reuse1, Reuse2, RuleKey, RuleWiring, Runtime}
-import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.{BranchPlan, BranchWiring, CellIdx, Config, Connection, CreateLabelsComp, EmbArg, FreeIdx, GenericRuleWiring, GetSingletonCell, Global, Idx, InitialRuleWiring, IntBox, IntBoxImpl, NewCell, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, PlanRules, RefBox, RefBoxImpl, Reuse1, Reuse2, RuleKey, RuleWiring, Runtime}
+import de.szeiger.interact.ast.{EmbeddedType, PayloadType, ShowableNode, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
@@ -81,6 +81,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
   private def emitBranchReduce(m: MethodDSL, rule: GenericRuleWiring, branch: BranchWiring, isInitial: Boolean,
       cLeft: VarIdx, cRight: VarIdx, cLeftTp: ClassOwner, cRightTp: ClassOwner, ptw: VarIdx, methodStart: Label, methodEnd: Label): Unit = {
     val be = planner(rule, branch, rules)
+    //ShowableNode.print(be)
     val branchEnd = m.newLabel
 
     be.cond.foreach { case pc: PayloadMethodApplication =>

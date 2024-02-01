@@ -2,7 +2,6 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast.{CompilationUnit, ShowableNode, Statement, Transform}
 
-import scala.annotation.tailrec
 import scala.collection.mutable
 
 /**
@@ -12,47 +11,67 @@ class Inline(global: Global) extends Phase {
   import global._
 
   def apply(n: CompilationUnit): CompilationUnit = {
-    val inlinableRules = n.statements.iterator.collect {
-      case r: RuleWiring if r.branches.length == 1 && (config.compile || (r.sym1.payloadType.isEmpty && r.sym1.payloadType.isEmpty)) =>
-        //TODO inline branches with conditions and merge with parent branches
-        (r.key, r)
+    val allInlinableRules = n.statements.iterator.collect {
+      case r: RuleWiring if config.compile || (r.branches.length == 1 && r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty) => (r.key, r)
     }.toMap
+    val (fullyInlinableRules, chainableRules) = allInlinableRules.partition(_._2.branches.length == 1)
+    checkCircular(fullyInlinableRules)
+    val n2 = transformer(fullyInlinableRules, false)(n)
+    //TODO check conditionally inlined rules
+    //TODO inline branches with conditions and merge with parent branches
+    n2
+    //transformer(chainableRules, true)(n2)
+  }
+
+  def transformer(inlinableRules: Map[RuleKey, RuleWiring], chained: Boolean): Transform = new Transform {
+    val processed = mutable.Map.empty[RuleKey, RuleWiring]
+    override def apply(n: Statement): Vector[Statement] = n match {
+      case n: RuleWiring => apply(n)
+      case n => Vector(n)
+    }
+    override def apply(n: RuleWiring): Vector[Statement] = Vector(processRuleWiring(n, Set.empty))
+    def processRuleWiring(n: RuleWiring, via: Set[RuleKey]): RuleWiring = processed.get(n.key) match {
+      case Some(r) => r
+      case None if via.contains(n.key) => n
+      case None =>
+        val br2 = n.branches.zipWithIndex.map { case (b, i) => inlineInto(b, n.key, i, via) }
+        val n2 = n.copy(branches = br2)
+        if(!config.inlineDuplicate) processed.put(n.key, n2)
+        n2
+    }
+    def inlineInto(n: BranchWiring, key: RuleKey, branchIdx: Int, via: Set[RuleKey]): BranchWiring = {
+      assert(n.cellOffset == 0 && n.branches.isEmpty, s"in $key #$branchIdx")
+      val pairs = findInlinable(n, inlinableRules).collect { case (c1, c2, r) if key != r.key => (c1, c2, processRuleWiring(r, via + key)) }
+      if(pairs.isEmpty) n
+      else {
+        if(chained) println(s"***** inlining into ${key} #$branchIdx: ${pairs.map(_._3.key)}, via: $via")
+        def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
+          case (c1, c2, r) :: ps =>
+            val (n2, mapping) = inline(n, c1, c2, r)
+            inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
+          case Nil => n
+        }
+        inlineAll(n, pairs.toList)
+      }
+    }
+  }
+
+  private[this] def checkCircular(inlinableRules: Map[RuleKey, RuleWiring]): Unit = {
     val directInlinable = (for {
       (k, r) <- inlinableRules.iterator
     } yield k -> findInlinable(r.branches.head, inlinableRules).iterator.map(_._3).toVector).toMap
-    def verify(r: RuleWiring, used: Set[RuleKey], usedList: List[RuleKey]): Unit = {
-      if(used.contains(r.key)) error(s"Diverging expansion ${usedList.reverse.map(k => s"($k)").mkString(" => ")}", r.branches.head)
+
+    def check(r: RuleWiring, used: Set[RuleKey], usedList: List[RuleKey]): Unit = {
+      if(used.contains(r.key)) error(s"Circular expansion ${usedList.reverse.map(k => s"($k)").mkString(" => ")}", r.branches.head)
       else {
         val direct = directInlinable.getOrElse(r.key, Vector.empty)
         val subUsed = used + r.key
         val subUsedList = r.key :: usedList
-        direct.sortBy(_.pos).foreach { r2 => verify(r2, subUsed, subUsedList) }
+        direct.sortBy(_.pos).foreach { r2 => check(r2, subUsed, subUsedList) }
       }
     }
-    inlinableRules.values.toVector.sortBy(_.pos).foreach(verify(_, Set.empty, Nil))
+    inlinableRules.values.toVector.sortBy(_.pos).foreach(check(_, Set.empty, Nil))
     checkThrow()
-
-    val proc: Transform = new Transform {
-      override def apply(n: Statement): Vector[Statement] = n match {
-        case n: RuleWiring => super.apply(n)
-        case n => Vector(n)
-      }
-      @tailrec final override def apply(n: BranchWiring): BranchWiring = {
-        val pairs = findInlinable(n, inlinableRules)
-        if(pairs.isEmpty) n
-        else {
-          def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
-            case (c1, c2, r) :: ps =>
-              val (n2, mapping) = inline(n, c1, c2, r)
-              inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
-            case Nil => n
-          }
-          val newKeys = pairs.map(_._3.key).toSet
-          apply(inlineAll(n, pairs.toList))
-        }
-      }
-    }
-    proc(n)
   }
 
   private[this] def findInlinable(n: BranchWiring, rules: Map[RuleKey, RuleWiring]): Set[(Int, Int, RuleWiring)] =
@@ -63,6 +82,7 @@ class Inline(global: Global) extends Phase {
     }.toSet
 
   private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring): (BranchWiring, Map[Int, Int]) = {
+    assert(outer.cellOffset == 0 && outer.branches.isEmpty)
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
     val ib = inner.branches.head
     val outerCellsIndexed = outer.cells.iterator.zipWithIndex.filter { case (_, i) => i != c1 && i != c2 }.toVector
@@ -115,10 +135,17 @@ class Inline(global: Global) extends Phase {
         Set(Connection(remap(n.c1), remap(n.c2)))
       }
     }
-    val b2 = outer.copy(cells = outerCells ++ ib.cells,
-      conns = outer.conns.flatMap(relabelOuter(_)) ++ ib.conns.flatMap(relabelInner(_)),
-      payloadComps = outer.payloadComps.flatMap(relabelOuter(_)) ++ ib.payloadComps.flatMap(relabelInner(_)))
-    (b2, outerCellsMapping)
+    val outerConns = outer.conns.flatMap(relabelOuter(_))
+    val outerPayloadComps = outer.payloadComps.flatMap(relabelOuter(_))
+    val ib2 = ib.copy(cellOffset = ib.cellOffset + outerCells.length, conns = ib.conns.flatMap(relabelInner(_)), payloadComps = ib.payloadComps.flatMap(relabelInner(_)))
+    val b2 = outer.copy(cells = outerCells, conns = outerConns, payloadComps = outerPayloadComps, branches = Vector(ib2))
+    (merge(b2), outerCellsMapping)
+  }
+
+  private[this] def merge(b: BranchWiring): BranchWiring = {
+    assert(b.branches.length == 1 && b.branches.head.cellOffset == b.cells.length)
+    val ib = b.branches.head
+    b.copy(cells = b.cells ++ ib.cells, conns = b.conns ++ ib.conns, payloadComps = b.payloadComps ++ ib.payloadComps, branches = Vector.empty)
   }
 
   private[this] def tempCount(pcs: Iterable[PayloadComputation]): Int =

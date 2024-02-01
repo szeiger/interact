@@ -1,7 +1,6 @@
 package de.szeiger.interact
 
 import org.junit.Test
-import org.junit.Assert._
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import org.junit.runners.Parameterized.Parameters
@@ -12,13 +11,13 @@ import scala.jdk.CollectionConverters._
 class MainTest(spec: String) {
   val SCALE = 0
 
-  def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1, addEraseDup: Boolean = true, fail: Boolean = false): Unit =
-    for(i <- 1 to (if(SCALE == 0) 1 else SCALE * scaleFactor)) TestUtils.check(testName, spec, expectedSteps, addEraseDup, fail)
+  def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1, fail: Boolean = false, config: Config = Config.defaultConfig): Unit =
+    for(i <- 1 to (if(SCALE == 0) 1 else SCALE * scaleFactor)) TestUtils.check(testName, expectedSteps, fail, config.withSpec(spec))
 
   @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 32)
   @Test def testLists = check("lists")
   @Test def testParMult = check("par-mult")
-  @Test def testReduceRHS = check("reduce-rhs", expectedSteps = 1, addEraseDup = false)
+  @Test def testInlining = check("inlining", expectedSteps = 7)
   @Test def testFib = check("fib")
   @Test def testEmbedded = check("embedded")
   @Test def testAck = check("ack", expectedSteps = 12542077)

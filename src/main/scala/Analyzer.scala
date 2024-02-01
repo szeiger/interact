@@ -12,6 +12,7 @@ trait Analyzer[Cell] { self =>
   def getSymbol(c: Cell): Symbol
   def getConnected(c: Cell, port: Int): (Cell, Int)
   def isFreeWire(c: Cell): Boolean
+  def isSharedSingleton(c: Cell): Boolean
   def getPayload(c: Cell): Any
 
   def symbolName(c: Cell): String = getSymbol(c).id
@@ -44,7 +45,7 @@ trait Analyzer[Cell] { self =>
     s.iterator
   }
 
-  def allConnections(): (mutable.HashMap[(Cell, Int), (Cell, Int)], mutable.HashSet[Cell]) = {
+  private[this] def allConnections(): (mutable.HashMap[(Cell, Int), (Cell, Int)], mutable.HashSet[Cell]) = {
     val m = mutable.HashMap.empty[(Cell, Int), (Cell, Int)]
     val s = mutable.HashSet.empty[Cell]
     val q = mutable.ArrayBuffer.from(rootCells)
@@ -52,11 +53,12 @@ trait Analyzer[Cell] { self =>
       val c1 = q.last
       q.dropRightInPlace(1)
       if(s.add(c1)) {
+        val isWire = isFreeWire(c1)
         val conn = getAllConnected(c1).toVector
         conn.zipWithIndex.foreach {
           case (null, _) =>
           case ((c2, p2), _p1) =>
-            val p1 = _p1 - 1
+            val p1 = if(isWire) 0 else _p1 - 1
             m.put((c1, p1), (c2, p2))
             m.put((c2, p2), (c1, p1))
         }
@@ -72,12 +74,15 @@ trait Analyzer[Cell] { self =>
     val cuts = mutable.ArrayBuffer.empty[(Cell, Cell)]
     def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
     val freeWires = rootCells.iterator.filter(isFreeWire).toVector
-    val stack = mutable.Stack.from(freeWires.sortBy(c => getSymbol(c).id).map(c => getConnected(c, 0)._1))
+    val stack = mutable.Stack.from(freeWires.sortBy(c => getSymbol(c).id))
     val all = allConnections()._1
     val shown = mutable.HashSet.empty[Cell]
     var lastTmp = 0
     def tmp(): String = { lastTmp += 1; s"$$s$lastTmp" }
     val subst = mutable.HashMap.from(freeWires.iterator.map(c1 => ((c1, 0), getSymbol(c1).id)))
+    //println(s"**** $subst")
+    //def id(c: Cell): String = if(c == null) "null" else s"${getSymbol(c)}#${System.identityHashCode(c)}"
+    //all.foreach { case ((c1, p1), (c2, p2)) => println(s"    ${id(c1)}:$p1 . ${id(c2)}:$p2") }
     def nameOrSubst(c1: Cell, p1: Int, c2: Cell, p2: Int): String = subst.get(c2, p2) match {
       case Some(s) => s
       case None =>
@@ -93,11 +98,13 @@ trait Analyzer[Cell] { self =>
           mark + t
         }
     }
-    def show(c1: Cell, withRet: Boolean): String = {
+    def show(_c1: Cell, withRet: Boolean): String = {
+      val c1 = if(isFreeWire(_c1)) getConnected(_c1, 0)._1 else _c1
       shown += c1
       val sym = getSymbol(c1)
       def list(poss: IndexedSeq[Int]) = poss.map { p1 =>
-        all.get(c1, p1) match {
+        if(p1 == -1 && isFreeWire(_c1)) (getSymbol(_c1), nameOrSubst(c1, p1, _c1, 0))
+        else all.get(c1, p1) match {
           case Some((c2, p2)) => (getSymbol(c2), nameOrSubst(c1, p1, c2, p2))
           case None => (Symbol.NoSymbol, "?")
         }

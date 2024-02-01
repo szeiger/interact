@@ -1,0 +1,7 @@
+  res = D
+  res1 = Int[1]
+  res2 = Int[2]
+  res22 = Int[22]
+
+Irreducible pairs:
+  A <-> C

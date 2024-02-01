@@ -4,7 +4,7 @@ import de.szeiger.interact.ast._
 
 import scala.collection.mutable
 
-class Compiler(unit0: CompilationUnit, _config: Config = Config()) {
+class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
   val global = new Global(_config)
   import global._
 
@@ -69,6 +69,7 @@ case class Config(
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true,
   showAfter: Set[String] = Set.empty, // log AST after these phases
+  inlineDuplicate: Boolean = false, // inline conditional circular dependencies from all starting rules
 
   // Backend
   multiThreaded: Boolean = false,
@@ -82,13 +83,16 @@ case class Config(
   allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (st.c)
   inlineUniqueContinuations: Boolean = true, // st.c
   reuseCells: Boolean = true, // st.c
-)
+) {
+  def withSpec(spec: String): Config = spec match {
+    case s"st.i" => copy(compile = false, multiThreaded = false)
+    case s"st.c" => copy(compile = true, multiThreaded = false)
+    case s"mt${mode}.i" => copy(compile = false, multiThreaded = true, numThreads = mode.toInt)
+    case s"mt${mode}.c" => copy(compile = true, multiThreaded = true, numThreads = mode.toInt)
+  }
+}
 
 object Config {
-  def apply(spec: String): Config = spec match {
-    case s"st.i" => Config(compile = false, multiThreaded = false)
-    case s"st.c" => Config(compile = true, multiThreaded = false)
-    case s"mt${mode}.i" => Config(compile = false, multiThreaded = true, numThreads = mode.toInt)
-    case s"mt${mode}.c" => Config(compile = true, multiThreaded = true, numThreads = mode.toInt)
-  }
+  val defaultConfig: Config = Config()
+  def apply(spec: String): Config = defaultConfig.withSpec(spec)
 }
