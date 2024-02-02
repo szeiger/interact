@@ -16,7 +16,9 @@ class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
     new ResolveEmbedded(global),
     new CreateWiring(global),
     new Inline(global),
-  )
+  ) ++ (if(config.compile) Vector(
+    new PlanRules(global),
+  ) else Vector.empty)
 
   private[this] val unit1 = if(config.addEraseDup) {
     val erase = globalSymbols.define("erase", isCons = true, isDef = true, returnArity = 0)
@@ -32,30 +34,16 @@ class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
     u2
   }
 
-  private[this] val rulePlans = mutable.Map.empty[RuleKey, RuleWiring]
-  private[this] val data = mutable.ArrayBuffer.empty[Let]
-  private[this] val initialPlans = mutable.ArrayBuffer.empty[InitialRuleWiring]
-  unit.statements.foreach {
-    case i: InitialRuleWiring => initialPlans += i
-    case l: Let => data += l
-    case g: RuleWiring =>
-      val key = new RuleKey(g.sym1, g.sym2)
-      if(rulePlans.put(key, g).isDefined) error(s"Duplicate rule ${g.sym1} <-> ${g.sym2}", g)
-  }
-  checkThrow()
-
   def createInterpreter(config: Config = global.config): BaseInterpreter =
-    if(config.multiThreaded) new mt.Interpreter(globalSymbols, rulePlans.values, config, data, initialPlans)
-    else new st.Interpreter(globalSymbols, rulePlans, config, initialPlans)
-}
-
-final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
-  override def equals(o: Any): Boolean = o match {
-    case o: RuleKey => o.sym1 == sym1 && o.sym2 == sym2 || o.sym1 == sym2 && o.sym2 == sym1
-    case _ => false
-  }
-  override def hashCode(): Int = sym1.hashCode() + sym2.hashCode()
-  override def toString: String = s"$sym1 <-> $sym2"
+    if(config.multiThreaded) {
+      val rulePlans = mutable.Map.empty[RuleKey, RuleWiring]
+      val initialPlans = mutable.ArrayBuffer.empty[InitialRuleWiring]
+      unit.statements.foreach {
+        case i: InitialRuleWiring => initialPlans += i
+        case g: RuleWiring => rulePlans.put(g.key, g)
+      }
+      new mt.Interpreter(globalSymbols, rulePlans.values, config, mutable.ArrayBuffer.empty[Let], initialPlans)
+    } else new st.Interpreter(globalSymbols, unit, config)
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {

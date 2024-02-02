@@ -2,7 +2,7 @@ package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{PayloadType, Symbol, Symbols}
+import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.BitOps._
 
 import java.util.Arrays
@@ -175,8 +175,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
   }
 }
 
-final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, RuleWiring],
-  config: Config, initialRules: Iterable[InitialRuleWiring]) extends BaseInterpreter { self =>
+final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, config: Config) extends BaseInterpreter { self =>
 
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
@@ -244,21 +243,21 @@ final class Interpreter(globals: Symbols, rules: scala.collection.Map[RuleKey, R
 
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
     if(config.compile) {
-      val cg = new CodeGen("generated", new LocalClassLoader, config, rules, initialRules, globals)
+      val cg = new CodeGen("generated", new LocalClassLoader, config, compilationUnit, globals)
       val (initial, classToSym) = cg.compile()
       (null, 0, initial, classToSym)
     } else {
       val ris = new Array[RuleImpl](1 << (symBits << 1))
       val maxC = new ParSupport.AtomicCounter
       val classToSymbol = Map.newBuilder[Class[_], Symbol]
-      ParSupport.foreach(rules.values, config.compilerParallelism) { g =>
+      ParSupport.foreach(compilationUnit.statements.collect { case g: RuleWiring => g }, config.compilerParallelism) { g =>
         maxC.max(g.maxCells)
         val sym1Id = getSymbolId(g.sym1)
         val ri = g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, g, b, Option(z)) }
         ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
       }
       val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
-      initialRules.zipWithIndex.foreach { case (ip, i) =>
+      (compilationUnit.statements.collect { case i: InitialRuleWiring => i }).zipWithIndex.foreach { case (ip, i) =>
         maxC.max(ip.maxCells)
         initial += ((ip.free, createInterpretedRuleImpl(0, ip, ip.branch, None)))
       }

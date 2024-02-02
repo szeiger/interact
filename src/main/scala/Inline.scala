@@ -1,6 +1,6 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.{CompilationUnit, ShowableNode, Statement, Transform}
+import de.szeiger.interact.ast.{CompilationUnit, RuleKey, ShowableNode, Statement, Transform}
 
 import scala.collection.mutable
 
@@ -51,7 +51,8 @@ class Inline(global: Global) extends Phase {
             inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
           case Nil => n
         }
-        inlineAll(n, pairs.toList)
+        if(chained) inlineAll(n, pairs.toList.take(1))
+        else inlineAll(n, pairs.toList)
       }
     }
   }
@@ -84,7 +85,6 @@ class Inline(global: Global) extends Phase {
   private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring): (BranchWiring, Map[Int, Int]) = {
     assert(outer.cellOffset == 0 && outer.branches.isEmpty)
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
-    val ib = inner.branches.head
     val outerCellsIndexed = outer.cells.iterator.zipWithIndex.filter { case (_, i) => i != c1 && i != c2 }.toVector
     val outerCells = outerCellsIndexed.map(_._1)
     val outerCellsMapping = outerCellsIndexed.iterator.map(_._2).zipWithIndex.map { case (iold, inew) => iold -> inew }.toMap
@@ -119,6 +119,8 @@ class Inline(global: Global) extends Phase {
         else Set(Connection(remapO(n.c1), remapO(n.c2)))
       }
     }
+    val outerConns = outer.conns.flatMap(relabelOuter(_))
+    val outerPayloadComps = outer.payloadComps.flatMap(relabelOuter(_))
     val relabelInner: Transform = new Transform {
       override def apply(n: EmbArg): EmbArg = n match {
         case EmbArg.Left => c1Temp
@@ -135,11 +137,16 @@ class Inline(global: Global) extends Phase {
         Set(Connection(remap(n.c1), remap(n.c2)))
       }
     }
-    val outerConns = outer.conns.flatMap(relabelOuter(_))
-    val outerPayloadComps = outer.payloadComps.flatMap(relabelOuter(_))
-    val ib2 = ib.copy(cellOffset = ib.cellOffset + outerCells.length, conns = ib.conns.flatMap(relabelInner(_)), payloadComps = ib.payloadComps.flatMap(relabelInner(_)))
-    val b2 = outer.copy(cells = outerCells, conns = outerConns, payloadComps = outerPayloadComps, branches = Vector(ib2))
-    (merge(b2), outerCellsMapping)
+    def mapInner(b: BranchWiring): BranchWiring =
+      b.copy(
+        cellOffset = b.cellOffset + outerCells.length,
+        conns = b.conns.flatMap(relabelInner(_)),
+        payloadComps = b.payloadComps.flatMap(relabelInner(_)),
+        cond = b.cond.flatMap(relabelInner(_)),
+        branches = b.branches.map(mapInner)
+      )
+    val b2 = outer.copy(cells = outerCells, conns = outerConns, payloadComps = outerPayloadComps, branches = inner.branches.map(mapInner))
+    (if(b2.branches.length == 1) merge(b2) else b2, outerCellsMapping)
   }
 
   private[this] def merge(b: BranchWiring): BranchWiring = {

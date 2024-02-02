@@ -1,7 +1,7 @@
 package de.szeiger.interact.ast
 
 import java.io.{OutputStreamWriter, PrintWriter}
-import de.szeiger.interact.{ConvenientParserInput, Runtime, MaybeColors}
+import de.szeiger.interact.{ConvenientParserInput, MaybeColors, Runtime}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -168,10 +168,20 @@ final case class Branch(cond: Option[EmbeddedExpr], embRed: Vector[EmbeddedExpr]
     Branch(cond, embRed, reduced).setPos(pos)
 }
 
+final class RuleKey(val sym1: Symbol, val sym2: Symbol) {
+  override def equals(o: Any): Boolean = o match {
+    case o: RuleKey => o.sym1 == sym1 && o.sym2 == sym2 || o.sym1 == sym2 && o.sym2 == sym1
+    case _ => false
+  }
+  override def hashCode(): Int = sym1.hashCode() + sym2.hashCode()
+  override def toString: String = s"$sym1 <-> $sym2"
+}
+
 sealed trait CheckedRule extends Statement {
   def sym1: Symbol
   def sym2: Symbol
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"${sym1.uniqueStr} . ${sym2.uniqueStr}")
+  def key: RuleKey = new RuleKey(sym1, sym2)
 }
 
 final case class DerivedRule(sym1: Symbol, sym2: Symbol) extends CheckedRule {

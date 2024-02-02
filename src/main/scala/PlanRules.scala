@@ -1,28 +1,44 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.{NamedNodesBuilder, Node, NodesBuilder, PayloadType, Symbol}
+import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, Statement, Symbol}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, branches: Vector[BranchPlan],
+  initialSyms: Option[Vector[Symbol]]) extends Statement {
+  def initial = initialSyms.isDefined
+  def show: String = s"sym1=$sym1, sym2=$sym2, arity1=$arity1, arity2=$arity2, initial=$initial"
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
+  def key: RuleKey = new RuleKey(sym1, sym2)
+}
+
 class BranchPlan(val reuse1: Int, val reuse2: Int,
+  val cellSyms: Vector[Symbol],
+  val cellOffset: Int,
   val cond: Option[PayloadComputation],
   val sortedConns: Vector[Connection],
   val createLabelComps: Vector[(CreateLabelsComp, Int)],
   val otherPayloadComps: Vector[PayloadComputation],
   val payloadTemp: Vector[(PayloadType, Boolean)],
   val cellCreateInstructions: Vector[CreateInstruction],
-  val cellCount: Int,
   val cellPortsConnected: mutable.HashSet[CellIdx],
   val statSingletonUse: Int,
+  val branches: Vector[BranchPlan],
   val loopOn1: Boolean, val loopOn2: Boolean) extends Node {
 
   val statLabelCreate: Int = createLabelComps.count(_._2 == -1)
   def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
+  def totalCellCount: Int = cellSyms.length + branches.map(_.totalCellCount).max
 
-  def show: String = s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, cellCount=$cellCount"
+  def show: String = {
+    val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
+    s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, $c"
+  }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (cond, "cond") += (cellCreateInstructions, "cc") += (sortedConns, "c") += (createLabelComps.map(_._1), "lab") += (otherPayloadComps, "pay")
+    n += (cond, "cond") += (cellCreateInstructions, "cc") += (sortedConns, "c") += (createLabelComps.map(_._1), "lab") +=
+      (otherPayloadComps, "pay") += (branches, "br")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 
@@ -40,15 +56,22 @@ case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateI
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym, [${args.map(_.show).mkString(", ")}]")
 }
 
-object PlanRules {
-  def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty
-}
-
-class PlanRules(config: Config) {
+/** Translate RuleWiring/BranchWiring to RulePlan/BranchPlan for the code generator */
+class PlanRules(global: Global) extends Phase {
+  import global._
   import PlanRules._
 
-  def apply(rule: GenericRuleWiring, branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): BranchPlan = {
-    val (reuse1, reuse2, skipConns) = findReuse(rule, branch)
+  override def apply(u: CompilationUnit): CompilationUnit = {
+    val rules = u.statements.collect { case r: RuleWiring => (r.key, r) }.toMap
+    u.copy(u.statements.map {
+      case n: RuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules)), None)
+      case n: InitialRuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules)), Some(n.free))
+      case s => s
+    })
+  }
+
+  def createBranchPlan(rule: Option[GenericRuleWiring], branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): BranchPlan = {
+    val (reuse1, reuse2, skipConns) = rule.map(findReuse(_, branch)).getOrElse((-1, -1, Set.empty[Connection]))
     val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
     val cellCreationOrder = optimizeCellCreationOrder(branch.cells.length, branch.intConns)
     val sortedConns = optimizeConnectionOrder(conns)
@@ -75,10 +98,11 @@ class PlanRules(config: Config) {
       instr
     })
     val payloadTemp = computePayloadTemp(branch.cond.toVector ++ branch.payloadComps)
-    val loopOn1 = reuse1 != -1 && ((rule.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
-    val loopOn2 = reuse2 != -1 && ((rule.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
-    new BranchPlan(reuse1, reuse2, branch.cond, sortedConns, createLabelComps, otherPayloadComps, payloadTemp,
-      instructions.result(), branch.cells.length, cellPortsConnected, statSingletonUse, loopOn1, loopOn2)
+    val loopOn1 = reuse1 != -1 && ((rule.get.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
+    val loopOn2 = reuse2 != -1 && ((rule.get.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
+    val branches = branch.branches.map(createBranchPlan(None, _, rules))
+    new BranchPlan(reuse1, reuse2, branch.cells, branch.cellOffset, branch.cond, sortedConns, createLabelComps, otherPayloadComps, payloadTemp,
+      instructions.result(), cellPortsConnected, statSingletonUse, branches, loopOn1, loopOn2)
   }
 
   // Find all temporary payload variables and whether or not they need to be boxed
@@ -262,4 +286,8 @@ class PlanRules(config: Config) {
     }
     creators.zip(assignments)
   }
+}
+
+object PlanRules {
+  def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty
 }

@@ -2,6 +2,8 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast._
 
+import scala.collection.mutable
+
 /**
  * Create curried and derived rules, and remove all Cons and Def statements.
  */
@@ -93,5 +95,16 @@ class Curry(global: Global) extends Transform with Phase {
       lazy val dup = DerivedRule(globalSymbols("dup"), d.name.sym).setPos(d.name.pos)
       if(d.name.s != "dup" && d.name.s != "erase") Vector(erase, dup) else Vector(erase)
     case n => Vector(n)
+  }
+
+  override def apply(n: CompilationUnit): CompilationUnit = {
+    val n2 = super.apply(n)
+    val keys = mutable.HashSet.empty[RuleKey]
+    n2.statements.foreach {
+      case c: CheckedRule =>
+        if(!keys.add(c.key)) error(s"Duplicate rule ${c.sym1} <-> ${c.sym2}", c)
+      case _ =>
+    }
+    n2
   }
 }
