@@ -12,8 +12,8 @@ let A(res) = B
 cons Int[int]
 
 def f(_) = r
-  | Int[i] if [i == 0] => g(Int[i + 10])
-           else        => g(Int[i + 20])
+  | Int[i] if [i == 0] => B = B; g(Int[i + 10])
+           else        => B = B; B = B; g(Int[i + 20])
 
 def g(_) = r
   | Int[i] if [i == 10] => Int[1]

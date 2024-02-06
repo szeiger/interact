@@ -40,8 +40,8 @@ class CodeGen(genPackage: String, config: Config) extends AbstractCodeGen[RuleIm
   private val new_WireRef_LILI = wrT.constr(tp.m(cellT, tp.I, cellT, tp.I).V)
 
   def compileRule(g: RuleWiring, cl: LocalClassLoader): RuleImplFactory[RuleImpl] = {
-    val name1 = encodeName(g.sym1)
-    val name2 = encodeName(g.sym2)
+    val name1 = AbstractCodeGen.encodeName(g.sym1)
+    val name2 = AbstractCodeGen.encodeName(g.sym2)
     val implClassName = s"$genPackage/Rule_$name1$$_$name2"
     val factClassName = s"$genPackage/RuleFactory_$name1$$_$name2"
     val syms = (Iterator.single(g.sym1) ++ g.branches.iterator.flatMap(_.cells)).distinct.toArray

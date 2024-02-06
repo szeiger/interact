@@ -8,8 +8,8 @@ import java.util.concurrent.TimeUnit
 @BenchmarkMode(Array(Mode.Throughput))
 @Fork(value = 1, jvmArgsAppend = Array("-Xmx12g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
 @Threads(1)
-@Warmup(iterations = 15, time = 1)
-@Measurement(iterations = 15, time = 1)
+@Warmup(iterations = 11, time = 1)
+@Measurement(iterations = 11, time = 1)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Benchmark)
 class InterpreterBenchmark {
@@ -162,8 +162,8 @@ class InterpreterBenchmark {
   def ack38(bh: Blackhole): Unit =
     bh.consume(ack38Inter.setup().reduce())
 
-//  @Benchmark
-//  @OperationsPerInvocation(8360028)
-//  def ack38b(bh: Blackhole): Unit =
-//    bh.consume(ack38bInter.setup().reduce())
+  @Benchmark
+  @OperationsPerInvocation(8360028)
+  def ack38b(bh: Blackhole): Unit =
+    bh.consume(ack38bInter.setup().reduce())
 }

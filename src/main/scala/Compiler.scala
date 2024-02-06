@@ -58,6 +58,7 @@ case class Config(
   addEraseDup: Boolean = true,
   showAfter: Set[String] = Set.empty, // log AST after these phases
   inlineDuplicate: Boolean = false, // inline conditional circular dependencies from all starting rules
+  inlineBranching: Boolean = true, // inline rules that cannot be merged into a single branch (st.c)
 
   // Backend
   multiThreaded: Boolean = false,

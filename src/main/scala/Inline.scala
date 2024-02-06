@@ -17,10 +17,8 @@ class Inline(global: Global) extends Phase {
     val (fullyInlinableRules, chainableRules) = allInlinableRules.partition(_._2.branches.length == 1)
     checkCircular(fullyInlinableRules)
     val n2 = transformer(fullyInlinableRules, false)(n)
-    //TODO check conditionally inlined rules
-    //TODO inline branches with conditions and merge with parent branches
-    n2
-    //transformer(chainableRules, true)(n2)
+    if(config.compile && config.inlineBranching) transformer(chainableRules, true)(n2)
+    else n2
   }
 
   def transformer(inlinableRules: Map[RuleKey, RuleWiring], chained: Boolean): Transform = new Transform {
@@ -44,7 +42,7 @@ class Inline(global: Global) extends Phase {
       val pairs = findInlinable(n, inlinableRules).collect { case (c1, c2, r) if key != r.key => (c1, c2, processRuleWiring(r, via + key)) }
       if(pairs.isEmpty) n
       else {
-        if(chained) println(s"***** inlining into ${key} #$branchIdx: ${pairs.map(_._3.key)}, via: $via")
+        //if(chained) println(s"***** inlining into ${key} #$branchIdx: ${pairs.map(_._3.key)}, via: $via")
         def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
           case (c1, c2, r) :: ps =>
             val (n2, mapping) = inline(n, c1, c2, r)
@@ -90,10 +88,11 @@ class Inline(global: Global) extends Phase {
     val outerCellsMapping = outerCellsIndexed.iterator.map(_._2).zipWithIndex.map { case (iold, inew) => iold -> inew }.toMap
     val innerCellOffset = outerCells.length
     val innerMapping = mutable.HashMap.empty[Idx, Idx]
-    val newTempOffset = tempCount(outer.payloadComps ++ outer.cond)
-    val c1Temp = if(outer.cells(c1).payloadType.isDefined) EmbArg.Temp(newTempOffset, outer.cells(c1).payloadType) else null
-    val c2Temp = if(outer.cells(c2).payloadType.isDefined) EmbArg.Temp(if(c1Temp != null) newTempOffset+1 else newTempOffset, outer.cells(c2).payloadType) else null
-    val innerTempOffset = newTempOffset + (if(c1Temp != null) 1 else 0) + (if(c2Temp != null) 1 else 0)
+    val outerTempCount = tempCount(outer.payloadComps ++ outer.cond)
+    val c1Temp = if(outer.cells(c1).payloadType.isDefined) EmbArg.Temp(outerTempCount, outer.cells(c1).payloadType) else null
+    val c2Temp = if(outer.cells(c2).payloadType.isDefined) EmbArg.Temp(if(c1Temp != null) outerTempCount+1 else outerTempCount, outer.cells(c2).payloadType) else null
+    val innerTempOffset = outerTempCount + (if(c1Temp != null) 1 else 0) + (if(c2Temp != null) 1 else 0)
+
     val relabelOuter: Transform = new Transform {
       override def apply(n: EmbArg): EmbArg = n match {
         case EmbArg.Cell(i) if i == c1 => c1Temp
@@ -143,7 +142,8 @@ class Inline(global: Global) extends Phase {
         conns = b.conns.flatMap(relabelInner(_)),
         payloadComps = b.payloadComps.flatMap(relabelInner(_)),
         cond = b.cond.flatMap(relabelInner(_)),
-        branches = b.branches.map(mapInner)
+        branches = b.branches.map(mapInner),
+        tempOffset = b.tempOffset + innerTempOffset,
       )
     val b2 = outer.copy(cells = outerCells, conns = outerConns, payloadComps = outerPayloadComps, branches = inner.branches.map(mapInner))
     (if(b2.branches.length == 1) merge(b2) else b2, outerCellsMapping)

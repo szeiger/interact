@@ -5,6 +5,7 @@ import org.objectweb.asm.Opcodes._
 import org.objectweb.asm.tree.{AbstractInsnNode, FieldInsnNode, IincInsnNode, InsnNode, IntInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LineNumberNode, LookupSwitchInsnNode, MethodInsnNode, MultiANewArrayInsnNode, TableSwitchInsnNode, TryCatchBlockNode, TypeInsnNode, VarInsnNode}
 import org.objectweb.asm.util.Printer
 
+import java.util.Arrays
 import scala.collection.mutable.ArrayBuffer
 
 final class VarIdx(val idx: Int) extends AnyVal {
@@ -13,6 +14,14 @@ final class VarIdx(val idx: Int) extends AnyVal {
 }
 object VarIdx {
   def none: VarIdx = new VarIdx(-1)
+}
+
+final class VarIdxArray(val length: Int) {
+  private[this] val arr = new Array[Int](length)
+  Arrays.fill(arr, -1)
+  @inline def apply(idx: Int): VarIdx = new VarIdx(arr(idx))
+  @inline def update(idx: Int, v: VarIdx): Unit = arr(idx) = v.idx
+  def clearFrom(idx: Int): Unit = Arrays.fill(arr, idx, arr.length, -1)
 }
 
 object DSL {
@@ -174,7 +183,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
   }
 
   private[this] def insn(i: AbstractInsnNode): this.type = { code.addOne(i); this }
-  private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = { assert(varIdx != VarIdx.none); insn(new VarInsnNode(opcode, varIdx.idx)) }
+  private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = { assert(varIdx != VarIdx.none, "VarIdx.none"); insn(new VarInsnNode(opcode, varIdx.idx)) }
   private[this] def insn(opcode: Int): this.type = insn(new InsnNode(opcode))
   private[this] def intInsn(opcode: Int, operand: Int): this.type = insn(new IntInsnNode(opcode, operand))
   private[dsl] def jumpInsn(opcode: Int, label: Label): this.type = insn(new JumpInsnNode(opcode, new LabelNode(label)))

@@ -10,8 +10,28 @@ import java.io.{OutputStreamWriter, PrintWriter}
 import java.util.zip.CRC32
 
 abstract class AbstractCodeGen[RI](config: Config) {
+  private[this] def getCRC32(a: Array[Byte]): Long = {
+    val crc = new CRC32
+    crc.update(a)
+    crc.getValue
+  }
 
-  private def encodeName(s: String): String = {
+  protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Class[_] = {
+    val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+    val ca = new CheckClassAdapter(cw)
+    cls.accept(ca)
+    val raw = cw.toByteArray
+    if(config.logCodeGenSummary) println(s"Generated class ${cls.name} (${raw.length} bytes, crc ${getCRC32(raw)})")
+    if(config.logGeneratedClasses.exists(cls.name.contains)) {
+      val cr = new ClassReader(raw)
+      cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
+    }
+    cl.defineClass(cls.name.replace('/', '.'), raw)
+  }
+}
+
+object AbstractCodeGen {
+  private[this] def encodeName(s: String): String = {
     val b = new StringBuilder()
     s.foreach {
       case '|' => b.append("$bar")
@@ -30,27 +50,8 @@ abstract class AbstractCodeGen[RI](config: Config) {
     b.result()
   }
 
-  protected def encodeName(s: Symbol): String = {
+  def encodeName(s: Symbol): String = {
     assert(s.isDefined)
     encodeName(s.id)
-  }
-
-  private[this] def getCRC32(a: Array[Byte]): Long = {
-    val crc = new CRC32
-    crc.update(a)
-    crc.getValue
-  }
-
-  protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Class[_] = {
-    val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
-    val ca = new CheckClassAdapter(cw)
-    cls.accept(ca)
-    val raw = cw.toByteArray
-    if(config.logCodeGenSummary) println(s"Generated class ${cls.name} (${raw.length} bytes, crc ${getCRC32(raw)})")
-    if(config.logGeneratedClasses.exists(cls.name.contains)) {
-      val cr = new ClassReader(raw)
-      cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
-    }
-    cl.defineClass(cls.name.replace('/', '.'), raw)
   }
 }
