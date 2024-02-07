@@ -13,7 +13,7 @@ class MainTest(spec: String) {
   val conf = Config.defaultConfig.withSpec(spec)
 
   def check(testName: String, scaleFactor: Int = 1, expectedSteps: Int = -1, fail: Boolean = false, config: Config = conf): Unit =
-    for(i <- 1 to (if(SCALE == 0) 1 else SCALE * scaleFactor)) TestUtils.check(testName, expectedSteps, fail, conf)
+    for(i <- 1 to (if(SCALE == 0) 1 else SCALE * scaleFactor)) TestUtils.check(testName, expectedSteps, fail, config)
 
   @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 32)
   @Test def testLists = check("lists")

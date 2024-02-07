@@ -2,7 +2,7 @@ package de.szeiger.interact.st
 
 import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.ast.{CompilationUnit, Label, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.BitOps._
 
 import java.util.Arrays
@@ -68,6 +68,25 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     while(System.nanoTime() < end) Thread.onSpinWait()
   }
 
+  private[this] def payloadComp(pc: PayloadComputation, args: Array[Any]): Any = pc match {
+    case pc: PayloadMethodApplication => pc.adaptedmh.invokeWithArguments(args: _*)
+    case PayloadMethodApplicationWithReturn(m, _) =>
+      val ret = payloadComp(m, args.init)
+      args.last match {
+        case b: IntBox => b.setValue(ret.asInstanceOf[Int])
+        case b: RefBox => b.setValue(ret.asInstanceOf[AnyRef])
+      }
+    case _: PayloadAssignment =>
+      args(1) match {
+        case b: IntBox => b.setValue(args(0).asInstanceOf[Int])
+        case b: RefBox => b.setValue(args(0).asInstanceOf[AnyRef])
+      }
+    case CreateLabelsComp(name, _) =>
+      val label = new Label(name)
+      args.foreach(_.asInstanceOf[RefBox].setValue(label))
+      label
+  }
+
   def reduce(_c1: Cell, _c2: Cell, ptw: PerThreadWorker): Unit = try {
     val (c1, c2) = {
       val ic1 = _c1.asInstanceOf[InterpreterCell]
@@ -87,7 +106,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
         }
         i += 1
       }
-      val b = condComp.invoke(args).asInstanceOf[Boolean]
+      val b = payloadComp(condComp, args).asInstanceOf[Boolean]
       if(!b) return next.reduce(_c1, _c2, ptw)
     }
 
@@ -119,7 +138,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
           }
           i += 1
         }
-        embeddedComp.invoke(args)
+        payloadComp(embeddedComp, args)
         j += 1
       }
     }

@@ -1,6 +1,6 @@
 package de.szeiger.interact.ast
 
-import de.szeiger.interact.{BranchWiring, Connection, CreateLabelsComp, EmbArg, InitialRuleWiring, PayloadAssignment, PayloadComputation, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RuleWiring}
+import de.szeiger.interact.{AllocateTemp, BranchWiring, Connection, CreateLabelsComp, EmbArg, InitialRuleWiring, PayloadAssignment, PayloadComputation, PayloadComputationPlan, PayloadMethodApplication, PayloadMethodApplicationWithReturn, ReuseLabelsComp, RuleWiring}
 
 abstract class Transform {
   import Transform._
@@ -205,6 +205,12 @@ abstract class Transform {
 
   def apply(n: EmbArg): EmbArg = n
 
+  def apply(n: PayloadComputationPlan): Option[PayloadComputationPlan] = n match {
+    case n: PayloadComputation => apply(n)
+    case n: ReuseLabelsComp => Some(apply(n))
+    case n: AllocateTemp => Some(apply(n))
+  }
+
   def apply(n: PayloadComputation): Option[PayloadComputation] = Some(n match {
     case n: PayloadMethodApplication => apply(n)
     case n: PayloadMethodApplicationWithReturn => apply(n)
@@ -236,6 +242,18 @@ abstract class Transform {
     val ea2 = mapC(n.embArgs)(apply)
     if (ea2 eq n.embArgs) n
     else n.copy(embArgs = ea2)
+  }
+
+  def apply(n: ReuseLabelsComp): PayloadComputationPlan = {
+    val ea2 = mapC(n.embArgs)(apply)
+    if (ea2 eq n.embArgs) n
+    else n.copy(embArgs = ea2)
+  }
+
+  def apply(n: AllocateTemp): PayloadComputationPlan = {
+    val ea2 = apply(n.ea)
+    if (ea2 eq n.ea) n
+    else n.copy(ea = ea2.asInstanceOf[EmbArg.Temp])
   }
 }
 

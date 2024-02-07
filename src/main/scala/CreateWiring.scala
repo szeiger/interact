@@ -144,39 +144,39 @@ object EmbArg {
   final case class Temp(idx: Int, pt: PayloadType) extends EmbArg
 }
 
-sealed abstract class PayloadComputation extends Node {
+sealed abstract class PayloadComputationPlan extends Node
+
+sealed abstract class PayloadComputation extends PayloadComputationPlan {
   def embArgs: Vector[EmbArg]
-  def invoke(args: Array[Any]): Any
 }
 
 final case class PayloadAssignment(sourceIdx: EmbArg, targetIdx: EmbArg, payloadType: PayloadType) extends PayloadComputation {
   val embArgs: Vector[EmbArg] = Vector(sourceIdx, targetIdx)
-  def invoke(args: Array[Any]): Unit = args(1) match {
-    case b: IntBox => b.setValue(args(0).asInstanceOf[Int])
-    case b: RefBox => b.setValue(args(0).asInstanceOf[AnyRef])
-  }
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$sourceIdx -> $targetIdx, $payloadType")
-  override def toString: String = s"EmbeddedAssigner(${namedNodes.msg})"
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$targetIdx := $sourceIdx, $payloadType")
+  override def toString: String = s"PayloadAssignment(${namedNodes.msg})"
 }
 
 final case class CreateLabelsComp(name: String, embArgs: Vector[EmbArg]) extends PayloadComputation {
-  def invoke(args: Array[Any]): Any = {
-    val label = new Label(name)
-    args.foreach(_.asInstanceOf[RefBox].setValue(label))
-    label
-  }
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$name: ${embArgs.mkString(", ")}")
-  override def toString: String = s"EmbeddedCreateLabels(${namedNodes.msg})"
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$name, ${embArgs.mkString(", ")}")
+  override def toString: String = s"CreateLabelsComp(${namedNodes.msg})"
+}
+
+final case class ReuseLabelsComp(cellIdx: Int, embArgs: Vector[EmbArg]) extends PayloadComputationPlan {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, ${embArgs.mkString(", ")}")
+  override def toString: String = s"ReuseLabelsComp(${namedNodes.msg})"
+}
+
+final case class AllocateTemp(ea: EmbArg.Temp, boxed: Boolean) extends PayloadComputationPlan {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$ea, $boxed")
 }
 
 final case class PayloadMethodApplication(embTp: EmbeddedType.Method, embArgs: Vector[EmbArg]) extends PayloadComputation {
   def jMethod = embTp.method
   def isStatic: Boolean = Modifier.isStatic(jMethod.getModifiers)
-  private[this] val mh = MethodHandles.lookup().unreflect(jMethod)
-  private[this] val adaptedmh: MethodHandle =
+  private[this] lazy val mh = MethodHandles.lookup().unreflect(jMethod)
+  lazy val adaptedmh: MethodHandle =
     if(isStatic) mh else MethodHandles.insertArguments(mh, 0, jMethod.getDeclaringClass.getField("MODULE$").get(null))
-  def invoke(args: Array[Any]): Any = adaptedmh.invokeWithArguments(args: _*)
-  override def toString: String = s"EmbeddedMethodApplication(${namedNodes.msg})"
+  override def toString: String = s"PayloadMethodApplication(${namedNodes.msg})"
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"${jMethod.getDeclaringClass.getName}#${jMethod.getName}(${embArgs.mkString(", ")}), ${mh.`type`().descriptorString()}")
 }
 
@@ -190,14 +190,7 @@ object PayloadMethodApplication {
 
 final case class PayloadMethodApplicationWithReturn(method: PayloadMethodApplication, retIndex: EmbArg) extends PayloadComputation {
   val embArgs: Vector[EmbArg] = method.embArgs :+ retIndex
-  def invoke(args: Array[Any]): Unit = {
-    val ret = method.invoke(args.init)
-    args.last match {
-      case b: IntBox => b.setValue(ret.asInstanceOf[Int])
-      case b: RefBox => b.setValue(ret.asInstanceOf[AnyRef])
-    }
-  }
-  override def toString: String = s"EmbeddedMethodApplicationWithReturn($method, $retIndex)"
+  override def toString: String = s"PayloadMethodApplicationWithReturn($method, $retIndex)"
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$retIndex") += method
 }
 
