@@ -4,20 +4,22 @@ import de.szeiger.interact.Config
 import de.szeiger.interact.ast.Symbol
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.util.{CheckClassAdapter, Textifier, TraceClassVisitor}
-import org.objectweb.asm.{ClassReader, ClassWriter}
+import org.objectweb.asm.{ClassReader, ClassWriter => AClassWriter}
 
 import java.io.{OutputStreamWriter, PrintWriter}
 import java.util.zip.CRC32
 
 abstract class AbstractCodeGen[RI](config: Config) {
+  import AbstractCodeGen._
+
   private[this] def getCRC32(a: Array[Byte]): Long = {
     val crc = new CRC32
     crc.update(a)
     crc.getValue
   }
 
-  protected def addClass(cl: LocalClassLoader, cls: ClassDSL): Class[_] = {
-    val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+  protected def addClass(cl: ClassWriter, cls: ClassDSL): Unit = {
+    val cw = new AClassWriter(AClassWriter.COMPUTE_FRAMES)
     val ca = new CheckClassAdapter(cw)
     cls.accept(ca)
     val raw = cw.toByteArray
@@ -26,11 +28,26 @@ abstract class AbstractCodeGen[RI](config: Config) {
       val cr = new ClassReader(raw)
       cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
     }
-    cl.defineClass(cls.name.replace('/', '.'), raw)
+    cl.writeClass(cls.javaName, raw)
+  }
+
+  // Create a new Symbol instance that matches the given Symbol and place it on the stack
+  protected def reifySymbol(m: MethodDSL, sym: Symbol): MethodDSL = {
+    if(sym.isEmpty) m.invokestatic(symbol_NoSymbol)
+    else m.newInitDup(new_Symbol) {
+      m.ldc(sym.id).iconst(sym.arity).iconst(sym.returnArity)
+      m.iconst(sym.isCons).iconst(sym.isDef)
+      m.iconst(sym.payloadType.value).iconst(sym.matchContinuationPort)
+      m.iconst(sym.isEmbedded).iconst(sym.isPattern)
+    }
   }
 }
 
 object AbstractCodeGen {
+  val symbolT = tp.c[Symbol]
+  val symbol_NoSymbol = symbolT.method("NoSymbol", tp.m()(symbolT))
+  val new_Symbol = symbolT.constr(tp.m(tp.c[String], tp.I, tp.I, tp.Z, tp.Z, tp.I, tp.I, tp.Z, tp.Z).V)
+
   private[this] def encodeName(s: String): String = {
     val b = new StringBuilder()
     s.foreach {
@@ -54,4 +71,8 @@ object AbstractCodeGen {
     assert(s.isDefined)
     encodeName(s.id)
   }
+}
+
+trait ClassWriter {
+  def writeClass(javaName: String, classFile: Array[Byte]): Unit
 }

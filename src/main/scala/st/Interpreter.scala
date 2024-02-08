@@ -15,6 +15,7 @@ abstract class Cell {
   def auxPort(p: Int): Int
   def setAux(p: Int, c2: Cell, p2: Int): Unit
   def reduce(c: Cell, ptw: PerThreadWorker): Unit
+  def cellSymbol: Symbol
 }
 
 class InterpreterCell(val symId: Int, val arity: Int) extends Cell {
@@ -31,6 +32,7 @@ class InterpreterCell(val symId: Int, val arity: Int) extends Cell {
   }
   private[this] final def auxPortsIterator: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (auxCell(i), auxPort(i)))
   override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${auxPortsIterator.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
+  def cellSymbol: Symbol = null // managed via symId in InterpreterCells
 }
 object InterpreterCell {
   def apply(symId: Int, arity: Int, payloadType: PayloadType): InterpreterCell = payloadType match {
@@ -51,15 +53,17 @@ final class InterpreterCellR(_symId: Int, _arity: Int) extends InterpreterCell(_
 }
 
 final class WireCell(final val sym: Symbol) extends InterpreterCell(0, 1) {
+  override def cellSymbol: Symbol = sym
   override def toString = s"WireCell($sym)"
 }
 
 abstract class RuleImpl {
   def reduce(c1: Cell, c2: Cell, ptw: PerThreadWorker): Unit
+  def freeWires: Array[Symbol] // returns null if not an initial rule
 }
 
 final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
-    embeddedComps: Array[PayloadComputation], condComp: PayloadComputation, next: RuleImpl, sym1: Symbol, sym2: Symbol) extends RuleImpl {
+    embeddedComps: Array[PayloadComputation], condComp: PayloadComputation, next: RuleImpl, sym1: Symbol, sym2: Symbol, val freeWires: Array[Symbol]) extends RuleImpl {
 
   override def toString = s"InterpretedRuleImpl($sym1 <-> $sym2)"
 
@@ -200,18 +204,19 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })
   private[this] final val reverseSymIds = symIds.iterator.map { case (k, v) => (v, k) }.toMap
   private[this] final val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
-  final val (ruleImpls, maxRuleCells, initialRuleImpls, classToSym) = createRuleImpls()
+  final val (ruleImpls, maxRuleCells, initialRuleImpls) = createRuleImpls()
   final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
   private[this] var metrics: ExecutionMetrics = _
 
   def getMetrics: ExecutionMetrics = metrics
 
-  def getSymbol(c: Cell): Symbol = c match {
-    case c: WireCell => c.sym
-    case c: InterpreterCell if c.symId == 0 => Symbol.NoSymbol
-    case c: InterpreterCell => reverseSymIds(c.symId)
-    case c => classToSym.getOrElse(c.getClass, Symbol.NoSymbol)
+  def getSymbol(c: Cell): Symbol = {
+    val s = c.cellSymbol
+    if(s != null) s else c match {
+      case c: InterpreterCell if c.symId != 0 => reverseSymIds(c.symId)
+      case c => Symbol.NoSymbol
+    }
   }
 
   def getAnalyzer: Analyzer[Cell] = new Analyzer[Cell] {
@@ -229,7 +234,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       case c => "???"
     }
     def getConnected(c: Cell, port: Int): (Cell, Int) =
-      if(port == -1) principals.get(c).map((_, -1)).getOrElse(null)
+      if(port == -1) principals.get(c).map((_, -1)).orNull
       else (c.auxCell(port), c.auxPort(port))
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
     def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
@@ -240,8 +245,8 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     irreducible.clear()
     freeWires.clear()
     val w = new PerThreadWorker(this, if(config.collectStats) new ExecutionMetrics else null)
-    initialRuleImpls.foreach { case (freeSyms, rule) =>
-      val free = freeSyms.map(new WireCell(_))
+    initialRuleImpls.foreach { rule =>
+      val free = rule.freeWires.map(new WireCell(_))
       freeWires.addAll(free)
       val lhs = InterpreterCell(0, freeWires.size, PayloadType.VOID)
       free.zipWithIndex.foreach { case (c, p) => lhs.setAux(p, c, 0) }
@@ -257,30 +262,34 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     val bp = new PackedBranchWiring(b, r)
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
     new InterpretedRuleImpl(sym1Id, pcs, bp.freeWiresPacked, bp.connectionsPackedLong,
-      if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.cond.orNull, next.orNull, r.sym1, r.sym2)
+      if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.cond.orNull, next.orNull, r.sym1, r.sym2,
+      r match {
+        case r: InitialRuleWiring => r.free.toArray
+        case _ => null
+      })
   }
 
-  def createRuleImpls(): (Array[RuleImpl], Int, Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
+  def createRuleImpls(): (Array[RuleImpl], Int, Vector[RuleImpl]) = {
     if(config.compile) {
-      val cg = new CodeGen("generated", new LocalClassLoader, config, compilationUnit, globals)
-      val (initial, classToSym) = cg.compile()
-      (null, 0, initial, classToSym)
+      val lcl = new LocalClassLoader
+      val cg = new CodeGen("generated", lcl, config, compilationUnit, globals)
+      val initial = cg.compile()
+      (null, 0, initial.map { cln => lcl.loadClass(cln).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl] })
     } else {
       val ris = new Array[RuleImpl](1 << (symBits << 1))
       val maxC = new ParSupport.AtomicCounter
-      val classToSymbol = Map.newBuilder[Class[_], Symbol]
       ParSupport.foreach(compilationUnit.statements.collect { case g: RuleWiring => g }, config.compilerParallelism) { g =>
         maxC.max(g.maxCells)
         val sym1Id = getSymbolId(g.sym1)
         val ri = g.branches.foldRight(null: RuleImpl) { case (b, z) => createInterpretedRuleImpl(sym1Id, g, b, Option(z)) }
         ris(mkRuleKey(sym1Id, getSymbolId(g.sym2))) = ri
       }
-      val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
+      val initial = Vector.newBuilder[RuleImpl]
       (compilationUnit.statements.collect { case i: InitialRuleWiring => i }).zipWithIndex.foreach { case (ip, i) =>
         maxC.max(ip.maxCells)
-        initial += ((ip.free, createInterpretedRuleImpl(0, ip, ip.branch, None)))
+        initial += createInterpretedRuleImpl(0, ip, ip.branch, None)
       }
-      (ris, maxC.get, initial.result(), classToSymbol.result())
+      (ris, maxC.get, initial.result())
     }
   }
 
@@ -337,9 +346,9 @@ final class CutBuffer(initialSize: Int) {
   def iterator: Iterator[(Cell, Cell)] = pairs.iterator.take(len*2).grouped(2).map { case Seq(c1, c2) => (c1, c2) }
 }
 
-final class PerThreadWorker(final val inter: Interpreter, val metrics: ExecutionMetrics) {
+final class PerThreadWorker(val inter: Interpreter, val metrics: ExecutionMetrics) {
   final val tempCells = inter.createTempCells()
-  private[this] final var nextCut1, nextCut2: Cell = _
+  private[this] var nextCut1, nextCut2: Cell = _
 
   def createCut(c1: Cell, c2: Cell): Unit = {
     if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 }

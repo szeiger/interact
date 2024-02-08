@@ -1,6 +1,6 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.codegen.{AbstractCodeGen, LocalClassLoader, ParSupport}
+import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
 import de.szeiger.interact.{Config, IntBox, IntBoxImpl, PlanRules, RefBox, RefBoxImpl, RulePlan}
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
@@ -20,11 +20,13 @@ class Defs(genPackage: String) {
   val commonCellT = tp.c(s"$genPackage/CommonCell")
   val cellCacheT = tp.c(s"$genPackage/CellCache")
   val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
+  val ri_freeWires = riT.method("freeWires", tp.m()(AbstractCodeGen.symbolT.a))
   val cell_reduce = cellT.method("reduce", tp.m(cellT, ptwT).V)
   val cell_arity = cellT.method("arity", tp.m().I)
   val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   val cell_auxPort = cellT.method("auxPort", tp.m(tp.I).I)
   val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
+  val cell_cellSymbol = cellT.method("cellSymbol", tp.m()(AbstractCodeGen.symbolT))
   val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
   val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
@@ -58,7 +60,7 @@ class Defs(genPackage: String) {
   def cellCache_set(sym: Symbol) = cellCacheT.method(s"set_${encodeName(sym)}", tp.m(concreteCellTFor(sym)).V)
 }
 
-class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
+class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
   compilationUnit: CompilationUnit, globals: Symbols) extends AbstractCodeGen[RuleImpl](config) {
   val defs = new Defs(genPackage)
   import defs._
@@ -84,10 +86,10 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
     val ifm = interfaceMethod(sym)
     val c = DSL.newInterface(Acc.PUBLIC, ifm.owner.className)
     c.method(Acc.PUBLIC.ABSTRACT, ifm.name, ifm.desc)
-    addClass(classLoader, c)
+    addClass(classWriter, c)
   }
 
-  private def compileCell(sym: Symbol): Class[_] = {
+  private def compileCell(sym: Symbol): Unit = {
     val rulePairs = rules.keys.iterator.collect {
       case rk if rk.sym1 == sym => (rk.sym2, rk)
       case rk if rk.sym2 == sym => (rk.sym1, rk)
@@ -101,6 +103,7 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
     val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces ++ payloadInterfaces)
 
     val (cfields, pfields) = (0 until sym.arity).map(i => (c.field(Acc.PUBLIC, s"acell$i", cellT), c.field(Acc.PUBLIC, s"aport$i", tp.I))).unzip
+    val symField = c.field(Acc.PRIVATE.STATIC, "cellSymbol", AbstractCodeGen.symbolT)
 
     // accessors
     c.method(Acc.PUBLIC.FINAL, cell_arity).iconst(sym.arity).ireturn
@@ -140,6 +143,8 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
       }
     }
 
+    c.method(Acc.PUBLIC.FINAL, cell_cellSymbol).getstatic(symField).areturn
+
     // constructor
     {
       val params = (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
@@ -150,11 +155,15 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
         m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
       }
       m.return_
-      if(PlanRules.isSingleton(sym)) {
-        val fref = cell_singleton(sym)
-        c.field(Acc.PUBLIC.STATIC.FINAL, fref)
-        c.clinit().newInitDup(concreteConstrFor(sym))().putstatic(fref).return_
-      }
+      if(PlanRules.isSingleton(sym)) c.field(Acc.PUBLIC.STATIC.FINAL, cell_singleton(sym))
+    }
+
+    // class init
+    {
+      val m = c.clinit()
+      if(PlanRules.isSingleton(sym)) m.newInitDup(concreteConstrFor(sym))().putstatic(cell_singleton(sym))
+      reifySymbol(m, sym).putstatic(symField)
+      m.return_
     }
 
     // reinit
@@ -216,14 +225,14 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
       val ptw = m.param("ptw", ptwT)
       m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_irreducible).return_
     }
-    addClass(classLoader, c)
+    addClass(classWriter, c)
   }
 
   private def compileCommonCell(): Unit = {
     val c = DSL.newClass(Acc.PUBLIC.ABSTRACT, commonCellT.className, cellT)
     c.emptyNoArgsConstructor(Acc.PROTECTED)
     common.foreach(sym => c.method(Acc.PUBLIC.ABSTRACT, interfaceMethod(sym)))
-    addClass(classLoader, c)
+    addClass(classWriter, c)
   }
 
   // find symbols that can interact with every symbol (usually dup & erase)
@@ -269,10 +278,10 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
       val cell = m.param("cell", concreteCellTFor(sym))
       m.aload(cell).putstatic(cellCache_var(sym)).return_
     }
-    addClass(classLoader, c)
+    addClass(classWriter, c)
   }
 
-  private def compileInitial(rule: RulePlan, initialIndex: Int): RuleImpl = {
+  private def compileInitial(rule: RulePlan, initialIndex: Int): String = {
     val staticMR = initialRuleT_static_reduce(initialIndex)
     val c = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className, riT)
     c.emptyNoArgsConstructor(Acc.PUBLIC)
@@ -287,34 +296,46 @@ class CodeGen(genPackage: String, classLoader: LocalClassLoader, config: Config,
       m.aload(c1).aload(c2).aload(ptw).invokestatic(staticMR).return_
     }
 
-    addClass(classLoader, c)
-    classLoader.loadClass(c.javaName).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl]
+    val freeSymFields = rule.initialSyms.get.zipWithIndex.map { case (sym, i) =>
+      (sym, c.field(Acc.PRIVATE.STATIC.FINAL, s"freeSym$i", AbstractCodeGen.symbolT))
+    }
+
+    // clinit
+    {
+      val m = c.clinit()
+      freeSymFields.foreach { case (sym, f) => reifySymbol(m, sym).putstatic(f) }
+      m.return_
+    }
+
+    // freeWires
+    {
+      val m = c.method(Acc.PUBLIC.FINAL, ri_freeWires)
+      m.iconst(freeSymFields.length)
+      m.newarray(AbstractCodeGen.symbolT)
+      freeSymFields.zipWithIndex.foreach { case ((sym, f), i) => m.dup.iconst(i).getstatic(f).aastore }
+      m.areturn
+    }
+
+    addClass(classWriter, c)
+    c.javaName
   }
 
-  private def compileRule(rule: RulePlan): Class[_] = {
+  private def compileRule(rule: RulePlan): Unit = {
     val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
     val ric = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
     implementStaticReduce(ric, rule, staticMR)
-    addClass(classLoader, ric)
-    classLoader.loadClass(ric.javaName)
+    addClass(classWriter, ric)
   }
 
-  def compile(): (Vector[(Vector[Symbol], RuleImpl)], Map[Class[_], Symbol]) = {
-    val classToSymbol = Map.newBuilder[Class[_], Symbol]
+  def compile(): Vector[String] = {
     ParSupport.foreach(globals.symbols.filter(s => s.isCons && !common.contains(s)), config.compilerParallelism)(compileInterface)
     compileCommonCell()
     if(config.useCellCache) compileCellCache()
-    ParSupport.foreach(globals.symbols.filter(_.isCons), config.compilerParallelism) { sym =>
-      val cls = compileCell(sym)
-      classToSymbol.synchronized(classToSymbol += ((cls, sym)))
-    }
+    ParSupport.foreach(globals.symbols.filter(_.isCons), config.compilerParallelism)(compileCell)
     ParSupport.foreach(rules.values, config.compilerParallelism)(compileRule)
-    val initial = Vector.newBuilder[(Vector[Symbol], RuleImpl)]
-    (compilationUnit.statements.collect { case i: RulePlan if i.initial => i }).zipWithIndex.foreach { case (ip, i) =>
-      val ri = compileInitial(ip, i)
-      initial += ((ip.initialSyms.get, ri))
-    }
-    (initial.result(), classToSymbol.result())
+    (compilationUnit.statements.iterator.collect { case i: RulePlan if i.initial => i }).zipWithIndex.map { case (ip, i) =>
+      compileInitial(ip, i)
+    }.toVector
   }
 }

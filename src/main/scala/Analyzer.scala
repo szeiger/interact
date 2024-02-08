@@ -74,12 +74,12 @@ trait Analyzer[Cell] { self =>
     val cuts = mutable.ArrayBuffer.empty[(Cell, Cell)]
     def singleRet(s: Symbol): Int = if(!s.isDef) -1 else if(s.returnArity == 1) s.callArity-1 else -2
     val freeWires = rootCells.iterator.filter(isFreeWire).toVector
-    val stack = mutable.Stack.from(freeWires.sortBy(c => getSymbol(c).id))
+    val stack = mutable.Stack.from(freeWires.sortBy(c => symbolName(c)))
     val all = allConnections()._1
     val shown = mutable.HashSet.empty[Cell]
     var lastTmp = 0
     def tmp(): String = { lastTmp += 1; s"$$s$lastTmp" }
-    val subst = mutable.HashMap.from(freeWires.iterator.map(c1 => ((c1, 0), getSymbol(c1).id)))
+    val subst = mutable.HashMap.from(freeWires.iterator.map(c1 => ((c1, 0), symbolName(c1))))
     //println(s"**** $subst")
     //def id(c: Cell): String = if(c == null) "null" else s"${getSymbol(c)}#${System.identityHashCode(c)}"
     //all.foreach { case ((c1, p1), (c2, p2)) => println(s"    ${id(c1)}:$p1 . ${id(c2)}:$p2") }

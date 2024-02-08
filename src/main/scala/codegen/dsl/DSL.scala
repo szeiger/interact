@@ -329,6 +329,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
     case i if i >= Short.MinValue && i <= Short.MaxValue => intInsn(SIPUSH, i)
     case _ => ldc(i)
   }
+  def iconst(b: Boolean): this.type = iconst(if(b) 1 else 0)
 
   def dconst(d: Double): this.type = d match {
     case 0 => insn(DCONST_0)

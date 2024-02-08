@@ -24,7 +24,14 @@ object Desc {
     def V: MethodDesc = new MethodDescImpl(s"${d}V")
     def apply(ret: ValDesc): MethodDesc = new MethodDescImpl(s"${d}${ret.desc}")
   }
-  val I: ValDesc = new ValDescImpl("I")
+  val B: ValDesc = new ValDescImpl("B") // byte
+  val Z: ValDesc = new ValDescImpl("Z") // boolean
+  val C: ValDesc = new ValDescImpl("C") // char
+  val I: ValDesc = new ValDescImpl("I") // int
+  val S: ValDesc = new ValDescImpl("S") // short
+  val D: ValDesc = new ValDescImpl("D") // double
+  val F: ValDesc = new ValDescImpl("F") // float
+  val J: ValDesc = new ValDescImpl("J") // long
   def m(desc: String): MethodDesc = new MethodDescImpl(desc)
   def m(jMethod: java.lang.reflect.Method): MethodDesc = m(Type.getMethodDescriptor(jMethod))
   def m(params: ValDesc*): MethodArgs = new MethodArgs(params)
