@@ -104,8 +104,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       val args = new Array[Any](condArgs.length)
       while(i < condArgs.length) {
         args(i) = condArgs(i) match {
-          case EmbArg.Left => c1.getGenericPayload
-          case EmbArg.Right => c2.getGenericPayload
+          case EmbArg.Active(0) => c1.getGenericPayload
+          case EmbArg.Active(1) => c2.getGenericPayload
           case EmbArg.Const(v) => v
         }
         i += 1
@@ -135,8 +135,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
         i = 0
         while(i < embeddedArgs.length) {
           args(i) = embeddedArgs(i) match {
-            case EmbArg.Left => c1.getGenericPayload
-            case EmbArg.Right => c2.getGenericPayload
+            case EmbArg.Active(0) => c1.getGenericPayload
+            case EmbArg.Active(1) => c2.getGenericPayload
             case EmbArg.Cell(n) => cells(n)
             case EmbArg.Const(v) => v
           }

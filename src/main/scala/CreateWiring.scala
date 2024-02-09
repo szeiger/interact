@@ -30,9 +30,9 @@ class CreateWiring(global: Global) extends Transform with Phase {
 
   private[this] def deriveErase(sym: Symbol, eraseSym: Symbol): RuleWiring = {
     val cells = Vector.fill(sym.arity)(eraseSym)
-    val conns = (0 until sym.arity).map(i => Connection(FreeIdx(true, i), CellIdx(i, -1))).toSet
+    val conns = (0 until sym.arity).map(i => Connection(FreeIdx(1, i), CellIdx(i, -1))).toSet
     val embComp = sym.payloadType match {
-      case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eraseRef", Vector(EmbArg.Right),
+      case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eraseRef", Vector(EmbArg.Active(1)),
         EmbeddedType.PayloadVoid, Vector((EmbeddedType.PayloadRef, false))))
       case _ => Vector.empty
     }
@@ -45,11 +45,11 @@ class CreateWiring(global: Global) extends Transform with Phase {
         0,
         Vector.empty,
         Set(
-          Connection(FreeIdx(false, 0), FreeIdx(true, 0)),
-          Connection(FreeIdx(false, 1), FreeIdx(true, 1))
+          Connection(FreeIdx(0, 0), FreeIdx(1, 0)),
+          Connection(FreeIdx(0, 1), FreeIdx(1, 1))
         ),
         Vector.empty,
-        Some(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eqLabel", Vector(EmbArg.Left, EmbArg.Right),
+        Some(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eqLabel", Vector(EmbArg.Active(0), EmbArg.Active(1)),
           EmbeddedType.Bool, Vector((EmbeddedType.PayloadLabel, false), (EmbeddedType.PayloadLabel, false)))),
         Vector.empty, 0
       )
@@ -61,16 +61,16 @@ class CreateWiring(global: Global) extends Transform with Phase {
           Connection(CellIdx(0, 1), CellIdx(3, 0)),
           Connection(CellIdx(1, 0), CellIdx(2, 1)),
           Connection(CellIdx(1, 1), CellIdx(3, 1)),
-          Connection(CellIdx(0, -1), FreeIdx(false, 0)),
-          Connection(CellIdx(1, -1), FreeIdx(false, 1)),
-          Connection(CellIdx(2, -1), FreeIdx(true, 0)),
-          Connection(CellIdx(3, -1), FreeIdx(true, 1)),
+          Connection(CellIdx(0, -1), FreeIdx(0, 0)),
+          Connection(CellIdx(1, -1), FreeIdx(0, 1)),
+          Connection(CellIdx(2, -1), FreeIdx(1, 0)),
+          Connection(CellIdx(3, -1), FreeIdx(1, 1)),
         ),
         Vector(
-          PayloadAssignment(EmbArg.Right, EmbArg.Cell(0), PayloadType.LABEL),
-          PayloadAssignment(EmbArg.Right, EmbArg.Cell(1), PayloadType.LABEL),
-          PayloadAssignment(EmbArg.Left, EmbArg.Cell(2), PayloadType.LABEL),
-          PayloadAssignment(EmbArg.Left, EmbArg.Cell(3), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Active(1), EmbArg.Cell(0), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Active(1), EmbArg.Cell(1), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Active(0), EmbArg.Cell(2), PayloadType.LABEL),
+          PayloadAssignment(EmbArg.Active(0), EmbArg.Cell(3), PayloadType.LABEL),
         ),
         None,
         Vector.empty, 0
@@ -83,17 +83,17 @@ class CreateWiring(global: Global) extends Transform with Phase {
         conns += Connection(CellIdx(i, 0), CellIdx(sym.arity, i))
         conns += Connection(CellIdx(i, 1), CellIdx(sym.arity+1, i))
       }
-      conns += Connection(FreeIdx(false, 0), CellIdx(sym.arity, -1))
-      conns += Connection(FreeIdx(false, 1), CellIdx(sym.arity+1, -1))
-      conns ++= (0 until sym.arity).map(i => Connection(FreeIdx(true, i), CellIdx(i, -1)))
+      conns += Connection(FreeIdx(0, 0), CellIdx(sym.arity, -1))
+      conns += Connection(FreeIdx(0, 1), CellIdx(sym.arity+1, -1))
+      conns ++= (0 until sym.arity).map(i => Connection(FreeIdx(1, i), CellIdx(i, -1)))
       val embComp = sym.payloadType match {
         case PayloadType.REF => Vector(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "dupRef",
-          Vector(EmbArg.Right, EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1)),
+          Vector(EmbArg.Active(1), EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1)),
           EmbeddedType.PayloadVoid,
           Vector((EmbeddedType.PayloadRef, false), (EmbeddedType.PayloadRef, true), (EmbeddedType.PayloadRef, true))))
         case _ => Vector.empty
       }
-      val copyLabel = (for(i <- 0 until sym.arity) yield PayloadAssignment(EmbArg.Left, EmbArg.Cell(i), PayloadType.LABEL)).toVector
+      val copyLabel = (for(i <- 0 until sym.arity) yield PayloadAssignment(EmbArg.Active(0), EmbArg.Cell(i), PayloadType.LABEL)).toVector
       RuleWiring(dupSym, sym, Vector(new BranchWiring(0, cells, conns.result(), copyLabel ++ embComp, None, Vector.empty, 0)), true)
     }
   }
@@ -127,14 +127,13 @@ object Idx {
 case class CellIdx(idx: Int, port: Int) extends Idx {
   def show = s"c$idx:$port"
 }
-case class FreeIdx(rhs: Boolean, port: Int) extends Idx {
-  def show = if(rhs) s"rhs:$port" else s"lhs:$port"
+case class FreeIdx(active: Int, port: Int) extends Idx {
+  def show = s"a($active):$port"
 }
 
 sealed abstract class EmbArg extends Node
 object EmbArg {
-  final case object Left extends EmbArg
-  final case object Right extends EmbArg
+  final case class Active(idx: Int) extends EmbArg
   final case class Cell(idx: Int) extends EmbArg {
     override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$idx")
   }
@@ -255,8 +254,8 @@ final case class BranchWiring(cellOffset: Int, cells: Vector[Symbol], conns: Set
 class PackedBranchWiring(bp: BranchWiring, rp: GenericRuleWiring) {
   private[this] def packIdx(idx: Idx): (Int, Int) = idx match {
     case CellIdx(i, p) => (i, p)
-    case FreeIdx(false, p) => (-1-p, 0)
-    case FreeIdx(true, p) => (-1-p-rp.arity1, 0)
+    case FreeIdx(0, p) => (-1-p, 0)
+    case FreeIdx(1, p) => (-1-p-rp.arity1, 0)
   }
   private[this] def packConn(conn: Connection): Int = {
     val (b0, b1) = packIdx(conn.c1)
@@ -274,7 +273,7 @@ class PackedBranchWiring(bp: BranchWiring, rp: GenericRuleWiring) {
     val a = new Array[Int](rp.arity1 + rp.arity2)
     def set(f: FreeIdx, idx2: Idx): Unit = {
       val (s0, s1) = packIdx(idx2)
-      a(if(f.rhs) rp.arity1 + f.port else f.port) = checkedIntOfShorts(s0, s1)
+      a(if(f.active == 1) rp.arity1 + f.port else f.port) = checkedIntOfShorts(s0, s1)
     }
     bp.extConns.foreach { case Connection(i1, i2) =>
       i1 match { case f: FreeIdx => set(f, i2); case _ => }
@@ -303,9 +302,9 @@ object BranchWiring {
     val cells = ArrayBuffer.empty[Symbol]
     val conns = Set.newBuilder[Connection]
     val cellEmbSyms = mutable.HashMap.empty[Symbol, EmbArg]
-    if(emb1.isDefined) cellEmbSyms.put(emb1, EmbArg.Left)
-    if(emb2.isDefined) cellEmbSyms.put(emb2, EmbArg.Right)
-    def mkFreeIdx(idx: Int): FreeIdx = FreeIdx(idx >= arity1, if(idx >= arity1) idx-arity1 else idx)
+    if(emb1.isDefined) cellEmbSyms.put(emb1, EmbArg.Active(0))
+    if(emb2.isDefined) cellEmbSyms.put(emb2, EmbArg.Active(1))
+    def mkFreeIdx(idx: Int): FreeIdx = FreeIdx(if(idx >= arity1) 1 else 0, if(idx >= arity1) idx-arity1 else idx)
     def mkIdx(t: Int, p: Int): Idx = if(t >= 0) CellIdx(t, p) else mkFreeIdx(-1-t)
 
     val embComps = ArrayBuffer.empty[PayloadComputation]

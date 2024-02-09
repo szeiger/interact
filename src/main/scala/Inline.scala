@@ -106,8 +106,8 @@ class Inline(global: Global) extends Phase {
           case _ => idx
         }
         def remapI(idx: Idx) = idx match {
-          case CellIdx(i, p) if i == c1 => FreeIdx(false, p)
-          case CellIdx(i, p) if i == c2 => FreeIdx(true, p)
+          case CellIdx(i, p) if i == c1 => FreeIdx(0, p)
+          case CellIdx(i, p) if i == c2 => FreeIdx(1, p)
           case _ => idx
         }
         val nc1i = remapI(n.c1)
@@ -122,8 +122,8 @@ class Inline(global: Global) extends Phase {
     val outerPayloadComps = outer.payloadComps.flatMap(relabelOuter(_))
     val relabelInner: Transform = new Transform {
       override def apply(n: EmbArg): EmbArg = n match {
-        case EmbArg.Left => c1Temp
-        case EmbArg.Right => c2Temp
+        case EmbArg.Active(0) => c1Temp
+        case EmbArg.Active(1) => c2Temp
         case EmbArg.Cell(i) => EmbArg.Cell(i + innerCellOffset)
         case n @ EmbArg.Temp(i, _) => n.copy(i + innerTempOffset)
         case n => n

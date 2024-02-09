@@ -38,8 +38,8 @@ class PlanRules(global: Global) extends Phase {
     instructions ++= (for(idx <- cellCreationOrder) yield {
       val idxO = idx + branch.cellOffset
       val instr = branch.cells(idx) match {
-        case _ if idxO == reuse1 => Reuse1(idxO)
-        case _ if idxO == reuse2 => Reuse2(idxO)
+        case _ if idxO == reuse1 => ReuseActiveCell(idxO, 0)
+        case _ if idxO == reuse2 => ReuseActiveCell(idxO, 1)
         case sym if isSingleton(sym) => statSingletonUse += 1; GetSingletonCell(idxO, sym)
         case sym => NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
           case (CellIdx(ci, p2), p1) if !cellsCreated(idx) => cellPortsNotConnected += 1; CellIdx(-1, p2)
@@ -92,20 +92,20 @@ class PlanRules(global: Global) extends Phase {
     if(!config.reuseCells) return (-1, -1, Set.empty)
 
     // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
-    def countReuseConnections(cellIdxO: Int, rhs: Boolean): Int =
-      reuseSkip(cellIdxO, rhs).length
+    def countReuseConnections(cellIdxO: Int, ac: Int): Int =
+      reuseSkip(cellIdxO, ac).length
     // Find connections to skip for reuse
-    def reuseSkip(cellIdxO: Int, rhs: Boolean): IndexedSeq[Connection] =
+    def reuseSkip(cellIdxO: Int, ac: Int): IndexedSeq[Connection] =
       (0 until branch.cells(cellIdxO-branch.cellOffset).arity).flatMap { p =>
         val ci = new CellIdx(cellIdxO, p)
         branch.extConns.collect {
-          case c @ Connection(FreeIdx(rhs2, fi2), ci2) if ci2 == ci && rhs2 == rhs && fi2 == p => c
-          case c @ Connection(ci2, FreeIdx(rhs2, fi2)) if ci2 == ci && rhs2 == rhs && fi2 == p => c
+          case c @ Connection(FreeIdx(ac2, fi2), ci2) if ci2 == ci && ac2 == ac && fi2 == p => c
+          case c @ Connection(ci2, FreeIdx(ac2, fi2)) if ci2 == ci && ac2 == ac && fi2 == p => c
         }
       }
     // Find cellIdxO/quality of best reuse candidate for rhs/lhs
-    def bestReuse(candidates: Vector[Int], rhs: Boolean): Option[(Int, Int)] =
-      candidates.map { i => (i, countReuseConnections(i, rhs)) }.maxByOption(_._2)
+    def bestReuse(candidates: Vector[Int], ac: Int): Option[(Int, Int)] =
+      candidates.map { i => (i, countReuseConnections(i, ac)) }.maxByOption(_._2)
     // Find cellIdxO (i.e. with cellOffset) of cells with same symbol as rhs/lhs
     def reuseCandidates(rhs: Boolean): Vector[Int] =
       branch.cells.zipWithIndex.collect { case (sym, i) if sym == rule.symFor(rhs) => i + branch.cellOffset }
@@ -113,21 +113,21 @@ class PlanRules(global: Global) extends Phase {
     // Find best reuse combination for both sides
     var cand1 = reuseCandidates(false)
     var cand2 = reuseCandidates(true)
-    var best1 = bestReuse(cand1, false)
-    var best2 = bestReuse(cand2, true)
+    var best1 = bestReuse(cand1, 0)
+    var best2 = bestReuse(cand2, 1)
     (best1, best2) match {
       case (Some((ci1, q1)), Some((ci2, q2))) if ci1 == ci2 =>
         if(q1 >= q2) { // redo best2
           cand2 = cand2.filter(_ != ci1)
-          best2 = bestReuse(cand2, true)
+          best2 = bestReuse(cand2, 1)
         } else { // redo best1
           cand1 = cand1.filter(_ != ci2)
-          best1 = bestReuse(cand1, false)
+          best1 = bestReuse(cand1, 0)
         }
       case _ =>
     }
-    val skipConn1 = best1.iterator.flatMap { case (ci, _) => reuseSkip(ci, false) }
-    val skipConn2 = best2.iterator.flatMap { case (ci, _) => reuseSkip(ci, true) }
+    val skipConn1 = best1.iterator.flatMap { case (ci, _) => reuseSkip(ci, 0) }
+    val skipConn2 = best2.iterator.flatMap { case (ci, _) => reuseSkip(ci, 1) }
     (best1.map(_._1).getOrElse(-1), best2.map(_._1).getOrElse(-1), (skipConn1 ++ skipConn2).toSet)
   }
 
@@ -176,13 +176,13 @@ class PlanRules(global: Global) extends Phase {
     conns.iterator.map {
       case Connection(i1, i2) if i1.port == -1 && i2.port != -1 => Connection(i2, i1)
       case Connection(i1: CellIdx, i2: FreeIdx) => Connection(i2, i1)
-      case Connection(i1: FreeIdx, i2: FreeIdx) if (i1.rhs && !i2.rhs) || (i1.rhs == i2.rhs && i2.port < i1.port)  => Connection(i2, i1)
+      case Connection(i1: FreeIdx, i2: FreeIdx) if (i1.active == 1 && i2.active == 0) || (i1.active == i2.active && i2.port < i1.port)  => Connection(i2, i1)
       case Connection(i1: CellIdx, i2: CellIdx) if i2.idx < i1.idx || (i2.idx == i1.idx && i2.port < i1.port) => Connection(i2, i1)
       case c => c
     }.toVector.sortBy {
       case Connection(CellIdx(idx, port),   _) => (0, idx, port)
-      case Connection(FreeIdx(false, port), _) => (1, 0, port)
-      case Connection(FreeIdx(true, port),  _) => (2, 0, port)
+      case Connection(FreeIdx(0, port), _) => (1, 0, port)
+      case Connection(FreeIdx(1, port),  _) => (2, 0, port)
     }
 
   // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
@@ -282,7 +282,7 @@ class BranchPlan(val reuse1: Int, val reuse2: Int,
     s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, cellO=$cellOffset, tempO=$tempOffset, $c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (cond, "cond") += (cellCreateInstructions, "cc") += (sortedConns, "c") += (payloadComps, "pay") += (branches, "br")
+    n += (cond, "cond") += (cellCreateInstructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 
@@ -290,11 +290,8 @@ sealed trait CreateInstruction extends Node
 case class GetSingletonCell(cellIdx: Int, sym: Symbol) extends CreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym")
 }
-case class Reuse1(cellIdx: Int) extends CreateInstruction {
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx")
-}
-case class Reuse2(cellIdx: Int) extends CreateInstruction {
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx")
+case class ReuseActiveCell(cellIdx: Int, activeIdx: Int) extends CreateInstruction {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, active($activeIdx)")
 }
 case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym, [${args.map(_.show).mkString(", ")}]")

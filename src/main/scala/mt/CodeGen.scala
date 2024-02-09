@@ -219,15 +219,15 @@ class CodeGen(genPackage: String, config: Config) extends AbstractCodeGen[RuleIm
     }
     allConns.foreach { case conn @ Connection(idx1, idx2) =>
       def connectWW(i1: FreeIdx, i2: FreeIdx): Unit = {
-        val l = if(i1.rhs) rhs(i1.port) else lhs(i1.port)
-        val r = if(i2.rhs) rhs(i2.port) else lhs(i2.port)
+        val l = if(i1.active == 1) rhs(i1.port) else lhs(i1.port)
+        val r = if(i2.active == 1) rhs(i2.port) else lhs(i2.port)
         m.aload(ptw).aload(l).aload(r).invokevirtual(ptw_connectFreeToFree)
       }
       def connectWC(i1: FreeIdx, i2: CellIdx): Unit = {
-        val skip1 = i2.idx == reuse1 && !i1.rhs && i2.port == i1.port
-        val skip2 = i2.idx == reuse2 && i1.rhs && i2.port == i1.port
+        val skip1 = i2.idx == reuse1 && i1.active == 0 && i2.port == i1.port
+        val skip2 = i2.idx == reuse2 && i1.active == 1 && i2.port == i1.port
         if((!skip1 && !skip2) || i2.port == -1) { //TODO: Allow i2.port == -1 and check for cut
-          val l = if(i1.rhs) rhs(i1.port) else lhs(i1.port)
+          val l = if(i1.active == 1) rhs(i1.port) else lhs(i1.port)
           m.aload(ptw).aload(l).aload(cells(i2.idx))
           ptwConnectLL(branch.cells(i2.idx).arity, i2.port)
           if(i2.port < 0) deferred += l

@@ -70,13 +70,13 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
 
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
     val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc)
-    val cLeftTp = concreteCellTFor(rule.sym1)
-    val cRightTp = concreteCellTFor(rule.sym2)
-    val cLeft = m.param("cLeft", cLeftTp)
-    val cRight = m.param("cRight", cRightTp)
+    val active = Vector(
+      new ActiveCell(m.param("active0", concreteCellTFor(rule.sym1)), rule.sym1, rule.arity1),
+      new ActiveCell(m.param("active1", concreteCellTFor(rule.sym2)), rule.sym2, rule.arity2),
+    )
     val ptw = m.param("ptw", ptwT)
     incMetric(s"${classDSL.name}.${m.name}", m, ptw)
-    new GenStaticReduce(m, cLeft, cRight, cLeftTp, cRightTp, ptw, rule, defs, config, common).emitRule()
+    new GenStaticReduce(m, active, ptw, rule, defs, config, common).emitRule()
   }
 
   private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
@@ -338,4 +338,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
       compileInitial(ip, i)
     }.toVector
   }
+}
+
+final class ActiveCell(val idx: VarIdx, val sym: Symbol, val arity: Int) {
+  var reuse: Int = -1
 }

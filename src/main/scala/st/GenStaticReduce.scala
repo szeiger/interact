@@ -1,17 +1,18 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.{AllocateTemp, BranchPlan, CellIdx, Config, Connection, CreateInstruction, CreateLabelsComp, EmbArg, FreeIdx, GetSingletonCell, Idx, IntBox, NewCell, PayloadAssignment, PayloadComputationPlan, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RefBox, Reuse1, Reuse2, ReuseLabelsComp, RulePlan, Runtime}
+import de.szeiger.interact.{AllocateTemp, BranchPlan, CellIdx, Config, Connection, CreateInstruction, CreateLabelsComp, EmbArg, FreeIdx, GetSingletonCell, Idx, IntBox, NewCell, PayloadAssignment, PayloadComputationPlan, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RefBox, ReuseActiveCell, ReuseLabelsComp, RulePlan, Runtime}
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
-class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owner, cRightTp: Owner, ptw: VarIdx,
-  rule: RulePlan, defs: Defs, config: Config, common: Set[Symbol]) {
+class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: VarIdx, rule: RulePlan, defs: Defs, config: Config, common: Set[Symbol]) {
   import defs._
 
-  val methodEnd = if(rule.branches.length > 1) m.newLabel else null
+  val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.length > 0) m.newLabel else null
   val methodStart = m.setLabel()
   val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeLocal(tp.I) else VarIdx.none
+  // active cells (at least two, from the top-level rule)
+  var active: Vector[ActiveCell] = _initialActive
   // cells and their symbols, updated for the current branches
   val cells = new VarIdxArray(rule.totalCellCount)
   val cellSyms = new Array[Symbol](rule.totalCellCount)
@@ -20,45 +21,41 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
   // payload temp vars and boxed flag, updated for the current branches
   val temp = new Array[(VarIdx, Boolean)](rule.totalTempCount)
   // cached payloads, shared between all branches
-  val (cachedPayload1, cachedPayload2) = {
-    def cache(cell: VarIdx, pt: PayloadType): VarIdx = pt match {
+  val cachedPayloads = active.map { ac =>
+    ac.sym.payloadType match {
       case PayloadType.VOID => VarIdx.none
-      case PayloadType.INT => m.aload(cell).invoke(intBox_getValue).storeLocal(tp.I)
-      case _ => m.aload(cell).invoke(refBox_getValue).storeLocal(tp.c[AnyRef])
+      case PayloadType.INT => m.aload(ac.idx).invoke(intBox_getValue).storeLocal(tp.I)
+      case _ => m.aload(ac.idx).invoke(refBox_getValue).storeLocal(tp.c[AnyRef])
     }
-    (cache(cLeft, rule.sym1.payloadType), cache(cRight, rule.sym2.payloadType))
   }
 
   // Local vars to buffer writes to a reused cell
-  class WriteBuffer(val cellIdx: Int, arity: Int, sym: Symbol) {
-    private[this] val buf = new VarIdxArray(arity*2)
+  class WriteBuffer(ac: ActiveCell) {
+    val cellIdx: Int = ac.reuse
+    private[this] val cs, ps = new VarIdxArray(ac.arity)
     def set(port: Int, ct2: Idx): Unit = {
       ldBoth(ct2)
-      buf(port*2+1) = m.storeLocal(tp.I)
-      buf(port*2) = m.storeLocal(cellT)
+      ps(port) = m.storeLocal(tp.I)
+      cs(port) = m.storeLocal(cellT)
     }
     def flush(): Unit =
-      for(p <- 0 until buf.length/2) {
-        if(buf(p*2) != VarIdx.none)
-          m.aload(cells(cellIdx)).aload(buf(p*2)).putfield(cell_acell(sym, p))
-        if(buf(p*2+1) != VarIdx.none)
-          m.aload(cells(cellIdx)).iload(buf(p*2+1)).putfield(cell_aport(sym, p))
+      for(p <- 0 until cs.length) {
+        if(cs(p) != VarIdx.none) m.aload(cells(cellIdx)).aload(cs(p)).putfield(cell_acell(ac.sym, p))
+        if(ps(p) != VarIdx.none) m.aload(cells(cellIdx)).iload(ps(p)).putfield(cell_aport(ac.sym, p))
       }
   }
 
   // Cell accessors
   private def ldCell(idx: Idx) = idx match {
-    case FreeIdx(rhs, p) =>
-      m.aload(if(rhs) cRight else cLeft)
-      if(rule.initial) m.iconst(p).invoke(cell_auxCell)
-      else m.getfield(cell_acell(if(rhs) rule.sym2 else rule.sym1, p))
+    case FreeIdx(ac, p) =>
+      m.aload(active(ac).idx)
+      if(rule.initial) m.iconst(p).invoke(cell_auxCell) else m.getfield(cell_acell(active(ac).sym, p))
     case CellIdx(i, _) => m.aload(cells(i))
   }
   private def ldPort(idx: Idx) = idx match {
-    case FreeIdx(rhs, p) =>
-      m.aload(if(rhs) cRight else cLeft)
-      if(rule.initial) m.iconst(p).invoke(cell_auxPort)
-      else m.getfield(cell_aport(if(rhs) rule.sym2 else rule.sym1, p))
+    case FreeIdx(ac, p) =>
+      m.aload(active(ac).idx)
+      if(rule.initial) m.iconst(p).invoke(cell_auxPort) else m.getfield(cell_aport(active(ac).sym, p))
     case CellIdx(_, p) => m.iconst(p)
   }
   private def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
@@ -96,18 +93,18 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
 
     val (cont1, cont2) = {
       if(bp.loopOn1 || bp.loopOn2) {
-        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(rule.sym1))
-        val cont2 = m.aconst_null.storeLocal(concreteCellTFor(rule.sym2))
+        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(active(0).sym))
+        val cont2 = m.aconst_null.storeLocal(concreteCellTFor(active(1).sym))
         (cont1, cont2)
       } else (VarIdx.none, VarIdx.none)
     }
     def setCont1(ct1: CellIdx, ct2: FreeIdx): Unit = {
       ldCell(ct1).astore(cont1)
-      ldCell(ct2).checkcast(concreteCellTFor(rule.sym2)).astore(cont2)
+      ldCell(ct2).checkcast(concreteCellTFor(active(1).sym)).astore(cont2)
     }
     def setCont2(ct1: CellIdx, ct2: FreeIdx): Unit = {
       ldCell(ct1).astore(cont2)
-      ldCell(ct2).checkcast(concreteCellTFor(rule.sym1)).astore(cont1)
+      ldCell(ct2).checkcast(concreteCellTFor(active(0).sym)).astore(cont1)
     }
 
     createCells(bp.cellCreateInstructions)
@@ -122,11 +119,11 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
         } {
           if(ct1.idx == bp.reuse1 && bp.loopOn1) {
             m.aload(cont1).ifNull.and {
-              ldCell(ct2).instanceof(concreteCellTFor(rule.sym2))
+              ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
             }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
           } else if(ct1.idx == bp.reuse2 && bp.loopOn2) {
             m.aload(cont1).ifNull.and {
-              ldCell(ct2).instanceof(concreteCellTFor(rule.sym1))
+              ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
             }.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
           } else createCut(ct1, ct2)
         }
@@ -170,16 +167,14 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
     else {
       reuseBuffers.foreach(_.flush())
 
-      if(config.useCellCache && !rule.initial) {
-        if(bp.reuse1 == -1) m.aload(cLeft).invokestatic(cellCache_set(rule.sym1))
-        if(bp.reuse2 == -1) m.aload(cRight).invokestatic(cellCache_set(rule.sym2))
-      }
+      if(config.useCellCache && !rule.initial)
+        active.foreach { case a if a.reuse == -1 => m.aload(a.idx).invokestatic(cellCache_set(a.sym)) }
 
       recordStats(cont1, bp)
 
       if(cont1 != VarIdx.none) {
         m.aload(cont1).ifNonNull.thn {
-          m.aload(cont1).astore(cLeft).aload(cont2).astore(cRight)
+          m.aload(cont1).astore(active(0).idx).aload(cont2).astore(active(1).idx)
           m.aconst_null.dup.astore(cont1).astore(cont2)
           m.goto(methodStart) //TODO jump directly to the right branch if it can be determined statically
         }
@@ -202,10 +197,9 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
 
   def emitRule(): Unit = {
     rule.branches.foreach { bp =>
-      val bs = Vector.newBuilder[WriteBuffer]
-      if(bp.reuse1 != -1) bs += new WriteBuffer(bp.reuse1, rule.arity1, rule.sym1)
-      if(bp.reuse2 != -1) bs += new WriteBuffer(bp.reuse2, rule.arity2, rule.sym2)
-      reuseBuffers = bs.result()
+      active(0).reuse = bp.reuse1
+      active(1).reuse = bp.reuse2
+      reuseBuffers = active.collect { case a if a.reuse != -1 => new WriteBuffer(a) }
       emitBranch(bp)
     }
     if(methodEnd != null) m.setLabel(methodEnd)
@@ -216,8 +210,7 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
     case GetSingletonCell(idx, sym) =>
       val constr = concreteConstrFor(sym)
       cells(idx) = m.getstatic(cell_singleton(sym)).storeLocal(constr.tpe, s"c$idx")
-    case Reuse1(idx) => cells(idx) = cLeft
-    case Reuse2(idx) => cells(idx) = cRight
+    case ReuseActiveCell(idx, act) => cells(idx) = active(act).idx
     case NewCell(idx, sym, args) =>
       val constr = concreteConstrFor(sym)
 
@@ -276,8 +269,7 @@ class GenStaticReduce(m: MethodDSL, cLeft: VarIdx, cRight: VarIdx, cLeftTp: Owne
   private def loadArg(embArg: EmbArg, cls: Class[_]): Unit = embArg match {
     case EmbArg.Const(i: Int) => m.iconst(i)
     case EmbArg.Const(s: String) => m.ldc(s)
-    case EmbArg.Left => loadCachedPayload(cachedPayload1, cls)
-    case EmbArg.Right => loadCachedPayload(cachedPayload2, cls)
+    case EmbArg.Active(i) => loadCachedPayload(cachedPayloads(i), cls)
     case EmbArg.Cell(idx) => m.aload(cells(idx))
     case EmbArg.Temp(idx, _) => loadTempPayload(idx, cls)
   }
