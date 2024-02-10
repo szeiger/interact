@@ -1,6 +1,6 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.{CompilationUnit, RuleKey, ShowableNode, Statement, Transform}
+import de.szeiger.interact.ast.{CompilationUnit, RuleKey, ShowableNode, Statement, Symbol, Transform}
 
 import scala.collection.mutable
 
@@ -17,8 +17,17 @@ class Inline(global: Global) extends Phase {
     val (fullyInlinableRules, chainableRules) = allInlinableRules.partition(_._2.branches.length == 1)
     checkCircular(fullyInlinableRules)
     val n2 = transformer(fullyInlinableRules, false)(n)
-    if(config.compile && config.inlineBranching) transformer(chainableRules, true)(n2)
+    val n3 = if(config.compile && config.inlineBranching) transformer(chainableRules, true)(n2)
     else n2
+    if(config.inlineUniqueContinuations && config.compile) {
+      val rules = n2.statements.iterator.collect { case r: RuleWiring => (r.key, r) }.toMap
+      rules.foreach { case (k, r) =>
+        val (uniqueContSyms, uniqueContIndices) = uniqueContinuationsFor(r, rules)
+        if(uniqueContSyms.nonEmpty)
+          println(s"**** Unique continuations for $k: $uniqueContSyms, $uniqueContIndices")
+      }
+      n3 //--
+    } else n3
   }
 
   def transformer(inlinableRules: Map[RuleKey, RuleWiring], chained: Boolean): Transform = new Transform {
@@ -163,4 +172,32 @@ class Inline(global: Global) extends Phase {
       case ea: EmbArg.Temp => ea.idx + 1
       case _ => 0
     }}).maxOption.getOrElse(0)
+
+  // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
+  private def uniqueContinuationsFor(rule: RuleWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): (Set[Symbol], Vector[Vector[Int]]) = {
+    val funcSym =
+      if(rule.derived) null
+      else {
+        val s = Set(rule.sym1, rule.sym2).filter(_.isDef)
+        if(s.size == 1) s.head else null
+      }
+    if(funcSym != null) {
+      val rhsSymsMap = rules.view.filterNot(_._2.derived).mapValues(_.branches.iterator.flatMap(_.cells).toSet)
+      val rhsSymsHere = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 == funcSym || k.sym2 == funcSym }.flatMap(_._2).toSet
+      val otherRhsSyms = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 != funcSym && k.sym2 != funcSym }.flatMap(_._2).toSet
+      val unique = (rhsSymsHere -- otherRhsSyms).filter(s => s.isDef && s != funcSym && s.id != "dup" && s.id != "erase")
+      //println(s"${rule.key}: $funcSym, $rhsSymsHere; $otherRhsSyms")
+      val completions = rule.branches.map { branch =>
+        (for {
+          (s, i) <- branch.cells.zipWithIndex if unique.contains(s)
+        } yield {
+          branch.principalConns(i) match {
+            case CellIdx(_, -1) => i //TODO not needed if rhs is fully reduced
+            case FreeIdx(_, _) => i
+            case _ => -1
+        }}).filter(_ >= 0)
+      }
+      (unique, completions)
+    } else (Set.empty, rule.branches.map(_ => Vector.empty))
+  }
 }

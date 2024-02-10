@@ -70,9 +70,10 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
 
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
     val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc)
+    val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
     val active = Vector(
-      new ActiveCell(m.param("active0", concreteCellTFor(rule.sym1)), rule.sym1, rule.arity1),
-      new ActiveCell(m.param("active1", concreteCellTFor(rule.sym2)), rule.sym2, rule.arity2),
+      new ActiveCell(0, m.param("active0", concreteCellTFor(rule.sym1)), rule.sym1, rule.arity1, needsCachedPayloads.contains(0)),
+      new ActiveCell(1, m.param("active1", concreteCellTFor(rule.sym2)), rule.sym2, rule.arity2, needsCachedPayloads.contains(1)),
     )
     val ptw = m.param("ptw", ptwT)
     incMetric(s"${classDSL.name}.${m.name}", m, ptw)
@@ -340,6 +341,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
   }
 }
 
-final class ActiveCell(val idx: VarIdx, val sym: Symbol, val arity: Int) {
+final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean) {
   var reuse: Int = -1
+  var cachedPayload: VarIdx = VarIdx.none
 }

@@ -2,6 +2,7 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast._
 
+import java.nio.file.Path
 import scala.collection.mutable
 
 class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
@@ -70,8 +71,11 @@ case class Config(
   logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
   compilerParallelism: Int = 1,
   allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (st.c)
-  inlineUniqueContinuations: Boolean = true, // st.c
+  inlineUniqueContinuations: Boolean = false, // st.c
   reuseCells: Boolean = true, // st.c
+  writeOutput: Option[Path] = None, // write generated classes to dir or jar file (st.c)
+  writeJava: Option[Path] = None, // write decompiled classes to dir (st.c)
+  skipCodeGen: Boolean = false, // do not generate classfiles (st.c)
 ) {
   def withSpec(spec: String): Config = spec match {
     case s"st.i" => copy(compile = false, multiThreaded = false)

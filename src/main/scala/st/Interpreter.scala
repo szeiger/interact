@@ -1,6 +1,6 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.codegen.{LocalClassLoader, ParSupport}
+import de.szeiger.interact.codegen.{ClassDirWriter, ClassWriter, JarClassWriter, LocalClassLoader, ParSupport}
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{CompilationUnit, Label, PayloadType, Symbol, Symbols}
 import de.szeiger.interact.BitOps._
@@ -272,8 +272,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   def createRuleImpls(): (Array[RuleImpl], Int, Vector[RuleImpl]) = {
     if(config.compile) {
       val lcl = new LocalClassLoader
-      val cg = new CodeGen("generated", lcl, config, compilationUnit, globals)
+      val cw = ClassWriter(config, lcl)
+      val cg = new CodeGen("generated", cw, config, compilationUnit, globals)
       val initial = cg.compile()
+      cw.close()
       (null, 0, initial.map { cln => lcl.loadClass(cln).getDeclaredConstructor().newInstance().asInstanceOf[RuleImpl] })
     } else {
       val ris = new Array[RuleImpl](1 << (symBits << 1))

@@ -4,34 +4,48 @@ import org.objectweb.asm.Type
 
 import scala.reflect.ClassTag
 
-trait Desc {
+abstract class Desc {
   def desc: String
   def isArray: Boolean = desc.startsWith("[")
   def isMethod: Boolean = desc.startsWith("(")
   def isClass: Boolean = desc.startsWith("L")
+  override def hashCode() = desc.hashCode
+  override def equals(obj: Any) = obj match {
+    case o: Desc => desc == o.desc
+    case _ => false
+  }
 }
-trait MethodDesc extends Desc
-trait ValDesc extends Desc {
+abstract class MethodDesc extends Desc
+abstract class ValDesc extends Desc {
   def a: ValDesc = new Desc.ValDescImpl("["+desc)
 }
+final class PrimitiveValDesc(val desc: String, val jvmType: Class[_]) extends ValDesc
 
 object Desc {
   private[dsl] class ValDescImpl(val desc: String) extends ValDesc
   private[this] class MethodDescImpl(val desc: String) extends MethodDesc
   class MethodArgs private[Desc] (params: Seq[ValDesc]) {
     private[this] def d = params.iterator.map(_.desc).mkString("(", "", ")")
+    def B: MethodDesc = new MethodDescImpl(s"${d}B")
+    def Z: MethodDesc = new MethodDescImpl(s"${d}Z")
+    def C: MethodDesc = new MethodDescImpl(s"${d}C")
     def I: MethodDesc = new MethodDescImpl(s"${d}I")
+    def S: MethodDesc = new MethodDescImpl(s"${d}S")
+    def D: MethodDesc = new MethodDescImpl(s"${d}D")
+    def F: MethodDesc = new MethodDescImpl(s"${d}F")
+    def J: MethodDesc = new MethodDescImpl(s"${d}J")
     def V: MethodDesc = new MethodDescImpl(s"${d}V")
     def apply(ret: ValDesc): MethodDesc = new MethodDescImpl(s"${d}${ret.desc}")
   }
-  val B: ValDesc = new ValDescImpl("B") // byte
-  val Z: ValDesc = new ValDescImpl("Z") // boolean
-  val C: ValDesc = new ValDescImpl("C") // char
-  val I: ValDesc = new ValDescImpl("I") // int
-  val S: ValDesc = new ValDescImpl("S") // short
-  val D: ValDesc = new ValDescImpl("D") // double
-  val F: ValDesc = new ValDescImpl("F") // float
-  val J: ValDesc = new ValDescImpl("J") // long
+  val B: PrimitiveValDesc = new PrimitiveValDesc("B", java.lang.Byte.TYPE)
+  val Z: PrimitiveValDesc = new PrimitiveValDesc("Z", java.lang.Boolean.TYPE)
+  val C: PrimitiveValDesc = new PrimitiveValDesc("C", java.lang.Character.TYPE)
+  val I: PrimitiveValDesc = new PrimitiveValDesc("I", java.lang.Integer.TYPE)
+  val S: PrimitiveValDesc = new PrimitiveValDesc("S", java.lang.Short.TYPE)
+  val D: PrimitiveValDesc = new PrimitiveValDesc("D", java.lang.Double.TYPE)
+  val F: PrimitiveValDesc = new PrimitiveValDesc("F", java.lang.Float.TYPE)
+  val J: PrimitiveValDesc = new PrimitiveValDesc("J", java.lang.Long.TYPE)
+  val V: PrimitiveValDesc = new PrimitiveValDesc("V", java.lang.Void.TYPE)
   def m(desc: String): MethodDesc = new MethodDescImpl(desc)
   def m(jMethod: java.lang.reflect.Method): MethodDesc = m(Type.getMethodDescriptor(jMethod))
   def m(params: ValDesc*): MethodArgs = new MethodArgs(params)
@@ -45,7 +59,7 @@ object Desc {
   def o[T : ClassTag]: Owner = Owner.apply[T]
 }
 
-sealed trait Owner extends ValDesc {
+sealed abstract class Owner extends ValDesc {
   def className: String
   def isInterface: Boolean
   final override def toString: String = className

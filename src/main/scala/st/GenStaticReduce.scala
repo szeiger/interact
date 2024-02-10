@@ -1,6 +1,6 @@
 package de.szeiger.interact.st
 
-import de.szeiger.interact.{AllocateTemp, BranchPlan, CellIdx, Config, Connection, CreateInstruction, CreateLabelsComp, EmbArg, FreeIdx, GetSingletonCell, Idx, IntBox, NewCell, PayloadAssignment, PayloadComputationPlan, PayloadMethodApplication, PayloadMethodApplicationWithReturn, RefBox, ReuseActiveCell, ReuseLabelsComp, RulePlan, Runtime}
+import de.szeiger.interact._
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
@@ -10,7 +10,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
 
   val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.length > 0) m.newLabel else null
   val methodStart = m.setLabel()
-  val statCellAllocations, statCachedCellReuse = if(config.collectStats) m.iconst(0).storeLocal(tp.I) else VarIdx.none
+  val (statCellAllocations, statCachedCellReuse) =
+    if(config.collectStats) (m.iconst(0).storeLocal(tp.I, "statCellAllocations"), m.iconst(0).storeLocal(tp.I, "statCachedCellReuse"))
+    else (VarIdx.none, VarIdx.none)
   // active cells (at least two, from the top-level rule)
   var active: Vector[ActiveCell] = _initialActive
   // cells and their symbols, updated for the current branches
@@ -21,40 +23,47 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   // payload temp vars and boxed flag, updated for the current branches
   val temp = new Array[(VarIdx, Boolean)](rule.totalTempCount)
   // cached payloads, shared between all branches
-  val cachedPayloads = active.map { ac =>
-    ac.sym.payloadType match {
-      case PayloadType.VOID => VarIdx.none
-      case PayloadType.INT => m.aload(ac.idx).invoke(intBox_getValue).storeLocal(tp.I)
-      case _ => m.aload(ac.idx).invoke(refBox_getValue).storeLocal(tp.c[AnyRef])
-    }
+  for(ac <- active if ac.needsCachedPayload) {
+    val name = s"cachedPayload${ac.id}"
+    ac.cachedPayload =
+      if(ac.sym.payloadType == PayloadType.INT) m.aload(ac.vidx).invoke(intBox_getValue).storeLocal(tp.I, name)
+      else m.aload(ac.vidx).invoke(refBox_getValue).storeLocal(tp.c[AnyRef], name)
   }
 
   // Local vars to buffer writes to a reused cell
   class WriteBuffer(ac: ActiveCell) {
     val cellIdx: Int = ac.reuse
     private[this] val cs, ps = new VarIdxArray(ac.arity)
-    def set(port: Int, ct2: Idx): Unit = {
-      ldBoth(ct2)
-      ps(port) = m.storeLocal(tp.I)
-      cs(port) = m.storeLocal(cellT)
+    private[this] val constps = new Array[Int](ac.arity)
+    def set(port: Int, ct2: Idx): Unit = ct2 match {
+      case CellIdx(_, p) =>
+        ldCell(ct2)
+        constps(port) = p
+        cs(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}_c")
+      case _ =>
+        ldBoth(ct2)
+        ps(port) = m.storeLocal(tp.I, s"writeBuffer${ac.id}_${port}_p")
+        cs(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}_c")
     }
     def flush(): Unit =
-      for(p <- 0 until cs.length) {
-        if(cs(p) != VarIdx.none) m.aload(cells(cellIdx)).aload(cs(p)).putfield(cell_acell(ac.sym, p))
-        if(ps(p) != VarIdx.none) m.aload(cells(cellIdx)).iload(ps(p)).putfield(cell_aport(ac.sym, p))
+      for(p <- 0 until cs.length if cs(p) != VarIdx.none) {
+        m.aload(cells(cellIdx)).aload(cs(p)).putfield(cell_acell(ac.sym, p))
+        m.aload(cells(cellIdx))
+        if(ps(p) != VarIdx.none) m.iload(ps(p)) else m.iconst(constps(p))
+        m.putfield(cell_aport(ac.sym, p))
       }
   }
 
   // Cell accessors
   private def ldCell(idx: Idx) = idx match {
     case FreeIdx(ac, p) =>
-      m.aload(active(ac).idx)
+      m.aload(active(ac).vidx)
       if(rule.initial) m.iconst(p).invoke(cell_auxCell) else m.getfield(cell_acell(active(ac).sym, p))
     case CellIdx(i, _) => m.aload(cells(i))
   }
   private def ldPort(idx: Idx) = idx match {
     case FreeIdx(ac, p) =>
-      m.aload(active(ac).idx)
+      m.aload(active(ac).vidx)
       if(rule.initial) m.iconst(p).invoke(cell_auxPort) else m.getfield(cell_aport(active(ac).sym, p))
     case CellIdx(_, p) => m.iconst(p)
   }
@@ -89,15 +98,16 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     bp.cellSyms.copyToArray(cellSyms, bp.cellOffset)
     val branchEnd = m.newLabel
 
-    checkCond(bp.cond, branchEnd)
+    bp.cond.foreach(computePayload(_, branchEnd))
 
     val (cont1, cont2) = {
       if(bp.loopOn1 || bp.loopOn2) {
-        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(active(0).sym))
-        val cont2 = m.aconst_null.storeLocal(concreteCellTFor(active(1).sym))
+        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(active(0).sym), "cont1")
+        val cont2 = m.aconst_null.storeLocal(concreteCellTFor(active(1).sym), "cont2")
         (cont1, cont2)
       } else (VarIdx.none, VarIdx.none)
     }
+    var skipCont1NullCheck = true // skip on first attempt
     def setCont1(ct1: CellIdx, ct2: FreeIdx): Unit = {
       ldCell(ct1).astore(cont1)
       ldCell(ct2).checkcast(concreteCellTFor(active(1).sym)).astore(cont2)
@@ -109,7 +119,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
 
     createCells(bp.cellCreateInstructions)
 
-    computePayloads(bp)
+    bp.payloadComps.foreach(computePayload(_))
 
     // Connect remaining wires
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = {
@@ -118,13 +128,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
           if(ct1.idx == bp.reuse1 && bp.loopOn1) {
-            m.aload(cont1).ifNull.and {
+            if(skipCont1NullCheck) {
+              skipCont1NullCheck = false
               ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
-            }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+              m.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+            } else {
+              m.aload(cont1).ifNull.and {
+                ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
+              }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+            }
           } else if(ct1.idx == bp.reuse2 && bp.loopOn2) {
-            m.aload(cont1).ifNull.and {
+            if(skipCont1NullCheck) {
+              skipCont1NullCheck = false
               ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
-            }.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
+              m.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
+            } else {
+              m.aload(cont1).ifNull.and {
+                ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
+              }.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
+            }
           } else createCut(ct1, ct2)
         }
       } else {
@@ -168,14 +190,13 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       reuseBuffers.foreach(_.flush())
 
       if(config.useCellCache && !rule.initial)
-        active.foreach { case a if a.reuse == -1 => m.aload(a.idx).invokestatic(cellCache_set(a.sym)) }
+        active.foreach { case a if a.reuse == -1 => m.aload(a.vidx).invokestatic(cellCache_set(a.sym)) }
 
       recordStats(cont1, bp)
 
       if(cont1 != VarIdx.none) {
         m.aload(cont1).ifNonNull.thn {
-          m.aload(cont1).astore(active(0).idx).aload(cont2).astore(active(1).idx)
-          m.aconst_null.dup.astore(cont1).astore(cont2)
+          m.aload(cont1).astore(active(0).vidx).aload(cont2).astore(active(1).vidx)
           m.goto(methodStart) //TODO jump directly to the right branch if it can be determined statically
         }
       }
@@ -186,7 +207,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     if(bp.cond.isDefined) m.setLabel(branchEnd)
   }
 
-  private def recordStats(loopMarker: VarIdx /* non-null if loopSave */, lastBranch: BranchPlan): Unit = {
+  private def recordStats(loopMarker: VarIdx /* defined if loopSave */, lastBranch: BranchPlan): Unit = {
     if(config.collectStats) {
       m.aload(ptw).iload(statCellAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
       if(loopMarker != VarIdx.none) m.aload(loopMarker).ifNonNull.thnElse(m.iconst(1))(m.iconst(0))
@@ -209,17 +230,15 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private def createCells(instrs: Vector[CreateInstruction]): Unit = instrs.foreach {
     case GetSingletonCell(idx, sym) =>
       val constr = concreteConstrFor(sym)
-      cells(idx) = m.getstatic(cell_singleton(sym)).storeLocal(constr.tpe, s"c$idx")
-    case ReuseActiveCell(idx, act) => cells(idx) = active(act).idx
+      cells(idx) = m.getstatic(cell_singleton(sym)).storeLocal(constr.tpe, s"cell${idx}_singleton")
+    case ReuseActiveCell(idx, act) => cells(idx) = active(act).vidx
     case NewCell(idx, sym, args) =>
       val constr = concreteConstrFor(sym)
-
       def loadParams(): Unit = args.foreach {
         case CellIdx(-1, p) => m.aconst_null.iconst(p)
         case CellIdx(c, p) => m.aload(cells(c)).iconst(p)
         case f: FreeIdx => ldBoth(f)
       }
-
       if(rule.initial || !config.useCellCache) {
         m.newInitDup(constr)(loadParams())
         if(config.collectStats) m.iinc(statCellAllocations)
@@ -235,7 +254,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
           if(config.collectStats) m.iinc(statCachedCellReuse)
         }
       }
-      cells(idx) = m.storeLocal(constr.tpe, s"c$idx")
+      cells(idx) = m.storeLocal(constr.tpe, s"cell$idx")
   }
 
   // load cached payload value (which is always unboxed) and adapt to class
@@ -269,85 +288,91 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private def loadArg(embArg: EmbArg, cls: Class[_]): Unit = embArg match {
     case EmbArg.Const(i: Int) => m.iconst(i)
     case EmbArg.Const(s: String) => m.ldc(s)
-    case EmbArg.Active(i) => loadCachedPayload(cachedPayloads(i), cls)
+    case EmbArg.Active(i) => loadCachedPayload(active(i).cachedPayload, cls)
     case EmbArg.Cell(idx) => m.aload(cells(idx))
     case EmbArg.Temp(idx, _) => loadTempPayload(idx, cls)
   }
 
-  private def computePayloads(bp: BranchPlan): Unit = {
-    def setCellValue(embArg: EmbArg.Cell, cls: Class[_]): Unit =
-      m.aload(cells(embArg.idx)).swap.invoke(if(cls == classOf[Int]) intBox_setValue else refBox_setValue)
-    def loadArgs(pc: PayloadMethodApplication): Unit =
-      pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, cls) => loadArg(embArg, cls) }
-    def createLabels(ea: Vector[EmbArg]): Unit = ea.indices.foreach { i =>
-      if(i != ea.length-1) m.dup
-      unboxedTemp(ea(i)) match {
-        case Some(vi) =>
-          m.astore(vi)
-        case None =>
-          loadArg(ea(i), classOf[RefBox])
-          m.swap.invoke(refBox_setValue)
-      }
+  private def setRefs(ea: Vector[EmbArg]): Unit = ea.indices.foreach { i =>
+    if(i != ea.length-1) m.dup
+    unboxedTemp(ea(i)) match {
+      case Some(vi) =>
+        m.astore(vi)
+      case None =>
+        loadArg(ea(i), classOf[RefBox])
+        m.swap.invoke(refBox_setValue)
     }
-    bp.payloadComps.foreach {
-      case AllocateTemp(ea, boxed) =>
-        temp(ea.idx) = ((ea.pt, boxed) match { //TODO use cached boxes
-          case (PayloadType.INT, true) => m.newInitDup(new_IntBoxImpl)().storeLocal(intBoxImplT)
-          case (PayloadType.INT, false) => m.local(tp.I)
-          case (_, true) => m.newInitDup(new_RefBoxImpl)().storeLocal(refBoxImplT)
-          case (_, false) => m.local(tp.c[AnyRef])
-        }, boxed)
-      case CreateLabelsComp(_, ea) =>
-        m.newInitDup(tp.c[AnyRef].constr(tp.m().V))()
-        createLabels(ea)
-      case ReuseLabelsComp(idx, ea) =>
-        m.aload(cells(idx))
-        createLabels(ea)
-      case pc: PayloadMethodApplication =>
-        assert(pc.jMethod.getReturnType == Void.TYPE)
-        callPayloadMethod(m, pc)(loadArgs(pc))
-      case pc: PayloadAssignment =>
-        assert(pc.payloadType.isDefined)
-        if(pc.payloadType == PayloadType.INT) {
-          unboxedTemp(pc.targetIdx) match {
-            case Some(vi) =>
-              loadArg(pc.sourceIdx, classOf[Int])
-              m.istore(vi)
-            case None =>
-              loadArg(pc.targetIdx, classOf[IntBox])
-              loadArg(pc.sourceIdx, classOf[Int])
-              m.invoke(intBox_setValue)
-          }
-        } else {
-          unboxedTemp(pc.targetIdx) match {
-            case Some(vi) =>
-              loadArg(pc.sourceIdx, classOf[AnyRef])
-              m.astore(vi)
-            case None =>
-              loadArg(pc.targetIdx, classOf[RefBox])
-              loadArg(pc.sourceIdx, classOf[AnyRef])
-              m.invoke(refBox_setValue)
-          }
-        }
-      case pc: PayloadMethodApplicationWithReturn =>
-        callPayloadMethod(m, pc.method)(loadArgs(pc.method))
-        unboxedTemp(pc.retIndex) match {
+  }
+
+  private def computePayload(pc: PayloadComputationPlan, elseTarget: Label = null): Unit = pc match {
+    case AllocateTemp(ea, boxed) =>
+      assert(elseTarget == null)
+      val name = s"temp${ea.idx}"
+      temp(ea.idx) = ((ea.pt, boxed) match { //TODO use cached boxes
+        case (PayloadType.INT, true) => m.newInitDup(new_IntBoxImpl)().storeLocal(intBoxImplT, name)
+        case (PayloadType.INT, false) => m.local(tp.I, name)
+        case (_, true) => m.newInitDup(new_RefBoxImpl)().storeLocal(refBoxImplT, name)
+        case (_, false) => m.local(tp.c[AnyRef], name)
+      }, boxed)
+    case CreateLabelsComp(_, ea) =>
+      assert(elseTarget == null)
+      m.newInitDup(tp.c[AnyRef].constr(tp.m().V))()
+      setRefs(ea)
+    case ReuseLabelsComp(idx, ea) =>
+      assert(elseTarget == null)
+      m.aload(cells(idx))
+      setRefs(ea)
+    case pc: PayloadMethodApplication =>
+      if(elseTarget == null) assert(pc.jMethod.getReturnType == Void.TYPE)
+      else assert(pc.jMethod.getReturnType == java.lang.Boolean.TYPE)
+      callPayloadMethod(m, pc, elseTarget)
+    case pc: PayloadAssignment =>
+      assert(elseTarget == null)
+      assert(pc.payloadType.isDefined)
+      if(pc.payloadType == PayloadType.INT) {
+        unboxedTemp(pc.targetIdx) match {
           case Some(vi) =>
-            if(pc.method.embTp.ret == EmbeddedType.PayloadInt) m.istore(vi)
-            else m.astore(vi)
+            loadArg(pc.sourceIdx, classOf[Int])
+            m.istore(vi)
           case None =>
-            setCellValue(pc.retIndex.asInstanceOf[EmbArg.Cell], pc.method.jMethod.getReturnType)
+            loadArg(pc.targetIdx, classOf[IntBox])
+            loadArg(pc.sourceIdx, classOf[Int])
+            m.invoke(intBox_setValue)
         }
-    }
+      } else {
+        unboxedTemp(pc.targetIdx) match {
+          case Some(vi) =>
+            loadArg(pc.sourceIdx, classOf[AnyRef])
+            m.astore(vi)
+          case None =>
+            loadArg(pc.targetIdx, classOf[RefBox])
+            loadArg(pc.sourceIdx, classOf[AnyRef])
+            m.invoke(refBox_setValue)
+        }
+      }
+    case PayloadMethodApplicationWithReturn(method, retIdx) =>
+      assert(elseTarget == null)
+      callPayloadMethod(m, method, null)
+      unboxedTemp(retIdx) match {
+        case Some(vi) =>
+          if(method.embTp.ret == EmbeddedType.PayloadInt) m.istore(vi)
+          else m.astore(vi)
+        case None =>
+          if(method.embTp.ret == EmbeddedType.PayloadInt) {
+            loadArg(retIdx, classOf[IntBox])
+            m.swap.invoke(intBox_setValue)
+          } else {
+            loadArg(retIdx, classOf[RefBox])
+            m.swap.invoke(refBox_setValue)
+          }
+      }
+    case CheckPrincipal(wire, sym) =>
+      assert(elseTarget != null)
+      ldCell(wire).instanceof(concreteCellTFor(sym)).ifeq(elseTarget)
   }
 
-  private def checkCond(cond: Option[PayloadComputationPlan], branchEnd: Label): Unit = cond.foreach { case pc: PayloadMethodApplication =>
-    callPayloadMethod(m, pc, branchEnd) {
-      pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (ea, cls) => loadArg(ea, cls) }
-    }
-  }
-
-  private def callPayloadMethod(m: MethodDSL, pc: PayloadMethodApplication, elseTarget: Label = null)(loadArgs: => Unit): Unit = {
+  private def callPayloadMethod(m: MethodDSL, pc: PayloadMethodApplication, elseTarget: Label): Unit = {
+    def loadArgs = pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, cls) => loadArg(embArg, cls) }
     val RuntimeCls = classOf[Runtime.type].getName
     (pc.jMethod.getDeclaringClass.getName, pc.jMethod.getName, pc.embTp.args) match {
       case (RuntimeCls, "eq", Vector((EmbeddedType.PayloadInt, false), (EmbeddedType.PayloadInt, false))) if elseTarget != null =>

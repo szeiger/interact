@@ -125,10 +125,10 @@ object Idx {
   implicit val ord: Ordering[Idx] = Ordering.by(_.show)
 }
 case class CellIdx(idx: Int, port: Int) extends Idx {
-  def show = s"c$idx:$port"
+  def show = if(idx == -1) s"null:$port" else s"c$idx:$port"
 }
 case class FreeIdx(active: Int, port: Int) extends Idx {
-  def show = s"a($active):$port"
+  def show = s"f$active:$port"
 }
 
 sealed abstract class EmbArg extends Node
@@ -167,6 +167,11 @@ final case class ReuseLabelsComp(cellIdx: Int, embArgs: Vector[EmbArg]) extends 
 
 final case class AllocateTemp(ea: EmbArg.Temp, boxed: Boolean) extends PayloadComputationPlan {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$ea, $boxed")
+}
+
+// Check if a FreeIdx is connected to the principal port of a cell with the given Symbol
+final case class CheckPrincipal(wire: FreeIdx, sym: Symbol) extends PayloadComputationPlan {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym")
 }
 
 final case class PayloadMethodApplication(embTp: EmbeddedType.Method, embArgs: Vector[EmbArg]) extends PayloadComputation {

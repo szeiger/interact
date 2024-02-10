@@ -3,6 +3,7 @@ package de.szeiger.interact
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra._
 
+import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 @BenchmarkMode(Array(Mode.Throughput))
@@ -106,7 +107,7 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {
-    val model: Compiler = new Compiler(Parser.parse(source), Config(spec))
+    val model: Compiler = new Compiler(Parser.parse(source), Config(spec).copy(showAfter = Set()))
 
     {
       val i = model.createInterpreter(model.global.config.copy(collectStats = true, logCodeGenSummary = true))
@@ -118,6 +119,8 @@ class InterpreterBenchmark {
     }
 
     val inter = model.createInterpreter()
+    //val inter = model.createInterpreter(model.global.config.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src"))))
+    //val inter = model.createInterpreter(model.global.config.copy(skipCodeGen = true))
     def setup(): BaseInterpreter = {
       inter.initData()
       inter

@@ -72,7 +72,3 @@ object AbstractCodeGen {
     encodeName(s.id)
   }
 }
-
-trait ClassWriter {
-  def writeClass(javaName: String, classFile: Array[Byte]): Unit
-}

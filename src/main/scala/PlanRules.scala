@@ -23,43 +23,57 @@ class PlanRules(global: Global) extends Phase {
     baseSingletonUse: Int, baseLabelCreate: Int, baseReuse1: Int, baseReuse2: Int, parentCells: Vector[Symbol]): BranchPlan = {
     val allCells = branch.cells ++ parentCells
     val (reuse1, reuse2, skipConns) = rule.map(findReuse(_, branch)).getOrElse((baseReuse1, baseReuse2, Set.empty[Connection]))
+    val active = Vector(reuse1, reuse2)
     val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
     val cellCreationOrder = optimizeCellCreationOrder(branch)
     val sortedConns = optimizeConnectionOrder(conns)
-    val (createLabels, otherPayloadComps) = branch.payloadComps.partition(_.isInstanceOf[CreateLabelsComp])
-    val createLabelComps = findLabels(allCells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], reuse1, reuse2)
     //val (uniqueConts, uniqueContPoss) = uniqueContinuationsFor(rule, rules)
-    val instructions = Vector.newBuilder[CreateInstruction]
+    val instr1, instr2 = Vector.newBuilder[CreateInstruction]
     var statSingletonUse = baseSingletonUse
-    val statLabelCreate = baseLabelCreate + createLabelComps.count(_.isInstanceOf[CreateLabelsComp])
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
     val cellsCreated = new Array[Boolean](branch.cells.length)
-    instructions ++= (for(idx <- cellCreationOrder) yield {
+    for(idx <- cellCreationOrder) yield {
       val idxO = idx + branch.cellOffset
-      val instr = branch.cells(idx) match {
-        case _ if idxO == reuse1 => ReuseActiveCell(idxO, 0)
-        case _ if idxO == reuse2 => ReuseActiveCell(idxO, 1)
-        case sym if isSingleton(sym) => statSingletonUse += 1; GetSingletonCell(idxO, sym)
-        case sym => NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
-          case (CellIdx(ci, p2), p1) if !cellsCreated(idx) => cellPortsNotConnected += 1; CellIdx(-1, p2)
+      branch.cells(idx) match {
+        case _ if idxO == reuse1 => instr1 += ReuseActiveCell(idxO, 0)
+        case _ if idxO == reuse2 => instr1 += ReuseActiveCell(idxO, 1)
+        case sym if isSingleton(sym) => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
+        case sym => instr2 += NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
+          case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => cellPortsNotConnected += 1; CellIdx(-1, p2)
           case (CellIdx(ci, p2), p1) => cellPortsConnected += CellIdx(idx, p1); CellIdx(ci, p2)
           case (f: FreeIdx, _) => f
         }.toVector)
       }
       cellsCreated(idx) = true
-      instr
-    })
-    val payloadTemp = computePayloadTemp(branch.cond.toVector ++ branch.payloadComps, branch.tempOffset)
+    }
+    instr1 ++= instr2.result()
+    val filteredPayloadComps = branch.payloadComps.filter { // skip identity assignments to reused cells
+      case pc @ PayloadAssignment(EmbArg.Active(a), EmbArg.Cell(i), _) => active(a) != i
+      case _ => true
+    }
+    val (createLabels, otherPayloadComps) = filteredPayloadComps.partition(_.isInstanceOf[CreateLabelsComp])
+    val createLabelComps = findLabels(allCells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], reuse1, reuse2)
+    val statLabelCreate = baseLabelCreate + createLabelComps.count(_.isInstanceOf[CreateLabelsComp])
+    val allPayloadComps = branch.cond.toVector ++ filteredPayloadComps
+    val needsCachedPayloads = allPayloadComps.iterator.flatMap(_.embArgs).collect { case EmbArg.Active(i) => i }.toSet
+    val payloadTemp = computePayloadTemp(allPayloadComps, branch.tempOffset)
     val payloadTempComps = payloadTemp.zipWithIndex.map { case ((pt, boxed), i) => AllocateTemp(EmbArg.Temp(i + branch.tempOffset, pt), boxed) }
     val payloadComps = payloadTempComps ++ createLabelComps ++ otherPayloadComps
-    val loopOn1 = reuse1 != -1 && ((rule.get.sym1.isDef || reuse2 == -1) || !config.biasForCommonDispatch)
-    val loopOn2 = reuse2 != -1 && ((rule.get.sym2.isDef || reuse1 == -1) || !config.biasForCommonDispatch)
+    def canBeActive(idx: Idx) = idx match {
+      case CellIdx(i, p) => p < 0
+      case _ => true
+    }
+    def isLoop(reuse: Int, otherReuse: Int, sym: => Symbol) =
+      reuse != -1 && ((sym.isDef || otherReuse == -1) || !config.biasForCommonDispatch) && canBeActive(branch.principalConns(reuse))
+    val loopOn1 = isLoop(reuse1, reuse2, rule.get.sym1)
+    val loopOn2 = isLoop(reuse2, reuse1, rule.get.sym2)
     val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, reuse1, reuse2, allCells))
     val tempCount = payloadTemp.length + branches.map(_.totalTempCount).maxOption.getOrElse(0)
     branch.cond.foreach { case pc: PayloadMethodApplication => assert(pc.jMethod.getReturnType == classOf[Boolean]) }
     new BranchPlan(reuse1, reuse2, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps, tempCount,
-      instructions.result(), cellPortsConnected, statSingletonUse, statLabelCreate, branches, loopOn1, loopOn2, branch.tempOffset)
+      instr1.result(), cellPortsConnected, statSingletonUse, statLabelCreate, branches, loopOn1, loopOn2, branch.tempOffset,
+      needsCachedPayloads)
   }
 
   // Find all temporary payload variables and whether or not they need to be boxed
@@ -185,35 +199,6 @@ class PlanRules(global: Global) extends Phase {
       case Connection(FreeIdx(1, port),  _) => (2, 0, port)
     }
 
-  // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
-  private def uniqueContinuationsFor(rule: RuleWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): (Set[Symbol], Vector[Vector[Int]]) = {
-    if(config.inlineUniqueContinuations) {
-      val funcSym =
-        if(rule.derived) null
-        else {
-          val s = Set(rule.sym1, rule.sym2).filter(_.isDef)
-          if(s.size == 1) s.head else null
-        }
-      if(funcSym != null) {
-        val rhsSymsMap = rules.view.filterNot(_._2.derived).mapValues(_.branches.iterator.flatMap(_.cells).toSet)
-        val rhsSymsHere = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 == funcSym || k.sym2 == funcSym }.map(_._2).flatten.toSet
-        val otherRhsSyms = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 != funcSym && k.sym2 != funcSym }.map(_._2).flatten.toSet
-        val unique = (rhsSymsHere -- otherRhsSyms).filter(s => s.isDef && s != funcSym && s.id != "dup" && s.id != "erase")
-        val completions = rule.branches.map { branch =>
-          (for {
-            (s, i) <- branch.cells.zipWithIndex if unique.contains(s)
-          } yield {
-            branch.principalConns(i) match {
-              case CellIdx(_, -1) => i //TODO not needed if rhs is fully reduced
-              case FreeIdx(_, _) => i
-              case _ => -1
-          }}).filter(_ >= 0)
-        }
-        (unique, completions)
-      } else (Set.empty, rule.branches.map(_ => Vector.empty))
-    } else (Set.empty, rule.branches.map(_ => Vector.empty))
-  }
-
   // Find suitable cell objects to reuse as labels
   private def findLabels(cellCount: Int, creators: Vector[CreateLabelsComp], reuse1: Int, reuse2: Int): Vector[PayloadComputationPlan] = {
     //TODO don't use cells from cell cache as labels
@@ -272,14 +257,16 @@ class BranchPlan(val reuse1: Int, val reuse2: Int,
   val statLabelCreate: Int,
   val branches: Vector[BranchPlan],
   val loopOn1: Boolean, val loopOn2: Boolean,
-  val tempOffset: Int) extends Node {
+  val tempOffset: Int,
+  val needsCachedPayloads: Set[Int]) extends Node {
 
   def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
   def totalCellCount: Int = cellSyms.length + branches.map(_.totalCellCount).maxOption.getOrElse(0)
 
   def show: String = {
     val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
-    s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, cellO=$cellOffset, tempO=$tempOffset, $c"
+    val n = needsCachedPayloads.mkString("{", ", ", "}")
+    s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, cellO=$cellOffset, tempO=$tempOffset, $c, needs=$n"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (cond, "cond") += (cellCreateInstructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")
