@@ -206,7 +206,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
     }
 
     // interface methods
-    rulePairs.foreach { case (sym2, rk) =>
+    rulePairs.toVector.sortBy(_._1.id).foreach { case (sym2, rk) =>
       val ifm = interfaceMethod(sym2)
       val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
       val other = m.param("other", concreteCellTFor(sym2))
@@ -218,7 +218,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
       m.aload(ptw).invokestatic(staticMR).return_
     }
     // unsupported common operations (when using config.allCommon)
-    (common -- rulePairs.keySet).foreach { sym2 =>
+    (common -- rulePairs.keySet).toVector.sortBy(_.id).foreach { sym2 =>
       val ifm = interfaceMethod(sym2)
       val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
       val other = m.param("other", concreteCellTFor(sym2))
@@ -329,11 +329,11 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
   }
 
   def compile(): Vector[String] = {
-    ParSupport.foreach(globals.symbols.filter(s => s.isCons && !common.contains(s)), config.compilerParallelism)(compileInterface)
+    ParSupport.foreach(globals.symbols.filter(s => s.isCons && !common.contains(s)).toVector.sortBy(_.id), config.compilerParallelism)(compileInterface)
     compileCommonCell()
     if(config.useCellCache) compileCellCache()
-    ParSupport.foreach(globals.symbols.filter(_.isCons), config.compilerParallelism)(compileCell)
-    ParSupport.foreach(rules.values, config.compilerParallelism)(compileRule)
+    ParSupport.foreach(globals.symbols.filter(_.isCons).toVector.sortBy(_.id), config.compilerParallelism)(compileCell)
+    ParSupport.foreach(rules.values.toVector.sortBy(_.key.toString), config.compilerParallelism)(compileRule)
     (compilationUnit.statements.iterator.collect { case i: RulePlan if i.initial => i }).zipWithIndex.map { case (ip, i) =>
       compileInitial(ip, i)
     }.toVector

@@ -24,7 +24,7 @@ abstract class AbstractCodeGen[RI](config: Config) {
     cls.accept(ca)
     val raw = cw.toByteArray
     if(config.logCodeGenSummary) println(s"Generated class ${cls.name} (${raw.length} bytes, crc ${getCRC32(raw)})")
-    if(config.logGeneratedClasses.exists(cls.name.contains)) {
+    if(config.logGeneratedClasses.exists(s => s == "*" || cls.name.contains(s))) {
       val cr = new ClassReader(raw)
       cr.accept(new TraceClassVisitor(cw, new Textifier(), new PrintWriter(new OutputStreamWriter(System.out))), 0)
     }
