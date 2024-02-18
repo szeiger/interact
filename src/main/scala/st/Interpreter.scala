@@ -380,8 +380,8 @@ final class PerThreadWorker(val inter: Interpreter, val metrics: ExecutionMetric
 
   def irreducible(c1: Cell, c2: Cell): Unit = inter.irreducible.addOne(c1, c2)
 
-  def recordStats(cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit =
-    metrics.recordStats(cellAllocations, cachedCellReuse, singletonUse, loopSave, labelCreate)
+  def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit =
+    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, labelCreate)
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 
   def processNext(): Unit = {

@@ -9,8 +9,8 @@ class ExecutionMetrics {
 
   def getSteps: Int = steps
 
-  @inline def recordStats(cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit = {
-    this.steps += 1
+  @inline def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit = {
+    this.steps += steps
     this.cellAlloc += cellAllocations
     this.cellReuse += cachedCellReuse
     this.singletonUse += singletonUse

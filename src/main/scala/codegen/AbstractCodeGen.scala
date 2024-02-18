@@ -36,9 +36,8 @@ abstract class AbstractCodeGen[RI](config: Config) {
     if(sym.isEmpty) m.invokestatic(symbol_NoSymbol)
     else m.newInitDup(new_Symbol) {
       m.ldc(sym.id).iconst(sym.arity).iconst(sym.returnArity)
-      m.iconst(sym.isCons).iconst(sym.isDef)
       m.iconst(sym.payloadType.value).iconst(sym.matchContinuationPort)
-      m.iconst(sym.isEmbedded).iconst(sym.isPattern)
+      m.iconst(sym.flags)
     }
   }
 }
@@ -46,7 +45,7 @@ abstract class AbstractCodeGen[RI](config: Config) {
 object AbstractCodeGen {
   val symbolT = tp.c[Symbol]
   val symbol_NoSymbol = symbolT.method("NoSymbol", tp.m()(symbolT))
-  val new_Symbol = symbolT.constr(tp.m(tp.c[String], tp.I, tp.I, tp.Z, tp.Z, tp.I, tp.I, tp.Z, tp.Z).V)
+  val new_Symbol = symbolT.constr(tp.m(tp.c[String], tp.I, tp.I, tp.I, tp.I, tp.I).V)
 
   private[this] def encodeName(s: String): String = {
     val b = new StringBuilder()

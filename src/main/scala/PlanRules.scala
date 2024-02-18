@@ -2,6 +2,7 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, Statement, Symbol}
 
+import scala.collection.immutable.Vector
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -13,34 +14,33 @@ class PlanRules(global: Global) extends Phase {
   override def apply(u: CompilationUnit): CompilationUnit = {
     val rules = u.statements.collect { case r: RuleWiring => (r.key, r) }.toMap
     u.copy(u.statements.map {
-      case n: RuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules, 0, 0, -1, -1, Vector.empty)), None)
-      case n: InitialRuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules, 0, 0, -1, -1, Vector.empty)), Some(n.free))
+      case n: RuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules, 0, 0, Vector(-1, -1), Vector.empty)), None)
+      case n: InitialRuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules, 0, 0, Vector(-1, -1), Vector.empty)), Some(n.free))
       case s => s
     })
   }
 
   def createBranchPlan(rule: Option[GenericRuleWiring], branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring],
-    baseSingletonUse: Int, baseLabelCreate: Int, baseReuse1: Int, baseReuse2: Int, parentCells: Vector[Symbol]): BranchPlan = {
+    baseSingletonUse: Int, baseLabelCreate: Int, baseActive: Vector[Int], parentCells: Vector[Symbol]): BranchPlan = {
     val allCells = branch.cells ++ parentCells
-    val (reuse1, reuse2, skipConns) = rule.map(findReuse(_, branch)).getOrElse((baseReuse1, baseReuse2, Set.empty[Connection]))
-    val active = Vector(reuse1, reuse2)
+    val (active, skipConns) = rule.map(findReuse(_, branch)).getOrElse((baseActive, Set.empty[Connection]))
+    //println(s"${rule.map(r => r.sym1 + ", " + r.sym2)} $active")
     val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
     val cellCreationOrder = optimizeCellCreationOrder(branch)
-    val sortedConns = optimizeConnectionOrder(conns)
-    //val (uniqueConts, uniqueContPoss) = uniqueContinuationsFor(rule, rules)
     val instr1, instr2 = Vector.newBuilder[CreateInstruction]
     var statSingletonUse = baseSingletonUse
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
     val cellsCreated = new Array[Boolean](branch.cells.length)
-    for(idx <- cellCreationOrder) yield {
+    for(idx <- cellCreationOrder) {
       val idxO = idx + branch.cellOffset
+      val activeForIdxO = active.indexOf(idx)
       branch.cells(idx) match {
-        case _ if idxO == reuse1 => instr1 += ReuseActiveCell(idxO, 0)
-        case _ if idxO == reuse2 => instr1 += ReuseActiveCell(idxO, 1)
+        case _ if activeForIdxO >= 0 => instr1 += ReuseActiveCell(idxO, activeForIdxO)
         case sym if isSingleton(sym) => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
         case sym => instr2 += NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
-          case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => cellPortsNotConnected += 1; CellIdx(-1, p2)
+          case (CellIdx(ci, p2), p1) if !cellsCreated(ci) && active.indexOf(ci) < 0 => cellPortsNotConnected += 1; CellIdx(-1, p2)
+          //case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => cellPortsNotConnected += 1; CellIdx(-1, p2)
           case (CellIdx(ci, p2), p1) => cellPortsConnected += CellIdx(idx, p1); CellIdx(ci, p2)
           case (f: FreeIdx, _) => f
         }.toVector)
@@ -48,12 +48,13 @@ class PlanRules(global: Global) extends Phase {
       cellsCreated(idx) = true
     }
     instr1 ++= instr2.result()
+    val sortedConns = optimizeConnectionOrder(conns, cellPortsConnected)
     val filteredPayloadComps = branch.payloadComps.filter { // skip identity assignments to reused cells
       case pc @ PayloadAssignment(EmbArg.Active(a), EmbArg.Cell(i), _) => active(a) != i
       case _ => true
     }
     val (createLabels, otherPayloadComps) = filteredPayloadComps.partition(_.isInstanceOf[CreateLabelsComp])
-    val createLabelComps = findLabels(allCells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], reuse1, reuse2)
+    val createLabelComps = findLabels(allCells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], active)
     val statLabelCreate = baseLabelCreate + createLabelComps.count(_.isInstanceOf[CreateLabelsComp])
     val allPayloadComps = branch.cond.toVector ++ filteredPayloadComps
     val needsCachedPayloads = allPayloadComps.iterator.flatMap(_.embArgs).collect { case EmbArg.Active(i) => i }.toSet
@@ -66,13 +67,16 @@ class PlanRules(global: Global) extends Phase {
     }
     def isLoop(reuse: Int, otherReuse: Int, sym: => Symbol) =
       reuse != -1 && ((sym.isDef || otherReuse == -1) || !config.biasForCommonDispatch) && canBeActive(branch.principalConns(reuse))
-    val loopOn1 = isLoop(reuse1, reuse2, rule.get.sym1)
-    val loopOn2 = isLoop(reuse2, reuse1, rule.get.sym2)
-    val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, reuse1, reuse2, allCells))
+    val loopOn1 = isLoop(active(0), active(1), rule.get.sym1)
+    val loopOn2 = isLoop(active(1), active(0), rule.get.sym2)
+    val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, active, allCells))
     val tempCount = payloadTemp.length + branches.map(_.totalTempCount).maxOption.getOrElse(0)
-    branch.cond.foreach { case pc: PayloadMethodApplication => assert(pc.jMethod.getReturnType == classOf[Boolean]) }
-    new BranchPlan(reuse1, reuse2, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps, tempCount,
-      instr1.result(), cellPortsConnected, statSingletonUse, statLabelCreate, branches, loopOn1, loopOn2, branch.tempOffset,
+    branch.cond.foreach {
+      case pc: PayloadMethodApplication => assert(pc.jMethod.getReturnType == classOf[Boolean])
+      case _: CheckPrincipal =>
+    }
+    new BranchPlan(active, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps, tempCount,
+      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches, loopOn1, loopOn2, branch.tempOffset,
       needsCachedPayloads)
   }
 
@@ -96,53 +100,55 @@ class PlanRules(global: Global) extends Phase {
       case PayloadMethodApplicationWithReturn(m, ret) => f(m); assign(ret, false)
       case PayloadAssignment(src, target, _) => assign(src, false); assign(target, false)
       case CreateLabelsComp(_, args) => args.foreach(assign(_, false))
+      case _ =>
     }
     pcs.foreach(f)
     payloadTemp.foreach(t => assert(t != null))
     payloadTemp.toVector
   }
 
-  private def findReuse(rule: GenericRuleWiring, branch: BranchWiring): (Int, Int, Set[Connection]) = {
-    if(!config.reuseCells) return (-1, -1, Set.empty)
+  private def findReuse(rule: GenericRuleWiring, branch: BranchWiring): (Vector[Int], Set[Connection]) = {
+    if(!config.reuseCells) return (Vector(-1, -1), Set.empty)
+
+    val activeSyms = Vector(rule.sym1, rule.sym2) ++ branch.cond.collect { case pc: CheckPrincipal => pc.sym }
 
     // If cell(cellIdx) replaces rhs/lhs, how many connections stay the same?
     def countReuseConnections(cellIdxO: Int, ac: Int): Int =
       reuseSkip(cellIdxO, ac).length
     // Find connections to skip for reuse
-    def reuseSkip(cellIdxO: Int, ac: Int): IndexedSeq[Connection] =
-      (0 until branch.cells(cellIdxO-branch.cellOffset).arity).flatMap { p =>
+    def reuseSkip(cellIdxO: Int, ac: Int): Vector[Connection] =
+      (0 until branch.cells(cellIdxO-branch.cellOffset).arity).iterator.flatMap { p =>
         val ci = new CellIdx(cellIdxO, p)
         branch.extConns.collect {
           case c @ Connection(FreeIdx(ac2, fi2), ci2) if ci2 == ci && ac2 == ac && fi2 == p => c
           case c @ Connection(ci2, FreeIdx(ac2, fi2)) if ci2 == ci && ac2 == ac && fi2 == p => c
         }
-      }
-    // Find cellIdxO/quality of best reuse candidate for rhs/lhs
-    def bestReuse(candidates: Vector[Int], ac: Int): Option[(Int, Int)] =
-      candidates.map { i => (i, countReuseConnections(i, ac)) }.maxByOption(_._2)
-    // Find cellIdxO (i.e. with cellOffset) of cells with same symbol as rhs/lhs
-    def reuseCandidates(rhs: Boolean): Vector[Int] =
-      branch.cells.zipWithIndex.collect { case (sym, i) if sym == rule.symFor(rhs) => i + branch.cellOffset }
+      }.toVector
+    // Find cellIdxO (i.e. with cellOffset) and quality of cells with same symbol as an active cell
+    def reuseCandidates(ac: Int): ArrayBuffer[(Int, Int)] =
+      branch.cells.iterator.zipWithIndex.collect { case (sym, i) if sym == activeSyms(ac) =>
+        val iO = i + branch.cellOffset
+        (iO, countReuseConnections(iO, ac))
+      }.to(ArrayBuffer)
 
-    // Find best reuse combination for both sides
-    var cand1 = reuseCandidates(false)
-    var cand2 = reuseCandidates(true)
-    var best1 = bestReuse(cand1, 0)
-    var best2 = bestReuse(cand2, 1)
-    (best1, best2) match {
-      case (Some((ci1, q1)), Some((ci2, q2))) if ci1 == ci2 =>
-        if(q1 >= q2) { // redo best2
-          cand2 = cand2.filter(_ != ci1)
-          best2 = bestReuse(cand2, 1)
-        } else { // redo best1
-          cand1 = cand1.filter(_ != ci2)
-          best1 = bestReuse(cand1, 0)
-        }
-      case _ =>
+    // Find best reuse combination for all active cells
+    val cand = activeSyms.indices.iterator.map(i => i -> reuseCandidates(i).sortBy(-_._2)).filter(_._2.nonEmpty).to(mutable.HashMap)
+    val reuse = Array.fill(activeSyms.length)(-1)
+    while(cand.nonEmpty) {
+      val (bestA, (ciO, _)) = cand.iterator.map { case (a, rs) => (a, rs.head) }.toVector.maxBy(-_._2._2)
+      reuse(bestA) = ciO
+      cand.remove(bestA)
+      cand.filterInPlace { (_, rs) =>
+        rs.filterInPlace(_._1 != ciO)
+        rs.nonEmpty
+      }
     }
-    val skipConn1 = best1.iterator.flatMap { case (ci, _) => reuseSkip(ci, 0) }
-    val skipConn2 = best2.iterator.flatMap { case (ci, _) => reuseSkip(ci, 1) }
-    (best1.map(_._1).getOrElse(-1), best2.map(_._1).getOrElse(-1), (skipConn1 ++ skipConn2).toSet)
+
+    val skipConn = reuse.iterator.zipWithIndex.flatMap {
+      case (ciO, ac) if ciO != -1 => reuseSkip(ciO, ac)
+      case _ => Vector.empty
+    }
+    (reuse.toVector, skipConn.toSet)
   }
 
   // Maximize # of connections that can be made in the constructor calls.
@@ -186,25 +192,29 @@ class PlanRules(global: Global) extends Phase {
     order.result()
   }
 
-  private def optimizeConnectionOrder(conns: Set[Connection]): Vector[Connection] =
-    conns.iterator.map {
+  private def optimizeConnectionOrder(conns: Set[Connection], cellPortsConnected: mutable.HashSet[CellIdx]): Vector[Connection] =
+    conns.iterator.filter {
+      case Connection(i1: CellIdx, i2: CellIdx) =>
+        // pre-filter when both directions are unnecessary
+        if((i1.port == -1) != (i2.port == -1) && (cellPortsConnected.contains(i1) || cellPortsConnected.contains(i2))) false
+        else true
+      case _ => true
+    }.map {
       case Connection(i1, i2) if i1.port == -1 && i2.port != -1 => Connection(i2, i1)
       case Connection(i1: CellIdx, i2: FreeIdx) => Connection(i2, i1)
-      case Connection(i1: FreeIdx, i2: FreeIdx) if (i1.active == 1 && i2.active == 0) || (i1.active == i2.active && i2.port < i1.port)  => Connection(i2, i1)
+      case Connection(i1: FreeIdx, i2: FreeIdx) if (i1.active >= i2.active) || (i1.active == i2.active && i2.port < i1.port)  => Connection(i2, i1)
       case Connection(i1: CellIdx, i2: CellIdx) if i2.idx < i1.idx || (i2.idx == i1.idx && i2.port < i1.port) => Connection(i2, i1)
       case c => c
     }.toVector.sortBy {
       case Connection(CellIdx(idx, port),   _) => (0, idx, port)
-      case Connection(FreeIdx(0, port), _) => (1, 0, port)
-      case Connection(FreeIdx(1, port),  _) => (2, 0, port)
+      case Connection(FreeIdx(a, port), _) => (a+1, 0, port)
     }
 
   // Find suitable cell objects to reuse as labels
-  private def findLabels(cellCount: Int, creators: Vector[CreateLabelsComp], reuse1: Int, reuse2: Int): Vector[PayloadComputationPlan] = {
+  private def findLabels(cellCount: Int, creators: Vector[CreateLabelsComp], active: Vector[Int]): Vector[PayloadComputationPlan] = {
     //TODO don't use cells from cell cache as labels
     var used = new Array[Boolean](cellCount)
-    if(reuse1 != -1) used(reuse1) = true
-    if(reuse2 != -1) used(reuse2) = true
+    active.foreach { a => if(a != -1) used(a) = true }
     val assignments = Array.fill[Int](creators.length)(-1)
     // prefer cells the label gets assigned to
     for(i <- creators.indices) {
@@ -242,9 +252,10 @@ final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, 
   def key: RuleKey = new RuleKey(sym1, sym2)
   def totalCellCount: Int = branches.map(_.totalCellCount).max
   def totalTempCount: Int = branches.map(_.totalTempCount).max
+  def totalActiveCount: Int = branches.map(_.extraActiveCount).max + 2
 }
 
-class BranchPlan(val reuse1: Int, val reuse2: Int,
+class BranchPlan(val active: Vector[Int],
   val cellSyms: Vector[Symbol],
   val cellOffset: Int,
   val cond: Option[PayloadComputationPlan],
@@ -253,6 +264,7 @@ class BranchPlan(val reuse1: Int, val reuse2: Int,
   val totalTempCount: Int,
   val cellCreateInstructions: Vector[CreateInstruction],
   val cellPortsConnected: mutable.HashSet[CellIdx],
+  val statSteps: Int,
   val statSingletonUse: Int,
   val statLabelCreate: Int,
   val branches: Vector[BranchPlan],
@@ -260,13 +272,14 @@ class BranchPlan(val reuse1: Int, val reuse2: Int,
   val tempOffset: Int,
   val needsCachedPayloads: Set[Int]) extends Node {
 
-  def isReuse(cellIdx: CellIdx): Boolean = cellIdx.idx == reuse1 || cellIdx.idx == reuse2
+  def isReuse(cellIdx: CellIdx): Boolean = active.contains(cellIdx.idx)
   def totalCellCount: Int = cellSyms.length + branches.map(_.totalCellCount).maxOption.getOrElse(0)
+  def extraActiveCount: Int = cond.count(_.isInstanceOf[CheckPrincipal]) + branches.map(_.extraActiveCount).maxOption.getOrElse(0)
 
   def show: String = {
     val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
     val n = needsCachedPayloads.mkString("{", ", ", "}")
-    s"reuse1=$reuse1, reuse2=$reuse2, loopOn1=$loopOn1, loopOn2=$loopOn2, cellO=$cellOffset, tempO=$tempOffset, $c, needs=$n"
+    s"a=${active.mkString("[", ", ", "]")}, loopOn1=$loopOn1, loopOn2=$loopOn2, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (cond, "cond") += (cellCreateInstructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")
@@ -283,3 +296,7 @@ case class ReuseActiveCell(cellIdx: Int, activeIdx: Int) extends CreateInstructi
 case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym, [${args.map(_.show).mkString(", ")}]")
 }
+//final case class CheckPrincipal(wire: FreeIdx, sym: Symbol) extends CreateInstruction {
+//  val embArgs: Vector[EmbArg] = Vector.empty
+//  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym")
+//}

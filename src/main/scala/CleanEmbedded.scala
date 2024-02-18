@@ -28,7 +28,7 @@ class CleanEmbedded(global: Global) extends Transform with Phase {
     val emb1IdOpt = checkPatternEmbSym(mr.id1, mr.emb1)
     val emb2IdOpt = checkPatternEmbSym(mr.id2, mr.emb2)
     val patternIds = Iterator(emb1IdOpt, emb2IdOpt).flatten.toSet
-    patternIds.foreach { _.sym.isPattern = true }
+    patternIds.foreach { _.sym.setPattern() }
     val branches = mr.branches.map { b =>
       val (reduced2, embRed2) = transformReduction(b.reduced, b.embRed, patternIds)
       val cond2 = b.cond.map(checkCond(_))

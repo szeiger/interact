@@ -44,7 +44,7 @@ final class Global(val config: Config) {
 
   def mkLocalId(name: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID): Ident = {
     val i = Ident(name)
-    i.sym = new Symbol(name, isEmbedded = isEmbedded, payloadType = payloadType)
+    i.sym = Symbol(name, isEmbedded = isEmbedded, payloadType = payloadType)
     i
   }
 

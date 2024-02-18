@@ -278,16 +278,22 @@ object ShowableNode {
 
   def print(n: ShowableNode, out: PrintWriter = new PrintWriter(new OutputStreamWriter(System.out)), name: String = "", prefix: String = "", prefix1: String = null): Unit = {
     def f(n: NodeInfo, pf1: String, pf2: String, name: String, depth: Int): Unit = {
-      val b = new StringBuilder(s"$pf1$cCyan")
-      if(name.nonEmpty) b.append(s"$name: ")
-      b.append(s"$cYellow${n.name}$cNormal ${n.msg}")
+      val b = new StringBuilder()
+      val namePrefix = if(name.nonEmpty) s"$name: " else ""
+      val msg = n.msg.split('\n')
+      val children = n.children.toIndexedSeq
+      val cChild = if(depth % 2 == 0) cBlue else cGreen
+      b.append(s"$pf1$cCyan$namePrefix$cYellow${n.name}$cNormal ${msg(0)}")
+      for(i <- 1 until msg.length) {
+        val p = if(children.isEmpty) " " else s"$cChild\u2502"
+        val sp = " " * math.max(4, namePrefix.length + n.name.length)
+        b.append(s"\n$pf2$p$cNormal$sp${msg(i)}")
+      }
       if(n.annot.nonEmpty) b.append(s"  $cBlue${n.annot}$cNormal")
       out.println(b.result())
-      val children = n.children.toIndexedSeq
       children.zipWithIndex.foreach { case ((name, n), idx) =>
         val (p1, p2) = if(idx == children.size-1) ("\u2514 ", "  ") else ("\u251c ", "\u2502 ")
-        val (cp1, cp2) = if(depth % 2 == 0) (cBlue + p1, cBlue + p2) else (cGreen + p1, cGreen + p2)
-        f(n, pf2 + cp1, pf2 + cp2, name, depth + 1)
+        f(n, pf2 + cChild + p1, pf2 + cChild + p2, name, depth + 1)
       }
     }
     f(NodeInfo(n), if(prefix1 ne null) prefix1 else prefix, prefix, name, 0)

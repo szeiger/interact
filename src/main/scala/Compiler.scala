@@ -59,7 +59,9 @@ case class Config(
   addEraseDup: Boolean = true,
   showAfter: Set[String] = Set.empty, // log AST after these phases
   inlineDuplicate: Boolean = false, // inline conditional circular dependencies from all starting rules
+  inlineFull: Boolean = true, // inline rules that can be merged into a single branch
   inlineBranching: Boolean = true, // inline rules that cannot be merged into a single branch (st.c)
+  inlineUniqueContinuations: Boolean = true, // st.c
 
   // Backend
   multiThreaded: Boolean = false,
@@ -71,7 +73,6 @@ case class Config(
   logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
   compilerParallelism: Int = 1,
   allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (st.c)
-  inlineUniqueContinuations: Boolean = false, // st.c
   reuseCells: Boolean = true, // st.c
   writeOutput: Option[Path] = None, // write generated classes to dir or jar file (st.c)
   writeJava: Option[Path] = None, // write decompiled classes to dir (st.c)

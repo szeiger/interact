@@ -2,10 +2,19 @@ package de.szeiger.interact.ast
 
 import scala.collection.mutable
 
-final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
-    val isCons: Boolean = false, val isDef: Boolean = false,
-    var payloadType: PayloadType = PayloadType.VOID, val matchContinuationPort: Int = -2,
-    val isEmbedded: Boolean = false, var isPattern: Boolean = false) {
+final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1, var payloadType: PayloadType = PayloadType.VOID,
+  val matchContinuationPort: Int = -2, private[this] var _flags: Int = 0) {
+  import Symbol._
+
+  def flags: Int = _flags
+  def isCons: Boolean = (_flags & FLAG_CONS) != 0
+  def isDef: Boolean = (_flags & FLAG_DEF) != 0
+  def isEmbedded: Boolean = (_flags & FLAG_EMBEDDED) != 0
+  def isPattern: Boolean = (_flags & FLAG_PATTERN) != 0
+
+  def setPattern(): Unit = _flags = (_flags | FLAG_PATTERN)
+
+  def isContinuation: Boolean = matchContinuationPort != -2
   def callArity: Int = arity + 1 - returnArity
   def hasPayload: Boolean = payloadType != PayloadType.VOID
   override def toString: String = id
@@ -16,6 +25,19 @@ final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
 }
 
 object Symbol {
+  def apply(id: String, arity: Int = 0, returnArity: Int = 1,
+      isCons: Boolean = false, isDef: Boolean = false,
+      payloadType: PayloadType = PayloadType.VOID, matchContinuationPort: Int = -2,
+      isEmbedded: Boolean = false, isPattern: Boolean = false): Symbol =
+    new Symbol(id, arity, returnArity, payloadType, matchContinuationPort,
+      (if(isCons) FLAG_CONS else 0) | (if(isDef) FLAG_DEF else 0) | (if(isEmbedded) FLAG_EMBEDDED else 0) | (if(isPattern) FLAG_PATTERN else 0)
+    )
+
+  val FLAG_CONS         = 1 << 0
+  val FLAG_DEF          = 1 << 1
+  val FLAG_EMBEDDED     = 1 << 2
+  val FLAG_PATTERN      = 1 << 3
+
   val NoSymbol = new Symbol("<NoSymbol>")
 }
 
@@ -23,7 +45,7 @@ class SymbolGen(prefix2: String, isEmbedded: Boolean = false, payloadType: Paylo
   private[this] var last = 0
   def apply(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType, prefix: String = ""): Symbol = {
     last += 1
-    new Symbol(prefix+prefix2+last, isEmbedded = isEmbedded, payloadType = payloadType)
+    Symbol(prefix+prefix2+last, isEmbedded = isEmbedded, payloadType = payloadType)
   }
   def id(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType, prefix: String = ""): Ident = {
     val s = apply(isEmbedded, payloadType, prefix)
@@ -39,7 +61,7 @@ class Symbols(parent: Option[Symbols] = None) {
       payloadType: PayloadType = PayloadType.VOID, matchContinuationPort: Int = -2,
       isEmbedded: Boolean = false): Symbol = {
     assert(get(id).isEmpty)
-    val sym = new Symbol(id, arity, returnArity, isCons, isDef, payloadType, matchContinuationPort, isEmbedded)
+    val sym = Symbol(id, arity, returnArity, isCons, isDef, payloadType, matchContinuationPort, isEmbedded)
     syms.put(id, sym)
     sym
   }

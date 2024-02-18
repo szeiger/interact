@@ -155,7 +155,8 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
                   case _ => val ln = new LabelNode; ln.accept(mv); ln
                 }
                 l.start = ln.getLabel
-              }
+                assert(l.start != null)
+              } else if(l.start == null) throw new RuntimeException(s"Unidentified start in $l")
             }
           case _ =>
         }
@@ -164,8 +165,10 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
       if(!isStatic)
         mv.visitLocalVariable("this", s"L${cls.name};", null, start, end, 0)
       (params.iterator ++ locals.iterator).foreach { l =>
-        if(l.name != null)
+        if(l.name != null) {
+          assert(l.start != null, s"Invalid local variable $l")
           mv.visitLocalVariable(l.name, l.desc.desc, null, l.start, l.end, l.idx)
+        }
       }
       mv.visitMaxs(0, 0) // ClassWriter.COMPUTE_FRAMES required
     }
@@ -432,6 +435,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
   def iflt(l: Label): this.type = jumpInsn(IFLT, l)
   def ifgt(l: Label): this.type = jumpInsn(IFGT, l)
   def ifle(l: Label): this.type = jumpInsn(IFLE, l)
+  def ifge(l: Label): this.type = jumpInsn(IFGE, l)
   def ifnull(l: Label): this.type = jumpInsn(IFNULL, l)
   def ifnonnull(l: Label): this.type = jumpInsn(IFNONNULL, l)
 

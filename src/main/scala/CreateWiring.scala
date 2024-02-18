@@ -36,7 +36,7 @@ class CreateWiring(global: Global) extends Transform with Phase {
         EmbeddedType.PayloadVoid, Vector((EmbeddedType.PayloadRef, false))))
       case _ => Vector.empty
     }
-    RuleWiring(eraseSym, sym, Vector(new BranchWiring(0, cells, conns, embComp, None, Vector.empty, 0)), true)
+    RuleWiring(eraseSym, sym, Vector(new BranchWiring(0, cells, conns, embComp, None, Vector.empty, 0, 1)), true)
   }
 
   private[this] def deriveDup(sym: Symbol, dupSym: Symbol): RuleWiring = {
@@ -51,7 +51,7 @@ class CreateWiring(global: Global) extends Transform with Phase {
         Vector.empty,
         Some(PayloadMethodApplication(dependencyLoader, classOf[Runtime.type].getName, "eqLabel", Vector(EmbArg.Active(0), EmbArg.Active(1)),
           EmbeddedType.Bool, Vector((EmbeddedType.PayloadLabel, false), (EmbeddedType.PayloadLabel, false)))),
-        Vector.empty, 0
+        Vector.empty, 0, 1
       )
       val commute = new BranchWiring(
         0,
@@ -73,7 +73,7 @@ class CreateWiring(global: Global) extends Transform with Phase {
           PayloadAssignment(EmbArg.Active(0), EmbArg.Cell(3), PayloadType.LABEL),
         ),
         None,
-        Vector.empty, 0
+        Vector.empty, 0, 1
       )
       RuleWiring(dupSym, sym, Vector(eliminate, commute), true)
     } else {
@@ -94,7 +94,7 @@ class CreateWiring(global: Global) extends Transform with Phase {
         case _ => Vector.empty
       }
       val copyLabel = (for(i <- 0 until sym.arity) yield PayloadAssignment(EmbArg.Active(0), EmbArg.Cell(i), PayloadType.LABEL)).toVector
-      RuleWiring(dupSym, sym, Vector(new BranchWiring(0, cells, conns.result(), copyLabel ++ embComp, None, Vector.empty, 0)), true)
+      RuleWiring(dupSym, sym, Vector(new BranchWiring(0, cells, conns.result(), copyLabel ++ embComp, None, Vector.empty, 0, 1)), true)
     }
   }
 }
@@ -170,8 +170,10 @@ final case class AllocateTemp(ea: EmbArg.Temp, boxed: Boolean) extends PayloadCo
 }
 
 // Check if a FreeIdx is connected to the principal port of a cell with the given Symbol
-final case class CheckPrincipal(wire: FreeIdx, sym: Symbol) extends PayloadComputationPlan {
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym")
+// and make it a new active cell
+final case class CheckPrincipal(wire: FreeIdx, sym: Symbol, activeIdx: Int) extends PayloadComputation {
+  val embArgs: Vector[EmbArg] = Vector.empty
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym at a($activeIdx)")
 }
 
 final case class PayloadMethodApplication(embTp: EmbeddedType.Method, embArgs: Vector[EmbArg]) extends PayloadComputation {
@@ -227,7 +229,7 @@ object PayloadComputation {
 }
 
 final case class BranchWiring(cellOffset: Int, cells: Vector[Symbol], conns: Set[Connection], payloadComps: Vector[PayloadComputation],
-  cond: Option[PayloadComputation], branches: Vector[BranchWiring], tempOffset: Int) extends Node {
+  cond: Option[PayloadComputation], branches: Vector[BranchWiring], tempOffset: Int, statSteps: Int) extends Node {
   lazy val (extConns, intConns) = conns.partition(_.isExternal)
 
   // Aux connections & principal connections by cell & port.
@@ -244,6 +246,8 @@ final case class BranchWiring(cellOffset: Int, cells: Vector[Symbol], conns: Set
     (a, p)
   }
 
+  def allCreatedCells: Set[Symbol] = cells.toSet ++ branches.flatMap(_.allCreatedCells)
+
   def show: String = cells.zipWithIndex.map { case (s, i) => s"${i+cellOffset}: $s/${s.arity}"}.mkString(s"tempO=$tempOffset, cells = [", ", ", "]")
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
@@ -251,8 +255,8 @@ final case class BranchWiring(cellOffset: Int, cells: Vector[Symbol], conns: Set
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
   def copy(cellOffset: Int = cellOffset, cells: Vector[Symbol] = cells, conns: Set[Connection] = conns,
     payloadComps: Vector[PayloadComputation] = payloadComps, cond: Option[PayloadComputation] = cond,
-    branches: Vector[BranchWiring] = branches, tempOffset: Int = tempOffset): BranchWiring =
-    BranchWiring(cellOffset, cells, conns, payloadComps, cond, branches, tempOffset).setPos(pos)
+    branches: Vector[BranchWiring] = branches, tempOffset: Int = tempOffset, statSteps: Int = statSteps): BranchWiring =
+    BranchWiring(cellOffset, cells, conns, payloadComps, cond, branches, tempOffset, statSteps).setPos(pos)
 }
 
 // Efficiently packed data for direct use in the interpreters
@@ -331,7 +335,7 @@ object BranchWiring {
     embComps ++= embRed.map { ee => PayloadComputation(cl, ee)(cellEmbSyms) }
     val condComp = cond.map { ee => PayloadComputation(cl, ee)(cellEmbSyms) }
 
-    new BranchWiring(0, cells.toVector, conns.result(), embComps.toVector, condComp, Vector.empty, 0)
+    new BranchWiring(0, cells.toVector, conns.result(), embComps.toVector, condComp, Vector.empty, 0, 1)
   }
 
   private[this] abstract class Scope[CellRef] { self =>
@@ -424,6 +428,8 @@ final case class RuleWiring(sym1: Symbol, sym2: Symbol, branches: Vector[BranchW
   val key: RuleKey = new RuleKey(sym1, sym2)
   def arity1: Int = sym1.arity
   def arity2: Int = sym2.arity
+
+  def allCreatedCells: Set[Symbol] = branches.iterator.flatMap(_.allCreatedCells).toSet
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$sym1/${sym1.arity} <-> $sym2/${sym2.arity}")

@@ -13,21 +13,26 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   val (statCellAllocations, statCachedCellReuse) =
     if(config.collectStats) (m.iconst(0).storeLocal(tp.I, "statCellAllocations"), m.iconst(0).storeLocal(tp.I, "statCachedCellReuse"))
     else (VarIdx.none, VarIdx.none)
-  // active cells (at least two, from the top-level rule)
-  var active: Vector[ActiveCell] = _initialActive
+  // active cells (at least two), updated for the current top-level branch
+  val active: Array[ActiveCell] = new Array(rule.totalActiveCount)
+  _initialActive.copyToArray(active)
   // cells and their symbols, updated for the current branches
   val cells = new VarIdxArray(rule.totalCellCount)
   val cellSyms = new Array[Symbol](rule.totalCellCount)
   // cell reuse buffers, updated for the current top-level branch
-  var reuseBuffers: Vector[WriteBuffer] = Vector.empty
+  val reuseBuffers: Array[WriteBuffer] = new Array(rule.totalActiveCount)
   // payload temp vars and boxed flag, updated for the current branches
   val temp = new Array[(VarIdx, Boolean)](rule.totalTempCount)
   // cached payloads, shared between all branches
-  for(ac <- active if ac.needsCachedPayload) {
-    val name = s"cachedPayload${ac.id}"
-    ac.cachedPayload =
-      if(ac.sym.payloadType == PayloadType.INT) m.aload(ac.vidx).invoke(intBox_getValue).storeLocal(tp.I, name)
-      else m.aload(ac.vidx).invoke(refBox_getValue).storeLocal(tp.c[AnyRef], name)
+  for(ac <- active if ac != null) cachePayload(ac)
+
+  private def cachePayload(ac: ActiveCell): Unit = {
+    if(ac.needsCachedPayload) {
+      val name = s"cachedPayload${ac.id}"
+      ac.cachedPayload =
+        if(ac.sym.payloadType == PayloadType.INT) m.aload(ac.vidx).invoke(intBox_getValue).storeLocal(tp.I, name)
+        else m.aload(ac.vidx).invoke(refBox_getValue).storeLocal(tp.c[AnyRef], name)
+    }
   }
 
   // Local vars to buffer writes to a reused cell
@@ -71,7 +76,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
 
   // Write to internal cell or reuse buffer for reused cells
   private def setAux(idx: CellIdx, ct2: Idx, setPort: Boolean = true): Unit =
-    reuseBuffers.find(_.cellIdx == idx.idx) match {
+    reuseBuffers.find(w => w != null && w.cellIdx == idx.idx) match {
       case Some(b) => b.set(idx.port, ct2)
       case None =>
         val sym = cellSyms(idx.idx)
@@ -91,14 +96,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     m.invoke(ptw_createCut)
   }
 
-  def emitBranch(bp: BranchPlan): Unit = {
+  def emitBranch(bp: BranchPlan, parents: List[BranchPlan]): Unit = {
     //println("***** entering "+bp.show)
     //ShowableNode.print(bp)
     cells.clearFrom(bp.cellOffset)
     bp.cellSyms.copyToArray(cellSyms, bp.cellOffset)
     val branchEnd = m.newLabel
 
-    bp.cond.foreach(computePayload(_, branchEnd))
+    checkCondition(bp, branchEnd)
 
     val (cont1, cont2) = {
       if(bp.loopOn1 || bp.loopOn2) {
@@ -127,7 +132,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         ldPort(ct2).if_>=.thnElse {
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
-          if(ct1.idx == bp.reuse1 && bp.loopOn1) {
+          if(ct1.idx == bp.active(0) && bp.loopOn1) {
             if(skipCont1NullCheck) {
               skipCont1NullCheck = false
               ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
@@ -137,7 +142,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
                 ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
               }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             }
-          } else if(ct1.idx == bp.reuse2 && bp.loopOn2) {
+          } else if(ct1.idx == bp.active(1) && bp.loopOn2) {
             if(skipCont1NullCheck) {
               skipCont1NullCheck = false
               ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
@@ -185,14 +190,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       case Connection(i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
     }
 
-    if(bp.branches.nonEmpty) bp.branches.foreach(b => emitBranch(b))
+    if(bp.branches.nonEmpty) bp.branches.foreach(b => emitBranch(b, bp :: parents))
     else {
-      reuseBuffers.foreach(_.flush())
+      for(w <- reuseBuffers if w != null) w.flush()
 
       if(config.useCellCache && !rule.initial)
         active.foreach { case a if a.reuse == -1 => m.aload(a.vidx).invokestatic(cellCache_set(a.sym)) }
 
-      recordStats(cont1, bp)
+      recordStats(cont1, bp, parents)
 
       if(cont1 != VarIdx.none) {
         m.aload(cont1).ifNonNull.thn {
@@ -207,9 +212,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     if(bp.cond.isDefined) m.setLabel(branchEnd)
   }
 
-  private def recordStats(loopMarker: VarIdx /* defined if loopSave */, lastBranch: BranchPlan): Unit = {
+  private def recordStats(loopMarker: VarIdx /* defined if loopSave */, lastBranch: BranchPlan, parents: List[BranchPlan]): Unit = {
     if(config.collectStats) {
-      m.aload(ptw).iload(statCellAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
+      m.aload(ptw).iconst((lastBranch :: parents).map(_.statSteps).sum)
+      m.iload(statCellAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
       if(loopMarker != VarIdx.none) m.aload(loopMarker).ifNonNull.thnElse(m.iconst(1))(m.iconst(0))
       else m.iconst(0)
       m.iconst(lastBranch.statLabelCreate).invoke(ptw_recordStats)
@@ -218,10 +224,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
 
   def emitRule(): Unit = {
     rule.branches.foreach { bp =>
-      active(0).reuse = bp.reuse1
-      active(1).reuse = bp.reuse2
-      reuseBuffers = active.collect { case a if a.reuse != -1 => new WriteBuffer(a) }
-      emitBranch(bp)
+      active(0).reuse = bp.active(0)
+      active(1).reuse = bp.active(1)
+      for(i <- 2 until active.length) {
+        active(i) = null
+      }
+      for(i <- active.indices)
+        reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
+      emitBranch(bp, Nil)
     }
     if(methodEnd != null) m.setLabel(methodEnd)
     m.return_
@@ -304,6 +314,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
   }
 
+  private def checkCondition(bp: BranchPlan, endTarget: Label) = {
+    bp.cond.foreach {
+      case CheckPrincipal(wire, sym, activeIdx) =>
+        val symtp = concreteCellTFor(sym)
+        ldPort(wire).ifge(endTarget)
+        ldCell(wire).dup.instanceof(symtp).if_==.thnElse {
+          m.pop.goto(endTarget)
+        } {
+          val vidx = m.checkcast(symtp).storeLocal(symtp, s"active$activeIdx")
+          val ac = new ActiveCell(activeIdx, vidx, sym, sym.arity, bp.needsCachedPayloads(activeIdx))
+          ac.reuse = bp.active(activeIdx)
+          active(activeIdx) = ac
+          reuseBuffers(activeIdx) = if(ac.reuse == -1) null else new WriteBuffer(ac)
+          cachePayload(ac)
+        }
+      case pc => computePayload(pc, endTarget)
+    }
+  }
+
   private def computePayload(pc: PayloadComputationPlan, elseTarget: Label = null): Unit = pc match {
     case AllocateTemp(ea, boxed) =>
       assert(elseTarget == null)
@@ -366,9 +395,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
             m.swap.invoke(refBox_setValue)
           }
       }
-    case CheckPrincipal(wire, sym) =>
-      assert(elseTarget != null)
-      ldCell(wire).instanceof(concreteCellTFor(sym)).ifeq(elseTarget)
   }
 
   private def callPayloadMethod(m: MethodDSL, pc: PayloadMethodApplication, elseTarget: Label): Unit = {

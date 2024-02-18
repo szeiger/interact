@@ -16,21 +16,94 @@ class Inline(global: Global) extends Phase {
     }.toMap
     val (fullyInlinableRules, chainableRules) = allInlinableRules.partition(_._2.branches.length == 1)
     checkCircular(fullyInlinableRules)
-    val n2 = transformer(fullyInlinableRules, false)(n)
-    val n3 = if(config.compile && config.inlineBranching) transformer(chainableRules, true)(n2)
-    else n2
+    val n2 = if(config.inlineFull) transformer(fullyInlinableRules, false)(n) else n
+    val n3 = if(config.compile && config.inlineBranching) transformer(chainableRules, true)(n2) else n2
     if(config.inlineUniqueContinuations && config.compile) {
-      val rules = n2.statements.iterator.collect { case r: RuleWiring => (r.key, r) }.toMap
-      rules.foreach { case (k, r) =>
-        val (uniqueContSyms, uniqueContIndices) = uniqueContinuationsFor(r, rules)
-        if(uniqueContSyms.nonEmpty)
-          println(s"**** Unique continuations for $k: $uniqueContSyms, $uniqueContIndices")
-      }
-      n3 //--
+      val rules = n3.statements.iterator.collect { case r: RuleWiring => (r.key, r) }.toMap
+      activateTransform(rules)(n3)
     } else n3
   }
 
-  def transformer(inlinableRules: Map[RuleKey, RuleWiring], chained: Boolean): Transform = new Transform {
+  private[this] def activateTransform(rules: Map[RuleKey, RuleWiring]): Transform = new Transform {
+    override def apply(r: RuleWiring) = Vector({
+      val uniqueContSyms = uniqueContinuationsFor(r, rules)
+      if(uniqueContSyms.nonEmpty) {
+        //println(s"**** Unique continuations for ${r.key}: $uniqueContSyms")
+        r.copy(branches = r.branches.flatMap(createConinuationMatches(r, _, uniqueContSyms, rules)))
+      } else r
+    })
+  }
+
+  private[this] def createConinuationMatches(rule: RuleWiring, branch: BranchWiring, uniqueContSyms: Set[Symbol], rules: Map[RuleKey, RuleWiring]): Vector[BranchWiring] = {
+    assert(branch.cellOffset == 0)
+    val candidates = branch.cells.iterator.zipWithIndex.flatMap {
+      case (s, i) if uniqueContSyms.contains(s) =>
+        branch.principalConns(i) match {
+          case f: FreeIdx => Iterator.single(s, i, f)
+          case _ => Iterator.empty
+        }
+      case _ => Iterator.empty
+    }.toVector
+    if(candidates.nonEmpty) {
+      //println("Candidates in branch: " + candidates)
+      val (usym, idx, wire) = candidates.head //TODO support multiple?
+      val partners = rules.iterator.filterNot(_._2.derived).collect {
+        case (k, r) if k.sym1 == usym => (k.sym2, r)
+        case (k, r) if k.sym2 == usym => (k.sym1, r)
+      }.toVector
+      if(branch.cond.isEmpty) {
+        //ShowableNode.print(branch, name = "Original branch")
+        partners.map { case (psym, prule) =>
+          //println(s"Activating branch of ${rule.key} with ($idx, $usym, $psym, $wire):")
+          val b = makeActive(branch, psym, wire)
+          val (c1, c2) = if(prule.key.sym1 == usym) (idx, b.cells.length-1) else (b.cells.length-1, idx)
+          assert(b.branches.isEmpty)
+          //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
+          //ShowableNode.print(prule, name = "Inlining")
+          val b2 = inline(b, c1, c2, prule)._1
+          //ShowableNode.print(b2, name = "Activated")
+          b2
+        } :+ branch
+      } else {
+        Vector(branch) //--
+      }
+    } else Vector(branch)
+  }
+
+  def makeActive(branch: BranchWiring, psym: Symbol, pWire: FreeIdx): BranchWiring = {
+    val topCellLen = branch.cells.length
+    val tr = new Transform {
+      override def apply(n: BranchWiring) =
+        super.apply(n.copy(cellOffset = n.cellOffset + 1))
+      override def apply(n: EmbArg): EmbArg = n match {
+        case EmbArg.Cell(i) if i >= topCellLen => EmbArg.Cell(i + 1)
+        case n => n
+      }
+      override def apply(n: Connection): Set[Connection] = {
+        def mapIdx(c: Idx) = c match {
+          case c if c == pWire => CellIdx(topCellLen, -1)
+          case CellIdx(i, p) if i >= topCellLen => CellIdx(i + 1, p)
+          case c => c
+        }
+        val c1a = mapIdx(n.c1)
+        val c2a = mapIdx(n.c2)
+        if((c1a eq n.c1) && (c2a eq n.c2)) Set(n)
+        else Set(Connection(c1a, c2a))
+      }
+    }
+    val b1 = tr(branch)
+    val activeIdx = 2
+    val newPayloadComps =
+      if(psym.payloadType.isDefined) Vector(PayloadAssignment(EmbArg.Active(activeIdx), EmbArg.Cell(topCellLen), psym.payloadType))
+      else Vector.empty
+    val newConns = (0 until psym.arity).map(i => Connection(CellIdx(topCellLen, i), FreeIdx(activeIdx, i)))
+    val b2 = b1.copy(cellOffset = b1.cellOffset-1, cond = Some(CheckPrincipal(pWire, psym, activeIdx)),
+      cells = b1.cells :+ psym, conns = b1.conns ++ newConns, statSteps = b1.statSteps + 1,
+      payloadComps = newPayloadComps ++ b1.payloadComps)
+    b2
+  }
+
+  private[this] def transformer(inlinableRules: Map[RuleKey, RuleWiring], chained: Boolean): Transform = new Transform {
     val processed = mutable.Map.empty[RuleKey, RuleWiring]
     override def apply(n: Statement): Vector[Statement] = n match {
       case n: RuleWiring => apply(n)
@@ -90,6 +163,7 @@ class Inline(global: Global) extends Phase {
     }.toSet
 
   private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring): (BranchWiring, Map[Int, Int]) = {
+    //println(s"inline($c1, $c2)")
     assert(outer.cellOffset == 0 && outer.branches.isEmpty)
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
     val outerCellsIndexed = outer.cells.iterator.zipWithIndex.filter { case (_, i) => i != c1 && i != c2 }.toVector
@@ -174,7 +248,7 @@ class Inline(global: Global) extends Phase {
     }}).maxOption.getOrElse(0)
 
   // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
-  private def uniqueContinuationsFor(rule: RuleWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): (Set[Symbol], Vector[Vector[Int]]) = {
+  private def uniqueContinuationsFor(rule: RuleWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): Set[Symbol] = {
     val funcSym =
       if(rule.derived) null
       else {
@@ -182,22 +256,15 @@ class Inline(global: Global) extends Phase {
         if(s.size == 1) s.head else null
       }
     if(funcSym != null) {
-      val rhsSymsMap = rules.view.filterNot(_._2.derived).mapValues(_.branches.iterator.flatMap(_.cells).toSet)
-      val rhsSymsHere = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 == funcSym || k.sym2 == funcSym }.flatMap(_._2).toSet
-      val otherRhsSyms = rhsSymsMap.iterator.filter { case (k, _) => k.sym1 != funcSym && k.sym2 != funcSym }.flatMap(_._2).toSet
-      val unique = (rhsSymsHere -- otherRhsSyms).filter(s => s.isDef && s != funcSym && s.id != "dup" && s.id != "erase")
-      //println(s"${rule.key}: $funcSym, $rhsSymsHere; $otherRhsSyms")
-      val completions = rule.branches.map { branch =>
-        (for {
-          (s, i) <- branch.cells.zipWithIndex if unique.contains(s)
-        } yield {
-          branch.principalConns(i) match {
-            case CellIdx(_, -1) => i //TODO not needed if rhs is fully reduced
-            case FreeIdx(_, _) => i
-            case _ => -1
-        }}).filter(_ >= 0)
-      }
-      (unique, completions)
-    } else (Set.empty, rule.branches.map(_ => Vector.empty))
+      val usedSymsByRuleKey = rules.view.filterNot(_._2.derived).mapValues(_.allCreatedCells)
+      val symsUsedHere = usedSymsByRuleKey.iterator.filter { case (k, _) => k.sym1 == funcSym || k.sym2 == funcSym }.flatMap(_._2).toSet
+      val symsUsedInOtherRules = usedSymsByRuleKey.iterator.filter { case (k, _) => k.sym1 != funcSym && k.sym2 != funcSym }.map { case (k, v) =>
+        (k, v.filter(s => s != k.sym1 && s != k.sym2)) // don't count self-recursive calls which can be caused by previous inlining
+      } .flatMap(_._2).toSet
+      //println(s"funcSym: $funcSym")
+      //println(s"symsUsedHere: $symsUsedHere")
+      //println(s"symsUsedInOtherRules: $symsUsedInOtherRules")
+      (symsUsedHere -- symsUsedInOtherRules).filter(s => (s.isDef || s.isContinuation) && s != funcSym && s.id != "dup" && s.id != "erase")
+    } else Set.empty
   }
 }

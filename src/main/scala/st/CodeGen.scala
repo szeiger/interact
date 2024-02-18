@@ -28,7 +28,7 @@ class Defs(genPackage: String) {
   val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
   val cell_cellSymbol = cellT.method("cellSymbol", tp.m()(AbstractCodeGen.symbolT))
   val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
-  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I).V)
+  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
   val intBox_getValue = intBoxT.method("getValue", tp.m().I)
