@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters._
 @RunWith(classOf[Parameterized])
 class MainTest(spec: String) {
   val SCALE = 0
-  val conf = Config.defaultConfig.withSpec(spec).copy(showAfter = Set(""),
+  val conf = Config.defaultConfig.withSpec(spec).copy(showAfter = Set(""), phaseLog = Set(""),
     //writeOutput = Some(Path.of("bench/gen-classes")), writeJava = Some(Path.of("bench/gen-src"))
   )
 

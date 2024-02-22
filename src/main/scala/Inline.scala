@@ -2,73 +2,114 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast.{CompilationUnit, RuleKey, ShowableNode, Statement, Symbol, Transform}
 
+import scala.annotation.tailrec
 import scala.collection.mutable
 
 /**
  * Inline active pairs on the RHS of rules.
  */
-class Inline(global: Global) extends Phase {
+class Inline(val global: Global) extends Phase {
   import global._
 
   def apply(n: CompilationUnit): CompilationUnit = {
-    val allInlinableRules = n.statements.iterator.collect {
-      case r: RuleWiring if config.compile || (r.branches.length == 1 && r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty) => (r.key, r)
-    }.toMap
-    val (fullyInlinableRules, chainableRules) = allInlinableRules.partition(_._2.branches.length == 1)
-    checkCircular(fullyInlinableRules)
-    val n2 = if(config.inlineFull) transformer(fullyInlinableRules, false)(n) else n
-    val n3 = if(config.compile && config.inlineBranching) transformer(chainableRules, true)(n2) else n2
-    if(config.inlineUniqueContinuations && config.compile) {
-      val rules = n3.statements.iterator.collect { case r: RuleWiring => (r.key, r) }.toMap
-      activateTransform(rules)(n3)
-    } else n3
-  }
-
-  private[this] def activateTransform(rules: Map[RuleKey, RuleWiring]): Transform = new Transform {
-    override def apply(r: RuleWiring) = Vector({
-      val uniqueContSyms = uniqueContinuationsFor(r, rules)
-      if(uniqueContSyms.nonEmpty) {
-        //println(s"**** Unique continuations for ${r.key}: $uniqueContSyms")
-        r.copy(branches = r.branches.flatMap(createConinuationMatches(r, _, uniqueContSyms, rules)))
-      } else r
-    })
-  }
-
-  private[this] def createConinuationMatches(rule: RuleWiring, branch: BranchWiring, uniqueContSyms: Set[Symbol], rules: Map[RuleKey, RuleWiring]): Vector[BranchWiring] = {
-    assert(branch.cellOffset == 0)
-    val candidates = branch.cells.iterator.zipWithIndex.flatMap {
-      case (s, i) if uniqueContSyms.contains(s) =>
-        branch.principalConns(i) match {
-          case f: FreeIdx => Iterator.single(s, i, f)
-          case _ => Iterator.empty
+    val allRules = n.statements.iterator.collect { case r: RuleWiring => (r.key, r) }.toMap
+    val rulesBySym = allRules.toVector.flatMap { case (k, r) => Vector((k.sym1, r), (k.sym2, r)) }.groupBy(_._1).map { case (k, v) => (k, v.map(_._2)) }
+    val fullyInlinableRules = allRules.filter { case (_, r) => r.branches.length == 1 && (config.compile || r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty) }
+    //val chainableRules: Map[RuleKey, RuleWiring] = if(config.compile) allRules.filter { case (_, r) => r.branches.length > 1 } else Map.empty
+    val uniqueContSyms: Map[RuleKey, Set[Symbol]] =
+      if(config.compile && config.inlineUniqueContinuations) {
+        val fwd = allRules.iterator.collect { case (_, r) => (r, uniqueContinuationsFor(r, allRules)) }.toVector
+        val rev = fwd.flatMap { case (r, syms) =>
+          val f = funcSymFor(r)
+          if(f.isEmpty) Vector.empty
+          else syms.iterator.flatMap(s => rulesBySym.getOrElse(s, Vector.empty)).map(r => (r.key, r.branches.flatMap(_.cells).filter(_ == f.get).toSet))
         }
-      case _ => Iterator.empty
-    }.toVector
-    if(candidates.nonEmpty) {
-      //println("Candidates in branch: " + candidates)
-      val (usym, idx, wire) = candidates.head //TODO support multiple?
-      val partners = rules.iterator.filterNot(_._2.derived).collect {
-        case (k, r) if k.sym1 == usym => (k.sym2, r)
-        case (k, r) if k.sym2 == usym => (k.sym1, r)
-      }.toVector
-      if(branch.cond.isEmpty) {
-        //ShowableNode.print(branch, name = "Original branch")
-        partners.map { case (psym, prule) =>
-          //println(s"Activating branch of ${rule.key} with ($idx, $usym, $psym, $wire):")
-          val b = makeActive(branch, psym, wire)
-          val (c1, c2) = if(prule.key.sym1 == usym) (idx, b.cells.length-1) else (b.cells.length-1, idx)
-          assert(b.branches.isEmpty)
-          //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
-          //ShowableNode.print(prule, name = "Inlining")
-          val b2 = inline(b, c1, c2, prule)._1
-          //ShowableNode.print(b2, name = "Activated")
-          b2
-        } :+ branch
-      } else {
-        Vector(branch) //--
-      }
-    } else Vector(branch)
+        (fwd.map { case (r, syms) => (r.key, syms) } ++ rev).toMap
+      } else Map.empty
+    checkCircular(fullyInlinableRules)
+
+    val st2 = Transform.mapC(n.statements) {
+      case r: RuleWiring => inlineRec(r, Nil, SymCounts.empty, SymCounts.empty, uniqueContSyms, allRules)
+      case s => s
+    }
+    if(st2 eq n.statements) n else n.copy(st2)
   }
+
+  private[this] def inlineRec(r: RuleWiring, parents: List[RuleKey], parentAvailable: SymCounts, parentCreated: SymCounts,
+    uniqueContSyms: Map[RuleKey, Set[Symbol]], allRules: Map[RuleKey, RuleWiring]): RuleWiring = {
+    val chain = r.key :: parents
+    val prefix = "    " * (parents.length+1)
+    phaseLog(s"$prefix${r.key}")
+    val ruleAvailable = parentAvailable ++ Vector(r.sym1, r.sym2).filterNot(_.isSingleton)
+    val uniqueConts = uniqueContSyms.getOrElse(r.key, Set.empty)
+    val branches2 = Transform.flatMapC(r.branches) { branch =>
+      val branchCreated = parentCreated ++ branch.cells.filterNot(_.isSingleton)
+      phaseLog(s"$prefix  create ${branchCreated -- ruleAvailable}")
+
+      // direct
+      val possiblePairs = findInlinableActivePairs(branch, allRules).filter { case (_, _, r2) =>
+        !chain.contains(r2.key) || (config.inlineFullAll && r2.branches.length == 1)
+      }
+      val possiblePairsRecInlined = possiblePairs.map { case (i1, i2, r2) =>
+        phaseLog(s"$prefix  direct simple: ${r2.key}")
+        (i1, i2, inlineRec(r2, chain, ruleAvailable, branchCreated, uniqueContSyms, allRules))
+      }.filter { case (_, _, r2) =>
+        // filter again because inlining could have produced more branches
+        !chain.contains(r2.key) || (config.inlineFullAll && r2.branches.length == 1)
+      }
+      val (simple, branching) = possiblePairsRecInlined.toList.partition(_._3.branches.length == 1)
+      val direct = (if(config.inlineFull) simple else Nil) ++
+        (if(config.inlineBranching) branching.take(1) else Nil) //TODO inline multiple branching rules?
+      val branch2 = inlineAll(branch, direct)
+
+      // speculative
+      if(uniqueConts.nonEmpty && branch2.cond.isEmpty && branch2.branches.isEmpty) { //TODO inline into already branching rule? Create nested conditions?
+        val candidates = branch2.cells.iterator.zipWithIndex.flatMap {
+          case (s, i) if uniqueConts.contains(s) && !ruleAvailable.contains(s) =>
+            branch2.principalConns(i) match {
+              case f: FreeIdx => Iterator.single((s, i, f))
+              case _ => Iterator.empty
+            }
+          case _ => Iterator.empty
+        }.toSet
+        val candidate = candidates.headOption //TODO choose the best candidate or inline multiple ones?
+        val candidateRecInlined = candidate.map { case (usym, _, _) =>
+          val partners = allRules.iterator.filterNot(_._2.derived).collect {
+            case (k, r) if k.sym1 == usym => (k.sym2, r)
+            case (k, r) if k.sym2 == usym => (k.sym1, r)
+          }.toVector.filter { case (s, r) => !chain.contains(r.key) }
+          phaseLog(s"$prefix  cont: $usym")
+          partners.map { case (psym, r2) =>
+            (psym, inlineRec(r2, chain, ruleAvailable + psym, branchCreated, uniqueContSyms, allRules))
+          }
+        }
+        (candidate, candidateRecInlined) match {
+          case (Some((usym, idx, wire)), Some(partners)) if partners.nonEmpty =>
+            //ShowableNode.print(branch2, name = "Original branch")
+            partners.map { case (psym, prule) =>
+              //phaseLog(s"Activating branch of ${rule.key} with ($idx, $usym, $psym, $wire):")
+              val b = makeActive(branch2, psym, wire)
+              val (c1, c2) = if(prule.key.sym1 == usym) (idx, b.cells.length-1) else (b.cells.length-1, idx)
+              assert(b.branches.isEmpty)
+              //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
+              //ShowableNode.print(prule, name = "Inlining")
+              val b2 = inline(b, c1, c2, prule)._1
+              //ShowableNode.print(b2, name = "Activated")
+              b2
+            } :+ branch2
+          case _ => Vector(branch2)
+        }
+      } else Vector(branch2)
+    }
+    if(branches2 eq r.branches) r else r.copy(branches = branches2)
+  }
+
+  private[this] def findInlinableActivePairs(n: BranchWiring, rules: Map[RuleKey, RuleWiring]): Set[(Int, Int, RuleWiring)] =
+    n.intConns.iterator.collect { case Connection(CellIdx(c1, -1), CellIdx(c2, -1)) =>
+      (c1, c2, rules.get(new RuleKey(n.cells(c1), n.cells(c2))))
+    }.collect { case (c1, c2, Some(r)) =>
+      if(n.cells(c1) == r.sym1)  (c1, c2, r) else (c2, c1, r)
+    }.toSet
 
   def makeActive(branch: BranchWiring, psym: Symbol, pWire: FreeIdx): BranchWiring = {
     val topCellLen = branch.cells.length
@@ -103,44 +144,18 @@ class Inline(global: Global) extends Phase {
     b2
   }
 
-  private[this] def transformer(inlinableRules: Map[RuleKey, RuleWiring], chained: Boolean): Transform = new Transform {
-    val processed = mutable.Map.empty[RuleKey, RuleWiring]
-    override def apply(n: Statement): Vector[Statement] = n match {
-      case n: RuleWiring => apply(n)
-      case n => Vector(n)
-    }
-    override def apply(n: RuleWiring): Vector[Statement] = Vector(processRuleWiring(n, Set.empty))
-    def processRuleWiring(n: RuleWiring, via: Set[RuleKey]): RuleWiring = processed.get(n.key) match {
-      case Some(r) => r
-      case None if via.contains(n.key) => n
-      case None =>
-        val br2 = n.branches.zipWithIndex.map { case (b, i) => inlineInto(b, n.key, i, via) }
-        val n2 = n.copy(branches = br2)
-        if(!config.inlineDuplicate) processed.put(n.key, n2)
-        n2
-    }
-    def inlineInto(n: BranchWiring, key: RuleKey, branchIdx: Int, via: Set[RuleKey]): BranchWiring = {
-      assert(n.cellOffset == 0 && n.branches.isEmpty, s"in $key #$branchIdx")
-      val pairs = findInlinable(n, inlinableRules).collect { case (c1, c2, r) if key != r.key => (c1, c2, processRuleWiring(r, via + key)) }
-      if(pairs.isEmpty) n
-      else {
-        //if(chained) println(s"***** inlining into ${key} #$branchIdx: ${pairs.map(_._3.key)}, via: $via")
-        def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
-          case (c1, c2, r) :: ps =>
-            val (n2, mapping) = inline(n, c1, c2, r)
-            inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
-          case Nil => n
-        }
-        if(chained) inlineAll(n, pairs.toList.take(1))
-        else inlineAll(n, pairs.toList)
-      }
-    }
+  @tailrec
+  private[this] def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
+    case (c1, c2, r) :: ps =>
+      val (n2, mapping) = inline(n, c1, c2, r)
+      inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
+    case Nil => n
   }
 
   private[this] def checkCircular(inlinableRules: Map[RuleKey, RuleWiring]): Unit = {
     val directInlinable = (for {
       (k, r) <- inlinableRules.iterator
-    } yield k -> findInlinable(r.branches.head, inlinableRules).iterator.map(_._3).toVector).toMap
+    } yield k -> findInlinableActivePairs(r.branches.head, inlinableRules).iterator.map(_._3).toVector).toMap
 
     def check(r: RuleWiring, used: Set[RuleKey], usedList: List[RuleKey]): Unit = {
       if(used.contains(r.key)) error(s"Circular expansion ${usedList.reverse.map(k => s"($k)").mkString(" => ")}", r.branches.head)
@@ -154,13 +169,6 @@ class Inline(global: Global) extends Phase {
     inlinableRules.values.toVector.sortBy(_.pos).foreach(check(_, Set.empty, Nil))
     checkThrow()
   }
-
-  private[this] def findInlinable(n: BranchWiring, rules: Map[RuleKey, RuleWiring]): Set[(Int, Int, RuleWiring)] =
-    n.intConns.iterator.collect { case Connection(CellIdx(c1, -1), CellIdx(c2, -1)) =>
-      (c1, c2, rules.get(new RuleKey(n.cells(c1), n.cells(c2))))
-    }.collect { case (c1, c2, Some(r)) =>
-      if(n.cells(c1) == r.sym1)  (c1, c2, r) else (c2, c1, r)
-    }.toSet
 
   private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring): (BranchWiring, Map[Int, Int]) = {
     //println(s"inline($c1, $c2)")
@@ -247,14 +255,16 @@ class Inline(global: Global) extends Phase {
       case _ => 0
     }}).maxOption.getOrElse(0)
 
-  // Find unique continuation symbols for a rule plus a list of their eligible cell indices per branch
-  private def uniqueContinuationsFor(rule: RuleWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): Set[Symbol] = {
-    val funcSym =
-      if(rule.derived) null
-      else {
-        val s = Set(rule.sym1, rule.sym2).filter(_.isDef)
-        if(s.size == 1) s.head else null
-      }
+  private[this] def funcSymFor(rule: RuleWiring): Option[Symbol] =
+    if(rule.derived) None
+    else {
+      val s = Set(rule.sym1, rule.sym2).filter(_.isDef)
+      if(s.size == 1) s.headOption else None
+    }
+
+  // Find unique continuation symbols for a rule
+  private[this] def uniqueContinuationsFor(rule: RuleWiring, rules: scala.collection.Map[RuleKey, RuleWiring]): Set[Symbol] = {
+    val funcSym = funcSymFor(rule).orNull
     if(funcSym != null) {
       val usedSymsByRuleKey = rules.view.filterNot(_._2.derived).mapValues(_.allCreatedCells)
       val symsUsedHere = usedSymsByRuleKey.iterator.filter { case (k, _) => k.sym1 == funcSym || k.sym2 == funcSym }.flatMap(_._2).toSet

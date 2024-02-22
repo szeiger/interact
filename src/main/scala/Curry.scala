@@ -7,7 +7,7 @@ import scala.collection.mutable
 /**
  * Create curried and derived rules, and remove all Cons and Def statements.
  */
-class Curry(global: Global) extends Transform with Phase {
+class Curry(val global: Global) extends Transform with Phase {
   import global._
 
   private[this] lazy val defaultDeriveSyms =

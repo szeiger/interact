@@ -7,9 +7,8 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 /** Translate RuleWiring/BranchWiring to RulePlan/BranchPlan for the code generator */
-class PlanRules(global: Global) extends Phase {
+class PlanRules(val global: Global) extends Phase {
   import global._
-  import PlanRules._
 
   override def apply(u: CompilationUnit): CompilationUnit = {
     val rules = u.statements.collect { case r: RuleWiring => (r.key, r) }.toMap
@@ -37,7 +36,7 @@ class PlanRules(global: Global) extends Phase {
       val activeForIdxO = active.indexOf(idx)
       branch.cells(idx) match {
         case _ if activeForIdxO >= 0 => instr1 += ReuseActiveCell(idxO, activeForIdxO)
-        case sym if isSingleton(sym) => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
+        case sym if sym.isSingleton => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
         case sym => instr2 += NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
           case (CellIdx(ci, p2), p1) if !cellsCreated(ci) && active.indexOf(ci) < 0 => cellPortsNotConnected += 1; CellIdx(-1, p2)
           //case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => cellPortsNotConnected += 1; CellIdx(-1, p2)
@@ -239,14 +238,10 @@ class PlanRules(global: Global) extends Phase {
   }
 }
 
-object PlanRules {
-  def isSingleton(sym: Symbol) = sym.arity == 0 && sym.payloadType.isEmpty
-}
-
 final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, branches: Vector[BranchPlan],
   initialSyms: Option[Vector[Symbol]]) extends Statement {
   def initial = initialSyms.isDefined
-  def show: String = s"sym1=$sym1, sym2=$sym2, arity1=$arity1, arity2=$arity2, initial=$initial"
+  def show: String = s"$key, arity1=$arity1, arity2=$arity2, initial=$initial"
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
   def key: RuleKey = new RuleKey(sym1, sym2)

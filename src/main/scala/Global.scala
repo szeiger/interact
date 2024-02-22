@@ -52,6 +52,14 @@ final class Global(val config: Config) {
 
   def checkThrow(): Unit =
     if(hasErrors) throw getCompilerResult()
+
+  def phaseLog(phase: String, msg: String): Unit =
+    println(s"<$phase> $msg")
+
+  def phaseLog(phase: String, n: ShowableNode, name: String): Unit = {
+    val p = s"<$phase> "
+    ShowableNode.print(n, name = name, prefix = p, prefix1 = p)
+  }
 }
 
 class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode = null, internal: Boolean = false) {

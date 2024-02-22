@@ -13,7 +13,7 @@ import scala.collection.mutable.ArrayBuffer
 /**
  * Deconstruct rules into cells and wires for execution.
  */
-class CreateWiring(global: Global) extends Transform with Phase {
+class CreateWiring(val global: Global) extends Transform with Phase {
   import global._
 
   override def apply(n: MatchRule) =

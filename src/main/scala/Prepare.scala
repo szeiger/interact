@@ -5,7 +5,7 @@ import de.szeiger.interact.ast._
 /**
  * Create all symbols and check function calls and linearity.
  */
-class Prepare(global: Global) extends Phase {
+class Prepare(val global: Global) extends Phase {
   import global._
 
   def apply(unit: CompilationUnit): CompilationUnit = {

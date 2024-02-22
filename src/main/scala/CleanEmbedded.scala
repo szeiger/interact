@@ -15,7 +15,7 @@ import scala.collection.mutable.ArrayBuffer
  * - Embedded expressions are valid assignments and method calls.
  * - Method/operator calls are typed but not yet resolved.
  */
-class CleanEmbedded(global: Global) extends Transform with Phase {
+class CleanEmbedded(val global: Global) extends Transform with Phase {
   import global._
 
   override def apply(n: Statement): Vector[Statement] = n match {

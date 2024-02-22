@@ -48,8 +48,13 @@ class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {
-  def phaseName: String = getClass.getName.replaceAll(".*\\.", "")
+  val global: Global
+  val phaseName: String = getClass.getName.replaceAll(".*\\.", "")
+  val phaseLogEnabled: Boolean = global.config.phaseLog.contains(phaseName) || global.config.phaseLog.contains("*")
   override def toString: String = phaseName
+
+  @inline final def phaseLog(@inline msg: => String): Unit = if(phaseLogEnabled) global.phaseLog(phaseName, msg)
+  @inline final def phaseLog(n: ShowableNode, name: String): Unit = if(phaseLogEnabled) global.phaseLog(phaseName, n, name)
 }
 
 case class Config(
@@ -57,9 +62,10 @@ case class Config(
   compile: Boolean = true,
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true,
+  phaseLog: Set[String] = Set.empty, // show debug log of these phases
   showAfter: Set[String] = Set.empty, // log AST after these phases
-  inlineDuplicate: Boolean = false, // inline conditional circular dependencies from all starting rules
   inlineFull: Boolean = true, // inline rules that can be merged into a single branch
+  inlineFullAll: Boolean = true, // inline simple matches even when duplicating a parent rule
   inlineBranching: Boolean = true, // inline rules that cannot be merged into a single branch (st.c)
   inlineUniqueContinuations: Boolean = true, // st.c
 

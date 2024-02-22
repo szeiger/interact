@@ -7,7 +7,9 @@ import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
 import scala.collection.mutable
 
-class Defs(genPackage: String) {
+class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
+  compilationUnit: CompilationUnit, globals: Symbols) extends AbstractCodeGen[RuleImpl](config) {
+
   import AbstractCodeGen.encodeName
 
   val riT = tp.c[RuleImpl]
@@ -58,12 +60,6 @@ class Defs(genPackage: String) {
   def cellCache_var(sym: Symbol) = cellCacheT.field(s"f_${encodeName(sym)}", concreteCellTFor(sym))
   def cellCache_get(sym: Symbol) = cellCacheT.method(s"get_${encodeName(sym)}", tp.m()(concreteCellTFor(sym)))
   def cellCache_set(sym: Symbol) = cellCacheT.method(s"set_${encodeName(sym)}", tp.m(concreteCellTFor(sym)).V)
-}
-
-class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
-  compilationUnit: CompilationUnit, globals: Symbols) extends AbstractCodeGen[RuleImpl](config) {
-  val defs = new Defs(genPackage)
-  import defs._
 
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
   val common = findCommonPartners()
@@ -76,11 +72,12 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
       new ActiveCell(1, m.param("active1", concreteCellTFor(rule.sym2)), rule.sym2, rule.arity2, needsCachedPayloads.contains(1)),
     )
     val ptw = m.param("ptw", ptwT)
-    incMetric(s"${classDSL.name}.${m.name}", m, ptw)
-    new GenStaticReduce(m, active, ptw, rule, defs, config, common).emitRule()
+    val metricName = s"${classDSL.name}.${m.name}"
+    incMetric(metricName, m, ptw)
+    new GenStaticReduce(m, active, ptw, rule, this, metricName).emitRule()
   }
 
-  private def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
+  def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
     if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invoke(ptw_recordMetric)
 
   private def compileInterface(sym: Symbol): Unit = {
@@ -149,20 +146,20 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, config: Config,
     // constructor
     {
       val params = (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I))
-      val m = c.constructor(if(PlanRules.isSingleton(sym)) Acc.PRIVATE else Acc.PUBLIC, tp.m(params: _*))
+      val m = c.constructor(if(sym.isSingleton) Acc.PRIVATE else Acc.PUBLIC, tp.m(params: _*))
       val aux = (0 until sym.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
       m.aload(m.receiver).invokespecial(new_CommonCell)
       aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
         m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
       }
       m.return_
-      if(PlanRules.isSingleton(sym)) c.field(Acc.PUBLIC.STATIC.FINAL, cell_singleton(sym))
+      if(sym.isSingleton) c.field(Acc.PUBLIC.STATIC.FINAL, cell_singleton(sym))
     }
 
     // class init
     {
       val m = c.clinit()
-      if(PlanRules.isSingleton(sym)) m.newInitDup(concreteConstrFor(sym))().putstatic(cell_singleton(sym))
+      if(sym.isSingleton) m.newInitDup(concreteConstrFor(sym))().putstatic(cell_singleton(sym))
       reifySymbol(m, sym).putstatic(symField)
       m.return_
     }

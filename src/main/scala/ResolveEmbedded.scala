@@ -5,7 +5,7 @@ import de.szeiger.interact.ast._
 import java.lang.reflect.Method
 
 /** Resolve embedded methods and assign embedded types. */
-class ResolveEmbedded(global: Global) extends Transform with Phase {
+class ResolveEmbedded(val global: Global) extends Transform with Phase {
   import global._
 
   override def apply(_n: Branch): Branch = {

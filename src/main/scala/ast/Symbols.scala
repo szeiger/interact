@@ -20,6 +20,7 @@ final class Symbol(val id: String, val arity: Int = 0, val returnArity: Int = 1,
   override def toString: String = id
   def isDefined: Boolean = this != Symbol.NoSymbol
   def isEmpty: Boolean = !isDefined
+  def isSingleton: Boolean = arity == 0 && payloadType.isEmpty
   def uniqueStr: String = if(isDefined) s"$id:${System.identityHashCode(this)}" else "<NoSymbol>"
   def show: String = s"$uniqueStr<$payloadType>"
 }

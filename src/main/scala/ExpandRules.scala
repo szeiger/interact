@@ -5,7 +5,7 @@ import de.szeiger.interact.ast._
 /**
  * Complete rules by synthesizing omitted return wires in conditions and reductions.
  */
-class ExpandRules(global: Global) extends Transform with Phase {
+class ExpandRules(val global: Global) extends Transform with Phase {
   import global._
 
   val normalizeCond = new NormalizeCondition(global)

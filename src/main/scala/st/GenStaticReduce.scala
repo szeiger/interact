@@ -5,8 +5,8 @@ import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
-class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: VarIdx, rule: RulePlan, defs: Defs, config: Config, common: Set[Symbol]) {
-  import defs._
+class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
+  import codeGen._
 
   val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.length > 0) m.newLabel else null
   val methodStart = m.setLabel()
@@ -23,7 +23,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   val reuseBuffers: Array[WriteBuffer] = new Array(rule.totalActiveCount)
   // payload temp vars and boxed flag, updated for the current branches
   val temp = new Array[(VarIdx, Boolean)](rule.totalTempCount)
-  // cached payloads, shared between all branches
+  // cached payloads, updated for the current top-level branch
   for(ac <- active if ac != null) cachePayload(ac)
 
   private def cachePayload(ac: ActiveCell): Unit = {
@@ -96,7 +96,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     m.invoke(ptw_createCut)
   }
 
-  def emitBranch(bp: BranchPlan, parents: List[BranchPlan]): Unit = {
+  def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
     //ShowableNode.print(bp)
     cells.clearFrom(bp.cellOffset)
@@ -104,6 +104,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     val branchEnd = m.newLabel
 
     checkCondition(bp, branchEnd)
+    incMetric(s"$branchMetricName", m, ptw)
 
     val (cont1, cont2) = {
       if(bp.loopOn1 || bp.loopOn2) {
@@ -190,7 +191,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       case Connection(i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
     }
 
-    if(bp.branches.nonEmpty) bp.branches.foreach(b => emitBranch(b, bp :: parents))
+    if(bp.branches.nonEmpty)
+      bp.branches.zipWithIndex.foreach { case (b, i) => emitBranch(b, bp :: parents, s"$branchMetricName.$i") }
     else {
       for(w <- reuseBuffers if w != null) w.flush()
 
@@ -223,7 +225,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   }
 
   def emitRule(): Unit = {
-    rule.branches.foreach { bp =>
+    rule.branches.zipWithIndex.foreach { case (bp, branchIdx) =>
       active(0).reuse = bp.active(0)
       active(1).reuse = bp.active(1)
       for(i <- 2 until active.length) {
@@ -231,7 +233,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       }
       for(i <- active.indices)
         reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
-      emitBranch(bp, Nil)
+      emitBranch(bp, Nil, s"$baseMetricName#$branchIdx")
     }
     if(methodEnd != null) m.setLabel(methodEnd)
     m.return_
