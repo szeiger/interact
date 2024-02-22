@@ -8,13 +8,13 @@ import org.objectweb.asm.Label
 class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
   import codeGen._
 
-  val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.length > 0) m.newLabel else null
+  val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.nonEmpty) m.newLabel else null
   val methodStart = m.setLabel()
   val (statCellAllocations, statCachedCellReuse) =
     if(config.collectStats) (m.iconst(0).storeLocal(tp.I, "statCellAllocations"), m.iconst(0).storeLocal(tp.I, "statCachedCellReuse"))
     else (VarIdx.none, VarIdx.none)
   // active cells (at least two), updated for the current top-level branch
-  val active: Array[ActiveCell] = new Array(rule.totalActiveCount)
+  val active: Array[ActiveCell] = new Array[ActiveCell](rule.totalActiveCount)
   _initialActive.copyToArray(active)
   // cells and their symbols, updated for the current branches
   val cells = new VarIdxArray(rule.totalCellCount)
@@ -197,7 +197,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       for(w <- reuseBuffers if w != null) w.flush()
 
       if(config.useCellCache && !rule.initial)
-        active.foreach { case a if a.reuse == -1 => m.aload(a.vidx).invokestatic(cellCache_set(a.sym)) }
+        active.foreach { a =>
+          if(a != null && a.reuse == -1) m.aload(a.vidx).invokestatic(cellCache_set(a.sym))
+        }
 
       recordStats(cont1, bp, parents)
 
