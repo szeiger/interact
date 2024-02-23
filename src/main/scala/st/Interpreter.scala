@@ -67,11 +67,6 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 
   override def toString = s"InterpretedRuleImpl($sym1 <-> $sym2)"
 
-  private[this] def delay(nanos: Int): Unit = {
-    val end = System.nanoTime() + nanos
-    while(System.nanoTime() < end) Thread.onSpinWait()
-  }
-
   private[this] def payloadComp(pc: PayloadComputation, args: Array[Any]): Any = pc match {
     case pc: PayloadMethodApplication => pc.adaptedmh.invokeWithArguments(args: _*)
     case PayloadMethodApplicationWithReturn(m, _) =>
@@ -115,7 +110,6 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
     }
 
     val cells = ptw.tempCells
-    //delay(20)
     var i = 0
     while(i < protoCells.length) {
       val pc = protoCells(i)
@@ -211,14 +205,6 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def getMetrics: ExecutionMetrics = metrics
 
-  def getSymbol(c: Cell): Symbol = {
-    val s = c.cellSymbol
-    if(s != null) s else c match {
-      case c: InterpreterCell if c.symId != 0 => reverseSymIds(c.symId)
-      case c => Symbol.NoSymbol
-    }
-  }
-
   def getAnalyzer: Analyzer[Cell] = new Analyzer[Cell] {
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     val principals = mutable.HashMap.empty[Cell, Cell]
@@ -227,11 +213,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       principals.put(c2, c1)
     }
     def rootCells = (self.freeWires.iterator ++ (cutBuffer.iterator ++ principals.iterator).flatMap { case (c1, c2) => Seq(c1, c2) }).filter(_ != null).toSet
-    def getSymbol(c: Cell): Symbol = self.getSymbol(c)
-    def getPayload(c: Cell): Any = c match {
-      case c: IntBox => c.getValue
-      case c: RefBox => c.getValue
-      case c => "???"
+    def getSymbol(c: Cell): Symbol = (c.cellSymbol, c) match {
+      case (null, c: InterpreterCell) if c.symId != 0 => reverseSymIds(c.symId)
+      case (null, _) => Symbol.NoSymbol
+      case (s, _) => s
     }
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).orNull
@@ -306,8 +291,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     val w = new PerThreadWorker(this, null)
     w.setNext(c1, c2)
     w.processNext()
-    val (d1, d2) = w.getNext
-    if(d1 != null) cutBuffer.addOne(d1, d2)
+    w.flushNext()
   }
 
   def reduce(): Unit = {
@@ -369,8 +353,6 @@ final class PerThreadWorker(val inter: Interpreter, val metrics: ExecutionMetric
       nextCut2 = null
     }
   }
-
-  def getNext: (Cell, Cell) = (nextCut1, nextCut2)
 
   def reduceInterpreted(c1: InterpreterCell, c2: InterpreterCell): Unit = {
     val ri = inter.ruleImpls(inter.mkRuleKey(c1, c2))

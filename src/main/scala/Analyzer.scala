@@ -13,10 +13,15 @@ trait Analyzer[Cell] { self =>
   def getConnected(c: Cell, port: Int): (Cell, Int)
   def isFreeWire(c: Cell): Boolean
   def isSharedSingleton(c: Cell): Boolean
-  def getPayload(c: Cell): Any
 
   def symbolName(c: Cell): String = getSymbol(c).id
   def getArity(c: Cell): Int = getSymbol(c).arity
+
+  def getPayload(c: Cell): Any = c match {
+    case c: IntBox => c.getValue
+    case c: RefBox => c.getValue
+    case c => "???"
+  }
 
   private[this] def getAllConnected(c: Cell): Iterator[(Cell, Int)] =
     if(isFreeWire(c)) Iterator(getConnected(c, 0))

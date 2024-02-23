@@ -213,7 +213,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: C
       case c: WireCell => c.sym
       case c => reverseSymIds(c.symId)
     }
-    def getPayload(c: Cell): Any = ??? //TODO embedded
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
     def isSharedSingleton(c: Cell): Boolean = false
