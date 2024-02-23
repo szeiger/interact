@@ -14,8 +14,7 @@ class Inline(val global: Global) extends Phase {
   def apply(n: CompilationUnit): CompilationUnit = {
     val allRules = n.statements.iterator.collect { case r: RuleWiring => (r.key, r) }.toMap
     val rulesBySym = allRules.toVector.flatMap { case (k, r) => Vector((k.sym1, r), (k.sym2, r)) }.groupBy(_._1).map { case (k, v) => (k, v.map(_._2)) }
-    val fullyInlinableRules = allRules.filter { case (_, r) => r.branches.length == 1 && (config.compile || r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty) }
-    //val chainableRules: Map[RuleKey, RuleWiring] = if(config.compile) allRules.filter { case (_, r) => r.branches.length > 1 } else Map.empty
+    val fullyInlinableRules = allRules.filter { case (_, r) => r.branches.length == 1 && (config.compile || (r.sym1.payloadType.isEmpty && r.sym2.payloadType.isEmpty)) }
     val uniqueContSyms: Map[RuleKey, Set[Symbol]] =
       if(config.compile && config.inlineUniqueContinuations) {
         val fwd = allRules.iterator.collect { case (_, r) => (r, uniqueContinuationsFor(r, allRules)) }.toVector
@@ -58,8 +57,12 @@ class Inline(val global: Global) extends Phase {
         !chain.contains(r2.key) || (config.inlineFullAll && r2.branches.length == 1)
       }
       val (simple, branching) = possiblePairsRecInlined.toList.partition(_._3.branches.length == 1)
-      val direct = (if(config.inlineFull) simple else Nil) ++
-        (if(config.inlineBranching) branching.take(1) else Nil) //TODO inline multiple branching rules?
+      val simpleFiltered =
+        if(!config.inlineFull) Nil
+        else if(config.compile) simple
+        else simple.filter { case (_, _, r2) => r2.sym1.payloadType.isEmpty && r2.sym2.payloadType.isEmpty }
+      val direct = simpleFiltered ++
+        (if(config.inlineBranching && config.compile) branching.take(1) else Nil) //TODO inline multiple branching rules?
       val branch2 = inlineAll(branch, direct)
 
       // speculative
