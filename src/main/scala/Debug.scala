@@ -1,5 +1,5 @@
 import de.szeiger.interact._
-import de.szeiger.interact.st.Cell
+import de.szeiger.interact.sti.Cell
 
 import java.nio.file.Path
 import scala.annotation.tailrec
@@ -8,7 +8,7 @@ import scala.collection.mutable
 object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
   val model = new Compiler(statements, Config(compile = false, multiThreaded = false))
-  val inter = model.createInterpreter().asInstanceOf[st.Interpreter]
+  val inter = model.createInterpreter().asInstanceOf[sti.Interpreter]
   inter.initData()
 
   var steps = 0

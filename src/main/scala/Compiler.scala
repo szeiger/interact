@@ -44,7 +44,8 @@ class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
         case g: RuleWiring => rulePlans.put(g.key, g)
       }
       new mt.Interpreter(globalSymbols, rulePlans.values, config, mutable.ArrayBuffer.empty[Let], initialPlans)
-    } else new st.Interpreter(globalSymbols, unit, config)
+    } else if(config.compile) new stc.Interpreter(globalSymbols, unit, config)
+    else new sti.Interpreter(globalSymbols, unit, config)
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {

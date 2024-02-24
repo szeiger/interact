@@ -1,4 +1,4 @@
-package de.szeiger.interact.st
+package de.szeiger.interact.stc
 
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
@@ -93,7 +93,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       case (CellIdx(idx, _), _: FreeIdx) if !common.contains(cellSyms(idx)) => ldCell(ct2); ldCell(ct1)
       case _ => ldCell(ct1); ldCell(ct2)
     }
-    m.invoke(ptw_createCut)
+    m.invoke(ptw_addActive)
   }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {

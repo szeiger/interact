@@ -1,4 +1,4 @@
-package de.szeiger.interact.st
+package de.szeiger.interact.stc
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
 import de.szeiger.interact.{Config, IntBox, IntBoxImpl, PlanRules, RefBox, RefBoxImpl, RulePlan}
@@ -8,12 +8,12 @@ import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import scala.collection.mutable
 
 class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
-  compilationUnit: CompilationUnit, globals: Symbols) extends AbstractCodeGen[RuleImpl](config) {
+  compilationUnit: CompilationUnit, globals: Symbols) extends AbstractCodeGen(config) {
 
   import AbstractCodeGen.encodeName
 
-  val riT = tp.c[RuleImpl]
-  val ptwT = tp.c[PerThreadWorker]
+  val riT = tp.c[InitialRuleImpl]
+  val ptwT = tp.c[Interpreter]
   val cellT = tp.c[Cell]
   val intBoxT = tp.i[IntBox]
   val refBoxT = tp.i[RefBox]
@@ -29,10 +29,10 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val cell_auxPort = cellT.method("auxPort", tp.m(tp.I).I)
   val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
   val cell_cellSymbol = cellT.method("cellSymbol", tp.m()(AbstractCodeGen.symbolT))
-  val ptw_createCut = ptwT.method("createCut", tp.m(cellT, cellT).V)
+  val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
   val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
-  val ptw_irreducible = ptwT.method("irreducible", tp.m(cellT, cellT).V)
+  val ptw_addIrreducible = ptwT.method("addIrreducible", tp.m(cellT, cellT).V)
   val intBox_getValue = intBoxT.method("getValue", tp.m().I)
   val intBox_setValue = intBoxT.method("setValue", tp.m(tp.I).V)
   val refBox_getValue = refBoxT.method("getValue", tp.m()(tp.c[AnyRef]))
@@ -195,7 +195,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
         m.checkcast(ifm.owner)
       } {
         m.pop
-        m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_irreducible)
+        m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_addIrreducible)
         m.return_
       }
       m.aload(m.receiver).aload(ptw)
@@ -221,7 +221,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
       val other = m.param("other", concreteCellTFor(sym2))
       val ptw = m.param("ptw", ptwT)
-      m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_irreducible).return_
+      m.aload(ptw).aload(m.receiver).aload(other).invoke(ptw_addIrreducible).return_
     }
     addClass(classWriter, c)
   }

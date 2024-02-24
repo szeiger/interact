@@ -9,7 +9,7 @@ import org.objectweb.asm.{ClassReader, ClassWriter => AClassWriter}
 import java.io.{OutputStreamWriter, PrintWriter}
 import java.util.zip.CRC32
 
-abstract class AbstractCodeGen[RI](config: Config) {
+abstract class AbstractCodeGen(config: Config) {
   import AbstractCodeGen._
 
   private[this] def getCRC32(a: Array[Byte]): Long = {
