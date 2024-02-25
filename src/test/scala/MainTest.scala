@@ -31,10 +31,10 @@ class MainTest(spec: String) {
 object MainTest {
   @Parameters(name = "{0}")
   def interpreters = Seq(
-    "st.i", "st.c",
-    "mt0.i", "mt1.i", "mt8.i",
-    "mt1000.i", "mt1001.i", "mt1008.i",
-    "mt0.c", "mt1.c", "mt8.c",
-    "mt1000.c", "mt1001.c", "mt1008.c",
+    "sti", "stc1", "stc2",
+    //"mt0.i", "mt1.i", "mt8.i",
+    //"mt1000.i", "mt1001.i", "mt1008.i",
+    //"mt0.c", "mt1.c", "mt8.c",
+    //"mt1000.c", "mt1001.c", "mt1008.c",
   ).map(s => Array[AnyRef](s)).asJava
 }

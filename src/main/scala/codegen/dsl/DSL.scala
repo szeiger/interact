@@ -136,7 +136,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
   def accept(v: ClassVisitor, cls: ClassDSL): Unit = {
     val mv = v.visitMethod(access.acc, name, desc.desc, null, null)
     if(!access.has(Acc.ABSTRACT)) {
-      assert(params.length == argsCount - 1)
+      assert(params.length == argsCount - 1, s"Method $name ${desc.desc} has ${params.length} parameters, expected ${argsCount-1}")
       params.foreach(p => mv.visitParameter(p.name, p.access.acc))
       mv.visitCode()
       tryCatchBlocks.foreach(_.accept(mv))

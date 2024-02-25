@@ -205,7 +205,7 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
 }
 
 final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: Config, compData: Iterable[Let],
-  compInitial: Iterable[InitialRuleWiring]) extends BaseInterpreter with SymbolIdLookup { self =>
+  compInitial: Iterable[InitialRuleWiring], compile: Boolean) extends BaseInterpreter with SymbolIdLookup { self =>
 
   private[this] final val scope: Analyzer[Cell] = new Analyzer[Cell] {
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = Iterator.empty //TODO
@@ -259,7 +259,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: C
 
   def createRuleImpls(): (Array[RuleImpl], Int, Int) = {
     val (cl, codeGen) =
-      if(config.compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/mt/gen", config))
+      if(compile) (new LocalClassLoader(), new CodeGen("de/szeiger/interact/mt/gen", config))
       else (null, null)
     val ris = new Array[RuleImpl](1 << (symBits << 1))
     val maxC, maxW = new ParSupport.AtomicCounter
@@ -267,7 +267,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: C
       assert(g.branches.length == 1)
       val branch = g.branches.head
       val ri =
-        if(config.compile) codeGen.compileRule(g, cl)(this)
+        if(compile) codeGen.compileRule(g, cl)(this)
         else {
           maxW.max(g.maxWires)
           maxC.max(g.maxCells)

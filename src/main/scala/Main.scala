@@ -15,7 +15,7 @@ object Main extends App {
     val unit = Parser.parse(Path.of(args(0)))
     ShowableNode.print(unit)
     //statements.foreach(println)
-    val model = new Compiler(unit, Config(compile = false, collectStats = true))
+    val model = new Compiler(unit, Config(backend = STIBackend, collectStats = true))
 
     //println("Constructors:")
     //model.constrs.foreach(c => println(s"  ${c.show}"))

@@ -1,6 +1,6 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, Statement, Symbol}
+import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, Statement, Symbol, SymbolKind}
 
 import scala.collection.immutable.Vector
 import scala.collection.mutable
@@ -35,7 +35,7 @@ class PlanRules(val global: Global) extends Phase {
       val idxO = idx + branch.cellOffset
       val activeForIdxO = active.indexOf(idx)
       branch.cells(idx) match {
-        case _ if activeForIdxO >= 0 => instr1 += ReuseActiveCell(idxO, activeForIdxO)
+        case sym if activeForIdxO >= 0 => instr1 += ReuseActiveCell(idxO, activeForIdxO, sym)
         case sym if sym.isSingleton => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
         case sym => instr2 += NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
           case (CellIdx(ci, p2), p1) if !cellsCreated(ci) && active.indexOf(ci) < 0 => cellPortsNotConnected += 1; CellIdx(-1, p2)
@@ -107,7 +107,7 @@ class PlanRules(val global: Global) extends Phase {
   }
 
   private def findReuse(rule: GenericRuleWiring, branch: BranchWiring): (Vector[Int], Set[Connection]) = {
-    if(!config.reuseCells) return (Vector(-1, -1), Set.empty)
+    if(!config.reuseCells || rule.isInstanceOf[InitialRuleWiring]) return (Vector(-1, -1), Set.empty)
 
     val activeSyms = Vector(rule.sym1, rule.sym2) ++ branch.cond.collect { case pc: CheckPrincipal => pc.sym }
 
@@ -125,10 +125,16 @@ class PlanRules(val global: Global) extends Phase {
       }.toVector
     // Find cellIdxO (i.e. with cellOffset) and quality of cells with same symbol as an active cell
     def reuseCandidates(ac: Int): ArrayBuffer[(Int, Int)] =
-      branch.cells.iterator.zipWithIndex.collect { case (sym, i) if sym == activeSyms(ac) =>
-        val iO = i + branch.cellOffset
-        (iO, countReuseConnections(iO, ac))
-      }.to(ArrayBuffer)
+      if(config.reuseForeignSymbols && config.backend.reuseForeignSymbols)
+        branch.cells.iterator.zipWithIndex.collect { case (sym, i) if !sym.isSingleton && SymbolKind(sym) == SymbolKind(activeSyms(ac)) =>
+          val iO = i + branch.cellOffset
+          (iO, countReuseConnections(iO, ac) + (if(sym == activeSyms(ac)) 1 else 0))
+        }.to(ArrayBuffer)
+      else
+        branch.cells.iterator.zipWithIndex.collect { case (sym, i) if sym == activeSyms(ac) =>
+          val iO = i + branch.cellOffset
+          (iO, countReuseConnections(iO, ac))
+        }.to(ArrayBuffer)
 
     // Find best reuse combination for all active cells
     val cand = activeSyms.indices.iterator.map(i => i -> reuseCandidates(i).sortBy(-_._2)).filter(_._2.nonEmpty).to(mutable.HashMap)
@@ -285,8 +291,8 @@ sealed trait CreateInstruction extends Node
 case class GetSingletonCell(cellIdx: Int, sym: Symbol) extends CreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym")
 }
-case class ReuseActiveCell(cellIdx: Int, activeIdx: Int) extends CreateInstruction {
-  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, active($activeIdx)")
+case class ReuseActiveCell(cellIdx: Int, activeIdx: Int, sym: Symbol) extends CreateInstruction {
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, active($activeIdx), $sym")
 }
 case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym, [${args.map(_.show).mkString(", ")}]")

@@ -16,8 +16,9 @@ import java.util.concurrent.TimeUnit
 class InterpreterBenchmark {
 
   @Param(Array(
-    //"st.i",
-    "st.c",
+    //"sti",
+    "stc1",
+    "stc2",
     //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
     //"mt0.c", //"mt1.c", "mt8.c",
@@ -107,10 +108,14 @@ class InterpreterBenchmark {
       |""".stripMargin
 
   class PreparedInterpreter(source: String) {
-    val model: Compiler = new Compiler(Parser.parse(source), Config(spec).copy(showAfter = Set()))
+    val config = Config(spec).copy(showAfter = Set(""))
+    val prepareConfig = config.copy(collectStats = true, logCodeGenSummary = true)
+    val benchConfig = config
+    //val benchConfig = config.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")))
+    //val benchConfig = config.copy(skipCodeGen = true)
 
     {
-      val i = model.createInterpreter(model.global.config.copy(collectStats = true, logCodeGenSummary = true))
+      val i = new Compiler(Parser.parse(source), prepareConfig).createInterpreter()
       i.initData()
       println()
       i.reduce()
@@ -118,9 +123,8 @@ class InterpreterBenchmark {
       println()
     }
 
-    val inter = model.createInterpreter()
-    //val inter = model.createInterpreter(model.global.config.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src"))))
-    //val inter = model.createInterpreter(model.global.config.copy(skipCodeGen = true))
+    val inter = new Compiler(Parser.parse(source), benchConfig).createInterpreter()
+
     def setup(): BaseInterpreter = {
       inter.initData()
       inter

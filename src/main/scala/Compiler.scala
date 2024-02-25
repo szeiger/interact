@@ -17,7 +17,7 @@ class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
     new ResolveEmbedded(global),
     new CreateWiring(global),
     new Inline(global),
-  ) ++ (if(config.compile) Vector(
+  ) ++ (if(config.backend.planRules) Vector(
     new PlanRules(global),
   ) else Vector.empty)
 
@@ -35,17 +35,7 @@ class Compiler(unit0: CompilationUnit, _config: Config = Config.defaultConfig) {
     u2
   }
 
-  def createInterpreter(config: Config = global.config): BaseInterpreter =
-    if(config.multiThreaded) {
-      val rulePlans = mutable.Map.empty[RuleKey, RuleWiring]
-      val initialPlans = mutable.ArrayBuffer.empty[InitialRuleWiring]
-      unit.statements.foreach {
-        case i: InitialRuleWiring => initialPlans += i
-        case g: RuleWiring => rulePlans.put(g.key, g)
-      }
-      new mt.Interpreter(globalSymbols, rulePlans.values, config, mutable.ArrayBuffer.empty[Let], initialPlans)
-    } else if(config.compile) new stc.Interpreter(globalSymbols, unit, config)
-    else new sti.Interpreter(globalSymbols, unit, config)
+  def createInterpreter(): BaseInterpreter = config.backend.createInterpreter(this)
 }
 
 trait Phase extends (CompilationUnit => CompilationUnit) {
@@ -60,7 +50,6 @@ trait Phase extends (CompilationUnit => CompilationUnit) {
 
 case class Config(
   // Frontend
-  compile: Boolean = true,
   defaultDerive: Seq[String] = Seq("erase", "dup"),
   addEraseDup: Boolean = true,
   phaseLog: Set[String] = Set.empty, // show debug log of these phases
@@ -71,27 +60,89 @@ case class Config(
   inlineUniqueContinuations: Boolean = true, // st.c
 
   // Backend
-  multiThreaded: Boolean = false,
+  backend: Backend = STC1Backend,
   numThreads: Int = 0, // mt
   collectStats: Boolean = false,
-  useCellCache: Boolean = false, // st.c
-  biasForCommonDispatch: Boolean = true, // optimize for invokevirtual dispatch of statically known cell types (st.c)
-  logCodeGenSummary: Boolean = false, // st.c, mt.c
-  logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (st.c, mt.c)
+  useCellCache: Boolean = false, // stc*
+  biasForCommonDispatch: Boolean = true, // optimize for invokevirtual dispatch of statically known cell types (stc*)
+  logCodeGenSummary: Boolean = false, // stc*, mt.c
+  logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (stc*, mt.c)
   compilerParallelism: Int = 1,
-  allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (st.c)
-  reuseCells: Boolean = true, // st.c
-  writeOutput: Option[Path] = None, // write generated classes to dir or jar file (st.c)
-  writeJava: Option[Path] = None, // write decompiled classes to dir (st.c)
-  skipCodeGen: Boolean = false, // do not generate classfiles (st.c)
+  allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (stc*)
+  reuseCells: Boolean = true, // stc*
+  reuseForeignSymbols: Boolean = true, // stc2
+  writeOutput: Option[Path] = None, // write generated classes to dir or jar file (stc*)
+  writeJava: Option[Path] = None, // write decompiled classes to dir (stc*)
+  skipCodeGen: Boolean = false, // do not generate classfiles (stc*)
 ) {
   def withSpec(spec: String): Config = spec match {
-    case s"st.i" => copy(compile = false, multiThreaded = false)
-    case s"st.c" => copy(compile = true, multiThreaded = false)
-    case s"mt${mode}.i" => copy(compile = false, multiThreaded = true, numThreads = mode.toInt)
-    case s"mt${mode}.c" => copy(compile = true, multiThreaded = true, numThreads = mode.toInt)
+    case s"sti" => copy(backend = STIBackend)
+    case s"stc1" => copy(backend = STC1Backend)
+    case s"stc2" => copy(backend = STC2Backend)
+    case s"mt${mode}.i" => copy(backend = MTIBackend, numThreads = mode.toInt)
+    case s"mt${mode}.c" => copy(backend = MTCBackend, numThreads = mode.toInt)
   }
 }
+
+abstract class Backend(val name: String) {
+  def createInterpreter(comp: Compiler): BaseInterpreter
+  def planRules: Boolean
+  def inlineBranching: Boolean
+  def inlineUniqueContinuations: Boolean
+  def allowPayloadTemp: Boolean
+  def reuseForeignSymbols: Boolean
+}
+
+object STIBackend extends Backend("sti") {
+  def createInterpreter(comp: Compiler): BaseInterpreter =
+    new sti.Interpreter(comp.global.globalSymbols, comp.unit, comp.global.config)
+  def planRules: Boolean = false
+  def inlineBranching: Boolean = false
+  def inlineUniqueContinuations: Boolean = false
+  def allowPayloadTemp: Boolean = false
+  def reuseForeignSymbols: Boolean = false
+}
+
+object STC1Backend extends Backend("stc1") {
+  def createInterpreter(comp: Compiler): BaseInterpreter =
+    new stc1.Interpreter(comp.global.globalSymbols, comp.unit, comp.global.config)
+  def planRules: Boolean = true
+  def inlineBranching: Boolean = true
+  def inlineUniqueContinuations: Boolean = true
+  def allowPayloadTemp: Boolean = true
+  def reuseForeignSymbols: Boolean = false
+}
+
+object STC2Backend extends Backend("stc2") {
+  def createInterpreter(comp: Compiler): BaseInterpreter =
+    new stc2.Interpreter(comp.global.globalSymbols, comp.unit, comp.global.config)
+  def planRules: Boolean = true
+  def inlineBranching: Boolean = true
+  def inlineUniqueContinuations: Boolean = true
+  def allowPayloadTemp: Boolean = true
+  def reuseForeignSymbols: Boolean = true
+}
+
+class MTBackend(name: String, compile: Boolean) extends Backend(name) {
+  def createInterpreter(comp: Compiler): BaseInterpreter = {
+    import comp.global._
+    val rulePlans = mutable.Map.empty[RuleKey, RuleWiring]
+    val initialPlans = mutable.ArrayBuffer.empty[InitialRuleWiring]
+    comp.unit.statements.foreach {
+      case i: InitialRuleWiring => initialPlans += i
+      case g: RuleWiring => rulePlans.put(g.key, g)
+    }
+    new mt.Interpreter(globalSymbols, rulePlans.values, config, mutable.ArrayBuffer.empty[Let], initialPlans, compile)
+  }
+  def planRules: Boolean = compile
+  def inlineBranching: Boolean = compile
+  def inlineUniqueContinuations: Boolean = compile
+  def allowPayloadTemp: Boolean = compile
+  def reuseForeignSymbols: Boolean = false
+}
+
+object MTIBackend extends MTBackend("mti", false)
+object MTCBackend extends MTBackend("mti", true)
 
 object Config {
   val defaultConfig: Config = Config()

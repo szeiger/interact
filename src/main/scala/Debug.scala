@@ -7,7 +7,7 @@ import scala.collection.mutable
 
 object Debug extends App {
   val statements = Parser.parse(Path.of(args(0)))
-  val model = new Compiler(statements, Config(compile = false, multiThreaded = false))
+  val model = new Compiler(statements, Config(backend = STIBackend))
   val inter = model.createInterpreter().asInstanceOf[sti.Interpreter]
   inter.initData()
 

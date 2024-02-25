@@ -1,4 +1,4 @@
-package de.szeiger.interact.stc
+package de.szeiger.interact.stc2
 
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
@@ -96,6 +96,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     m.invoke(ptw_addActive)
   }
 
+  private[this] def isCellInstance(sym: Symbol): m.type =
+    m.getfield(cell_metaClass).instanceof(concreteMetaClassTFor(sym))
+
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
     //ShowableNode.print(bp)
@@ -136,21 +139,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
           if(ct1.idx == bp.active(0) && bp.loopOn1) {
             if(skipCont1NullCheck) {
               skipCont1NullCheck = false
-              ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
+              ldCell(ct2)
+              isCellInstance(active(1).sym)
               m.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.aload(cont1).ifNull.and {
-                ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
+                ldCell(ct2)
+                isCellInstance(active(1).sym)
               }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else if(ct1.idx == bp.active(1) && bp.loopOn2) {
             if(skipCont1NullCheck) {
               skipCont1NullCheck = false
-              ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
+              ldCell(ct2)
+              isCellInstance(active(0).sym)
               m.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.aload(cont1).ifNull.and {
-                ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
+                ldCell(ct2)
+                isCellInstance(active(0).sym)
               }.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else createCut(ct1, ct2)
@@ -244,26 +251,31 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private def createCells(instrs: Vector[CreateInstruction]): Unit = instrs.foreach {
     case GetSingletonCell(idx, sym) =>
       val constr = concreteConstrFor(sym)
-      cells(idx) = m.getstatic(cell_singleton(sym)).storeLocal(constr.tpe, s"cell${idx}_singleton")
-    case ReuseActiveCell(idx, act) => cells(idx) = active(act).vidx
+      cells(idx) = m.getstatic(metaClass_singletonCell(sym)).storeLocal(constr.tpe, s"cell${idx}_singleton")
+    case ReuseActiveCell(idx, act, sym) =>
+      cells(idx) = active(act).vidx
+      if(sym != active(act).sym) m.aload(active(act).vidx).getstatic(metaClass_singleton(sym)).putfield(cell_metaClass)
     case NewCell(idx, sym, args) =>
       val constr = concreteConstrFor(sym)
-      def loadParams(): Unit = args.foreach {
-        case CellIdx(-1, p) => m.aconst_null.iconst(p)
-        case CellIdx(c, p) => m.aload(cells(c)).iconst(p)
-        case f: FreeIdx => ldBoth(f)
+      def loadParams(withSym: Boolean): Unit = {
+        if(withSym) m.getstatic(metaClass_singleton(sym))
+        args.foreach {
+          case CellIdx(-1, p) => m.aconst_null.iconst(p)
+          case CellIdx(c, p) => m.aload(cells(c)).iconst(p)
+          case f: FreeIdx => ldBoth(f)
+        }
       }
       if(rule.initial || !config.useCellCache) {
-        m.newInitDup(constr)(loadParams())
+        m.newInitDup(constr)(loadParams(true))
         if(config.collectStats) m.iinc(statCellAllocations)
       } else {
         m.invokestatic(cellCache_get(sym)).dup.ifNull.thnElse {
           m.pop
-          m.newInitDup(constr)(loadParams())
+          m.newInitDup(constr)(loadParams(true))
           if(config.collectStats) m.iinc(statCellAllocations)
         } {
           m.dup
-          loadParams()
+          loadParams(false)
           m.invoke(concreteReinitFor(sym))
           if(config.collectStats) m.iinc(statCachedCellReuse)
         }
@@ -323,7 +335,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       case CheckPrincipal(wire, sym, activeIdx) =>
         val symtp = concreteCellTFor(sym)
         ldPort(wire).ifge(endTarget)
-        ldCell(wire).dup.instanceof(symtp).if_==.thnElse {
+        ldCell(wire).dup
+        isCellInstance(sym).if_==.thnElse {
           m.pop.goto(endTarget)
         } {
           val vidx = m.checkcast(symtp).storeLocal(symtp, s"active$activeIdx")
