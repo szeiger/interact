@@ -2,32 +2,34 @@ package de.szeiger.interact.stc2
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
 import de.szeiger.interact.{Config, IntBox, IntBoxImpl, RefBox, RefBoxImpl, RulePlan}
-import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, SymbolKind, Symbols}
+import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, SymbolKind, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
 import scala.collection.mutable
 
 class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
-  compilationUnit: CompilationUnit, globals: Symbols) extends AbstractCodeGen(config) {
+  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], symBits: Int) extends AbstractCodeGen(config) {
 
   val riT = tp.c[InitialRuleImpl]
   val ptwT = tp.c[Interpreter]
   val cellT = tp.c[Cell]
   val metaClassT = tp.c[MetaClass]
+  val dispatchT = tp.c[Dispatch]
   val intBoxT = tp.i[IntBox]
   val refBoxT = tp.i[RefBox]
   val intBoxImplT = tp.c[IntBoxImpl]
   val refBoxImplT = tp.c[RefBoxImpl]
-  val commonMetaClassT = tp.c(s"$genPackage/CommonMetaClass")
+  val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
   val cellCacheT = tp.c(s"$genPackage/CellCache")
+  val dispatch_reduce = dispatchT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   val ri_freeWires = riT.method("freeWires", tp.m()(symbolT.a))
-  val metaClass_reduce = metaClassT.method("reduce", tp.m(cellT, cellT, ptwT).V)
+  val metaClass_symId = metaClassT.field("symId", tp.I)
   val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
   val cell_auxPort = cellT.method("auxPort", tp.m(tp.I).I)
   val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
-  val cell_metaClass = cellT.field("metaClass", metaClassT)
+  val cell_symId = cellT.field("symId", tp.I)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
   val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
@@ -37,8 +39,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val refBox_getValue = refBoxT.method("getValue", tp.m()(tp.c[AnyRef]))
   val refBox_setValue = refBoxT.method("setValue", tp.m(tp.c[AnyRef]).V)
   val new_Cell = cellT.constr(tp.m().V)
-  val new_MetaClass = metaClassT.constr(tp.m(symbolT).V)
-  val new_CommonMetaClass = commonMetaClassT.constr(tp.m(symbolT).V)
+  val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
   val new_IntBoxImpl = intBoxImplT.constr(tp.m().V)
   val new_RefBoxImpl = refBoxImplT.constr(tp.m().V)
 
@@ -46,13 +47,11 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(concreteCellTFor(sym1), concreteCellTFor(sym2), ptwT).V)
   def initialRuleT_static_reduce(idx: Int) =
     tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, ptwT).V)
-  def interfaceT(sym: Symbol) = tp.i(s"$genPackage/I_${encodeName(sym)}")
-  def interfaceMethod(sym: Symbol) = interfaceT(sym).method(s"reduce_${encodeName(sym)}", tp.m(cellT, concreteCellTFor(sym), ptwT).V)
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
   def concreteCellTFor(sk: SymbolKind): ClassOwner = tp.c(s"$genPackage/C_${sk.arity}${sk.boxType}")
   def concreteCellTFor(sym: Symbol): ClassOwner = if(sym.isDefined) concreteCellTFor(SymbolKind(sym)) else cellT
   def concreteConstrFor(sym: Symbol) =
-    concreteCellTFor(sym).constr(tp.m(metaClassT +: (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
+    concreteCellTFor(sym).constr(tp.m(tp.I +: (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
   def concreteReinitFor(sk: SymbolKind): MethodRef = concreteCellTFor(sk).method("reinit", tp.m((0 until sk.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
   def concreteReinitFor(sym: Symbol): MethodRef = concreteReinitFor(SymbolKind(sym))
   def concretePayloadFieldFor(sk: SymbolKind) = concreteCellTFor(sk).field("value", sk.boxType match {
@@ -68,7 +67,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   def cellCache_set(sym: Symbol) = cellCacheT.method(s"set_${encodeName(sym)}", tp.m(concreteCellTFor(sym)).V)
 
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
-  val common = findCommonPartners()
 
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
     val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc)
@@ -85,13 +83,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
 
   def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
     if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invoke(ptw_recordMetric)
-
-  private def compileInterface(sym: Symbol): Unit = {
-    val ifm = interfaceMethod(sym)
-    val c = DSL.newInterface(Acc.PUBLIC, ifm.owner.className)
-    c.method(Acc.PUBLIC.ABSTRACT, ifm.name, ifm.desc)
-    addClass(classWriter, c)
-  }
 
   private def compileCell(sk: SymbolKind): Unit = {
     val payloadInterfaces = sk.boxType match {
@@ -140,12 +131,12 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
 
     // constructor
     {
-      val params = metaClassT +: ((0 until sk.arity).flatMap(_ => Seq(cellT, tp.I)))
+      val params = tp.I +: ((0 until sk.arity).flatMap(_ => Seq(cellT, tp.I)))
       val m = c.constructor(Acc.PUBLIC, tp.m(params: _*))
-      val mc = m.param(s"metaClass", metaClassT)
+      val symId = m.param(s"symId", tp.I)
       val aux = (0 until sk.arity).map(i => (m.param(s"c$i", cellT), m.param(s"p$i", tp.I)))
       m.aload(m.receiver).invokespecial(new_Cell)
-      m.aload(m.receiver).aload(mc).putfield(cell_metaClass)
+      m.aload(m.receiver).iload(symId).putfield(cell_symId)
       aux.zip(cfields).zip(pfields).foreach { case (((auxc, auxp), cfield), pfield) =>
         m.aload(m.receiver).dup.aload(auxc).putfield(cfield).iload(auxp).putfield(pfield)
       }
@@ -178,9 +169,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       case rk if rk.sym1 == sym => (rk.sym2, rk)
       case rk if rk.sym2 == sym => (rk.sym1, rk)
     }.toMap
-    val interfaces = (rulePairs.keySet -- common).iterator.map(s => interfaceT(s).className).toArray.sorted
 
-    val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteMetaClassTFor(sym).className, commonMetaClassT, interfaces)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteMetaClassTFor(sym).className, metaClassT)
 
     c.field(Acc.PUBLIC.STATIC.FINAL, metaClass_singleton(sym))
 
@@ -189,7 +179,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val m = c.constructor(Acc.PRIVATE, tp.m())
       m.aload(m.receiver)
       reifySymbol(m, sym)
-      m.invokespecial(new_CommonMetaClass)
+      m.iconst(symIds(sym))
+      m.invokespecial(new_MetaClass)
       m.return_
     }
 
@@ -197,77 +188,55 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     if(sym.isSingleton) {
       val f = c.field(Acc.PUBLIC.STATIC.FINAL, metaClass_singletonCell(sym))
       val m = c.clinit()
-      m.newInitDup(concreteConstrFor(sym)) {
-        m.newInitDup(concreteMetaClassTFor(sym).constr(tp.m().V))().dup.putstatic(metaClass_singleton(sym))
-      }.putstatic(f)
+      m.newInitDup(concreteMetaClassTFor(sym).constr(tp.m().V))().putstatic(metaClass_singleton(sym))
+      m.newInitDup(concreteConstrFor(sym)) { m.iconst(symIds(sym)) }.putstatic(f)
       m.return_
     } else {
       c.clinit().newInitDup(concreteMetaClassTFor(sym).constr(tp.m().V))().putstatic(metaClass_singleton(sym)).return_
     }
 
-    // generic reduce
-    {
-      val m = c.method(Acc.PUBLIC.FINAL, metaClass_reduce)
-      val thisCell = m.param("thisCell", cellT)
-      val otherCell = m.param("otherCell", cellT)
-      val ptw = m.param("ptw", ptwT)
-      incMetric(s"${c.name}.${m.name}", m, ptw)
-      val isShared = common.contains(sym)
-      val ifm = if(isShared) interfaceMethod(sym).on(commonMetaClassT) else interfaceMethod(sym)
-      m.aload(otherCell).getfield(cell_metaClass)
-      m.tryCatchGoto(tp.c[ClassCastException]) {
-        m.checkcast(ifm.owner)
-      } {
-        m.pop
-        m.aload(ptw).aload(thisCell).aload(otherCell).invoke(ptw_addIrreducible)
-        m.return_
-      }
-      m.aload(otherCell)
-      m.aload(thisCell).checkcast(concreteCellTFor(sym))
-      m.aload(ptw)
-      m.invoke(ifm)
-      m.return_
-    }
-
-    // interface methods
-    rulePairs.toVector.sortBy(_._1.id).foreach { case (sym2, rk) =>
-      val ifm = interfaceMethod(sym2)
-      val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
-      val thisCell = m.param("thisCell", cellT)
-      val otherCell = m.param("otherCell", concreteCellTFor(sym2))
-      val ptw = m.param("ptw", ptwT)
-      incMetric(s"${c.name}.${m.name}", m, ptw)
-      val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
-      if(rk.sym1 == sym) m.aload(thisCell).checkcast(concreteCellTFor(sym)).aload(otherCell)
-      else m.aload(otherCell).aload(thisCell).checkcast(concreteCellTFor(sym))
-      m.aload(ptw).invokestatic(staticMR).return_
-    }
-    // unsupported common operations (when using config.allCommon)
-    (common -- rulePairs.keySet).toVector.sortBy(_.id).foreach { sym2 =>
-      val ifm = interfaceMethod(sym2)
-      val m = c.method(Acc.PUBLIC.FINAL, ifm.name, ifm.desc)
-      val thisCell = m.param("thisCell", cellT)
-      val otherCell = m.param("otherCell", concreteCellTFor(sym2))
-      val ptw = m.param("ptw", ptwT)
-      m.aload(ptw).aload(thisCell).aload(otherCell).invoke(ptw_addIrreducible).return_
-    }
-
     addClass(classWriter, c)
   }
 
-  private def compileCommonMetaClass(): Unit = {
-    val c = DSL.newClass(Acc.PUBLIC.ABSTRACT, commonMetaClassT.className, metaClassT)
+  private def compileDispatch(): Unit = {
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, generatedDispatchT.className, dispatchT)
+    c.emptyNoArgsConstructor()
 
-    {
-      val m = c.constructor(Acc.PROTECTED, tp.m(symbolT))
-      val symArg = m.param("sym", symbolT)
-      m.aload(m.receiver)
-      m.aload(symArg)
-      m.invokespecial(new_MetaClass)
+    def mkRuleKey(s1: Int, s2: Int): Int = (s1 << symBits) | s2
+
+    val m = c.method(Acc.PUBLIC.FINAL, dispatch_reduce)
+    val c1 = m.param("c1", cellT)
+    val c2 = m.param("c2", cellT)
+    val ptw = m.param("ptw", ptwT)
+
+    m.aload(c1).getfield(cell_symId).iconst(symBits).ishl
+    m.aload(c2).getfield(cell_symId).ior
+
+    val keys = rules.flatMap { case (rk, rp) if !rp.initial =>
+      Iterator(
+        (mkRuleKey(symIds(rk.sym1), symIds(rk.sym2)), (rk, m.newLabel, false)),
+        (mkRuleKey(symIds(rk.sym2), symIds(rk.sym1)), (rk, m.newLabel, true))
+      )
+    }.toVector.sortBy(_._1)
+    val dflt = m.newLabel
+    m.lookupswitch(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
+    keys.foreach { case (_, (rk, l, rev)) =>
+      m.setLabel(l)
+      val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
+      if(rev) {
+        m.aload(c2).checkcast(concreteCellTFor(rk.sym1))
+        m.aload(c1).checkcast(concreteCellTFor(rk.sym2))
+      } else {
+        m.aload(c1).checkcast(concreteCellTFor(rk.sym1))
+        m.aload(c2).checkcast(concreteCellTFor(rk.sym2))
+      }
+      m.aload(ptw).invokestatic(staticMR)
       m.return_
     }
+    m.setLabel(dflt)
+    m.aload(ptw).aload(c1).aload(c2).invoke(ptw_addIrreducible)
+    m.return_
 
-    common.foreach(sym => c.method(Acc.PUBLIC.ABSTRACT, interfaceMethod(sym)))
     addClass(classWriter, c)
   }
 
@@ -364,18 +333,18 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     addClass(classWriter, ric)
   }
 
-  def compile(): Vector[String] = {
+  def compile(): (Vector[String], String) = {
     val constrs = globals.symbols.filter(_.isCons).toVector.sortBy(_.id)
-    ParSupport.foreach(constrs.filterNot(common.contains), config.compilerParallelism)(compileInterface)
-    compileCommonMetaClass()
+    compileDispatch()
     if(config.useCellCache) compileCellCache()
     val symKinds = constrs.iterator.map(SymbolKind(_)).toSet
     ParSupport.foreach(symKinds, config.compilerParallelism)(compileCell)
     ParSupport.foreach(constrs, config.compilerParallelism)(compileMetaClass)
     ParSupport.foreach(rules.values.toVector.sortBy(_.key.toString), config.compilerParallelism)(compileRule)
-    (compilationUnit.statements.iterator.collect { case i: RulePlan if i.initial => i }).zipWithIndex.map { case (ip, i) =>
+    val irs = (compilationUnit.statements.iterator.collect { case i: RulePlan if i.initial => i }).zipWithIndex.map { case (ip, i) =>
       compileInitial(ip, i)
     }.toVector
+    (irs, generatedDispatchT.javaName)
   }
 }
 

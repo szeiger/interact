@@ -522,8 +522,17 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
 
   def tableswitch(min: Int, max: Int, deflt: Label, labels: Seq[Label]): this.type =
     insn(new TableSwitchInsnNode(min, max, new LabelNode(deflt), labels.map(new LabelNode(_)): _*))
-  def lookupswitch(keys: Array[Int], deflt: Label, labels: Seq[Label]): this.type =
+  def lookupswitch(keys: Array[Int], deflt: Label, labels: Seq[Label]): this.type = {
+    assert(keys.length == labels.length)
+    if(keys.nonEmpty) {
+      var i = keys(0)
+      keys.iterator.drop(1).foreach { j =>
+        assert(j > i)
+        i = j
+      }
+    }
     insn(new LookupSwitchInsnNode(new LabelNode(deflt), keys, labels.iterator.map(new LabelNode(_)).toArray))
+  }
 
   def tableSwitch(range: Range)(f: => Option[Int] => _): this.type = {
     val min = range.start

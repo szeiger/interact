@@ -74,6 +74,7 @@ object Owner {
     if(cls.isInterface) InterfaceOwner(cls) else ClassOwner(cls)
 }
 class ClassOwner(val className: String) extends Owner {
+  def javaName = className.replace('/', '.')
   def isInterface = false
   def constr(desc: MethodDesc): ConstructorRef = new ConstructorRef(this, desc)
 }

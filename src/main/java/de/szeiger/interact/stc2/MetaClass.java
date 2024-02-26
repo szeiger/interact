@@ -4,8 +4,9 @@ import de.szeiger.interact.ast.Symbol;
 
 public abstract class MetaClass {
   public final Symbol cellSymbol;
-  protected MetaClass(Symbol cellSymbol) {
+  public final int symId;
+  protected MetaClass(Symbol cellSymbol, int symId) {
     this.cellSymbol = cellSymbol;
+    this.symId = symId;
   }
-  public abstract void reduce(Cell thisCell, Cell otherCell, Interpreter ptw);
 }

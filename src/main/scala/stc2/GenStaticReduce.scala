@@ -87,17 +87,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
 
   private def createCut(ct1: Idx, ct2: Idx) = {
-    m.aload(ptw);
-    (ct1, ct2) match {
-      case (_, CellIdx(idx, _)) if common.contains(cellSyms(idx)) => ldCell(ct2); ldCell(ct1)
-      case (CellIdx(idx, _), _: FreeIdx) if !common.contains(cellSyms(idx)) => ldCell(ct2); ldCell(ct1)
-      case _ => ldCell(ct1); ldCell(ct2)
-    }
+    m.aload(ptw)
+    ldCell(ct1)
+    ldCell(ct2)
     m.invoke(ptw_addActive)
   }
 
   private[this] def isCellInstance(sym: Symbol): m.type =
-    m.getfield(cell_metaClass).instanceof(concreteMetaClassTFor(sym))
+    m.getfield(cell_symId).iconst(symIds(sym))
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
@@ -141,24 +138,24 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
               skipCont1NullCheck = false
               ldCell(ct2)
               isCellInstance(active(1).sym)
-              m.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+              m.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.aload(cont1).ifNull.and {
                 ldCell(ct2)
                 isCellInstance(active(1).sym)
-              }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+              }.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else if(ct1.idx == bp.active(1) && bp.loopOn2) {
             if(skipCont1NullCheck) {
               skipCont1NullCheck = false
               ldCell(ct2)
               isCellInstance(active(0).sym)
-              m.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
+              m.ifI_==.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.aload(cont1).ifNull.and {
                 ldCell(ct2)
                 isCellInstance(active(0).sym)
-              }.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
+              }.ifI_==.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else createCut(ct1, ct2)
         }
@@ -254,11 +251,12 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       cells(idx) = m.getstatic(metaClass_singletonCell(sym)).storeLocal(constr.tpe, s"cell${idx}_singleton")
     case ReuseActiveCell(idx, act, sym) =>
       cells(idx) = active(act).vidx
-      if(sym != active(act).sym) m.aload(active(act).vidx).getstatic(metaClass_singleton(sym)).putfield(cell_metaClass)
+      if(sym != active(act).sym)
+        m.aload(active(act).vidx).iconst(symIds(sym)).putfield(cell_symId)
     case NewCell(idx, sym, args) =>
       val constr = concreteConstrFor(sym)
       def loadParams(withSym: Boolean): Unit = {
-        if(withSym) m.getstatic(metaClass_singleton(sym))
+        if(withSym) m.iconst(symIds(sym))
         args.foreach {
           case CellIdx(-1, p) => m.aconst_null.iconst(p)
           case CellIdx(c, p) => m.aload(cells(c)).iconst(p)
@@ -336,7 +334,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         val symtp = concreteCellTFor(sym)
         ldPort(wire).ifge(endTarget)
         ldCell(wire).dup
-        isCellInstance(sym).if_==.thnElse {
+        isCellInstance(sym).ifI_!=.thnElse {
           m.pop.goto(endTarget)
         } {
           val vidx = m.checkcast(symtp).storeLocal(symtp, s"active$activeIdx")

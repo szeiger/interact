@@ -64,11 +64,11 @@ case class Config(
   numThreads: Int = 0, // mt
   collectStats: Boolean = false,
   useCellCache: Boolean = false, // stc*
-  biasForCommonDispatch: Boolean = true, // optimize for invokevirtual dispatch of statically known cell types (stc*)
+  biasForCommonDispatch: Boolean = true, // optimize for invokevirtual dispatch of statically known cell types (stc1)
   logCodeGenSummary: Boolean = false, // stc*, mt.c
   logGeneratedClasses: Option[String] = None, // Log generated classes containing this string (stc*, mt.c)
   compilerParallelism: Int = 1,
-  allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (stc*)
+  allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (stc1)
   reuseCells: Boolean = true, // stc*
   reuseForeignSymbols: Boolean = true, // stc2
   writeOutput: Option[Path] = None, // write generated classes to dir or jar file (stc*)
