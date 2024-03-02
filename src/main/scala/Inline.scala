@@ -6,7 +6,7 @@ import scala.annotation.tailrec
 import scala.collection.mutable
 
 /**
- * Inline active pairs on the RHS of rules.
+ * Inline active pairs on the RHS of rules and combine initial rules
  */
 class Inline(val global: Global) extends Phase {
   import global._
@@ -27,11 +27,63 @@ class Inline(val global: Global) extends Phase {
       } else Map.empty
     checkCircular(fullyInlinableRules)
 
-    val st2 = Transform.mapC(n.statements) {
-      case r: RuleWiring => inlineRec(r, Nil, SymCounts.empty, SymCounts.empty, uniqueContSyms, allRules)
+    val initial = mutable.ArrayBuffer.empty[InitialRuleWiring]
+    val st2 = Vector.newBuilder[Statement]
+    n.statements.foreach {
+      case r: RuleWiring => st2 += inlineRec(r, Nil, SymCounts.empty, SymCounts.empty, uniqueContSyms, allRules)
+      case r: InitialRuleWiring => initial += r
       case s => s
     }
-    if(st2 eq n.statements) n else n.copy(st2)
+    st2 += mergeInitial(initial)
+    n.copy(st2.result())
+  }
+
+  private[this] def mergeInitial(rs: mutable.ArrayBuffer[InitialRuleWiring]): InitialRuleWiring = {
+    if(rs.length == 1) rs.head
+    else {
+      val free = rs.toVector.flatMap(_.free)
+      val cells = Vector.newBuilder[Symbol]
+      val conns = Set.newBuilder[Connection]
+      val payloadComps = Vector.newBuilder[PayloadComputation]
+      var statSteps = 0
+      var cellOffset, freeOffset = 0
+      val relabel: Transform = new Transform {
+        override def apply(n: EmbArg): EmbArg = n match {
+          case EmbArg.Cell(i) => EmbArg.Cell(i + cellOffset)
+          case n => n
+        }
+        override def apply(n: Connection): Set[Connection] = {
+          def remap(idx: Idx) = idx match {
+            case CellIdx(i, p) => CellIdx(i + cellOffset, p)
+            case FreeIdx(0, p) => FreeIdx(0, p + freeOffset)
+            case _ => idx
+          }
+          val nc1 = remap(n.c1)
+          val nc2 = remap(n.c2)
+          if((nc1 eq n.c1) && (nc2 eq n.c2)) Set(n)
+          else Set(n.copy(nc1, nc2))
+        }
+      }
+      rs.foreach { r =>
+        val b = r.branch
+        assert(b.cellOffset == 0)
+        assert(b.branches.isEmpty)
+        assert(b.cond.isEmpty)
+        assert(b.tempOffset == 0)
+        cells ++= b.cells
+        statSteps += b.statSteps
+        if(cellOffset == 0 && freeOffset == 0) {
+          conns ++= b.conns
+          payloadComps ++= b.payloadComps
+        } else {
+          conns ++= b.conns.flatMap(relabel(_))
+          payloadComps ++= b.payloadComps.flatMap(relabel(_))
+        }
+        cellOffset += b.cells.length
+        freeOffset += r.free.length
+      }
+      InitialRuleWiring(free, BranchWiring(0, cells.result(), conns.result(), payloadComps.result(), None, Vector.empty, 0, statSteps))
+    }
   }
 
   private[this] def inlineRec(r: RuleWiring, parents: List[RuleKey], parentAvailable: SymCounts, parentCreated: SymCounts,
