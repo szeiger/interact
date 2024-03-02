@@ -7,7 +7,7 @@ import de.szeiger.interact.ast.{CompilationUnit, Symbol, Symbols}
 import java.util.Arrays
 import scala.collection.mutable
 
-final class DynamicCell(_symId: Int, val cellSymbol: Symbol, val arity: Int) extends Cell {
+final class DynamicCell(_symId: Int, arity: Int) extends Cell {
   this.symId = _symId
   private[this] final val auxCells = new Array[Cell](arity)
   private[this] final val auxPorts = new Array[Int](arity)
@@ -40,6 +40,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   }
   private[this] val cutBuffer, irreducible = new CutBuffer(16)
   private[this] val freeWires = mutable.HashSet.empty[Cell]
+  private[this] val freeWireLookup = mutable.HashMap.empty[Int, Symbol]
   private[this] var metrics: ExecutionMetrics = _
   private[this] var active0, active1: Cell = _
 
@@ -49,13 +50,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     val principals = (cutBuffer.iterator ++ irreducible.iterator).flatMap { case (c1, c2) => Seq((c1, c2), (c2, c1)) }.toMap
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     def rootCells = (self.freeWires.iterator ++ principals.keysIterator).toSet
-    def getSymbol(c: Cell): Symbol = c match {
-      case c: DynamicCell => c.cellSymbol
-      case _ => reverseSymIds.getOrElse(c.symId, Symbol.NoSymbol)
-    }
+    def getSymbol(c: Cell): Symbol = reverseSymIds.getOrElse(c.symId, freeWireLookup.getOrElse(c.symId, Symbol.NoSymbol))
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).orNull else (c.auxCell(port), c.auxPort(port))
-    def isFreeWire(c: Cell): Boolean = c.isInstanceOf[DynamicCell] && c.symId == -2
+    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(c.symId)
     def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
   }
 
@@ -63,13 +61,19 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     cutBuffer.clear()
     irreducible.clear()
     freeWires.clear()
+    freeWireLookup.clear()
     if(config.collectStats) metrics = new ExecutionMetrics
     initialRuleImpls.foreach { rule =>
-      val free = rule.freeWires.map(s => new DynamicCell(-2, s, 1))
-      freeWires.addAll(free)
-      val lhs = new DynamicCell(-1, Symbol.NoSymbol, freeWires.size)
-      free.iterator.zipWithIndex.foreach { case (c, p) => lhs.setAux(p, c, 0) }
-      rule.reduce(lhs, new DynamicCell(-1, Symbol.NoSymbol, 0), this)
+      val fws = rule.freeWires
+      val off = reverseSymIds.size + freeWireLookup.size
+      val lhs = new DynamicCell(-1, fws.length)
+      fws.iterator.zipWithIndex.foreach { case (s, i) =>
+        freeWireLookup += ((i+off, s))
+        val c = new DynamicCell(i+off, 1)
+        freeWires += c
+        lhs.setAux(i, c, 0)
+      }
+      rule.reduce(lhs, new DynamicCell(-1, 0), this)
     }
     if(config.collectStats) metrics = new ExecutionMetrics
   }
@@ -80,12 +84,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
         val a0 = active0
         active0 = null
         dispatch.reduce(a0, active1, this)
-        //a0.metaClass.reduce(a0, active1, this)
       }
       if(cutBuffer.isEmpty) return
       val (a0, a1) = cutBuffer.pop()
       dispatch.reduce(a0, a1, this)
-      //a0.metaClass.reduce(a0, a1, this)
     }
 
   // ptw methods:
