@@ -58,6 +58,7 @@ case class Config(
   inlineFullAll: Boolean = true, // inline simple matches even when duplicating a parent rule
   inlineBranching: Boolean = true, // inline rules that cannot be merged into a single branch (st.c)
   inlineUniqueContinuations: Boolean = true, // st.c
+  loop: Boolean = true,
 
   // Backend
   backend: Backend = STC1Backend,

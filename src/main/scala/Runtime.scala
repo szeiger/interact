@@ -1,7 +1,9 @@
 package de.szeiger.interact
 
 trait IntOutput { def setValue(i: Int): Unit }
+trait LongOutput { def setValue(l: Long): Unit }
 trait IntBox extends IntOutput { def getValue: Int }
+trait LongBox extends LongOutput { def getValue: Long }
 trait RefOutput { def setValue(o: AnyRef): Unit }
 trait RefBox extends RefOutput { def getValue: AnyRef } // Also used for Label
 trait LifecycleManaged { def erase(): Unit; def copy(): LifecycleManaged }
@@ -11,6 +13,11 @@ final class IntBoxImpl extends IntBox {
   private[this] var value: Int = _
   def getValue: Int = value
   def setValue(v: Int): Unit = value = v
+}
+final class LongBoxImpl extends LongBox {
+  private[this] var value: Long = _
+  def getValue: Long = value
+  def setValue(v: Long): Unit = value = v
 }
 final class RefBoxImpl extends RefBox {
   private[this] var value: AnyRef = _

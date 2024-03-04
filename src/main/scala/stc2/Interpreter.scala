@@ -2,19 +2,15 @@ package de.szeiger.interact.stc2
 
 import de.szeiger.interact.codegen.{ClassWriter, LocalClassLoader}
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{CompilationUnit, Symbol, Symbols}
+import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
 
 import java.util.Arrays
 import scala.collection.mutable
 
-final class DynamicCell(_symId: Int, arity: Int) extends Cell {
-  this.symId = _symId
-  private[this] final val auxCells = new Array[Cell](arity)
-  private[this] final val auxPorts = new Array[Int](arity)
-  def auxCell(p: Int): Cell = auxCells(p)
-  def auxPort(p: Int): Int = auxPorts(p)
-  def setAux(p: Int, c2: Cell, p2: Int): Unit = { auxCells(p) = c2; auxPorts(p) = p2 }
+object Defs {
+  type Cell = Long
 }
+import Defs._
 
 abstract class InitialRuleImpl {
   def reduce(a0: Cell, a1: Cell, ptw: Interpreter): Unit
@@ -43,6 +39,9 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   private[this] val freeWireLookup = mutable.HashMap.empty[Int, Symbol]
   private[this] var metrics: ExecutionMetrics = _
   private[this] var active0, active1: Cell = _
+  private[this] var allocator: Allocator = _
+  private[this] val singletons: Array[Cell] = new Array(symIds.size)
+  private[this] var nextRef = Long.MinValue
 
   def getMetrics: ExecutionMetrics = metrics
 
@@ -50,11 +49,27 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     val principals = (cutBuffer.iterator ++ irreducible.iterator).flatMap { case (c1, c2) => Seq((c1, c2), (c2, c1)) }.toMap
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     def rootCells = (self.freeWires.iterator ++ principals.keysIterator).toSet
-    def getSymbol(c: Cell): Symbol = reverseSymIds.getOrElse(c.symId, freeWireLookup.getOrElse(c.symId, Symbol.NoSymbol))
+    def getSymbol(c: Cell): Symbol = reverseSymIds.getOrElse(Allocator.symId(c), freeWireLookup.getOrElse(Allocator.symId(c), Symbol.NoSymbol))
     def getConnected(c: Cell, port: Int): (Cell, Int) =
-      if(port == -1) principals.get(c).map((_, -1)).orNull else (c.auxCell(port), c.auxPort(port))
-    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(c.symId)
+      if(port == -1) principals.get(c).map((_, -1)).orNull else (Allocator.auxCell(c, port), Allocator.auxPort(c, port))
+    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(Allocator.symId(c))
     def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
+    override def getPayload(c: Cell): Any = {
+      val sym = getSymbol(c)
+      sym.payloadType match {
+        case PayloadType.INT => Allocator.getInt(c + Allocator.payloadOffset(sym.arity))
+        case PayloadType.LABEL => "label@" + Allocator.getLong(c + Allocator.payloadOffset(sym.arity))
+        case _ => "???"
+      }
+    }
+  }
+
+  def dispose(): Unit = {
+    if(allocator != null) {
+      Arrays.fill(singletons, 0L)
+      allocator.dispose()
+      allocator = null
+    }
   }
 
   def initData(): Unit = {
@@ -62,33 +77,49 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     irreducible.clear()
     freeWires.clear()
     freeWireLookup.clear()
+    dispose()
+    nextRef = Long.MinValue
+    allocator = new Allocator
+    singletons.indices.foreach { i =>
+      val s = reverseSymIds(i)
+      if(s.isSingleton) singletons(i) = allocator.newCell(i, s.arity)
+    }
     if(config.collectStats) metrics = new ExecutionMetrics
     initialRuleImpls.foreach { rule =>
       val fws = rule.freeWires
       val off = reverseSymIds.size + freeWireLookup.size
-      val lhs = new DynamicCell(-1, fws.length)
+      val lhs = allocator.newCell(-1, fws.length)
       fws.iterator.zipWithIndex.foreach { case (s, i) =>
         freeWireLookup += ((i+off, s))
-        val c = new DynamicCell(i+off, 1)
+        val c = allocator.newCell(i+off, 1)
         freeWires += c
-        lhs.setAux(i, c, 0)
+        Allocator.setAux(lhs, i, c, 0)
       }
-      rule.reduce(lhs, new DynamicCell(-1, 0), this)
+      val rhs = allocator.newCell(-1, 0)
+      rule.reduce(lhs, rhs, this)
     }
     if(config.collectStats) metrics = new ExecutionMetrics
   }
 
   def reduce(): Unit =
     while(true) {
-      while(active0 != null) {
+      while(active0 != 0) {
         val a0 = active0
-        active0 = null
+        active0 = 0
         dispatch.reduce(a0, active1, this)
       }
       if(cutBuffer.isEmpty) return
       val (a0, a1) = cutBuffer.pop()
       dispatch.reduce(a0, a1, this)
     }
+
+  def newCell(symId: Int, arity: Int): Long = {
+    val sz = Allocator.cellSize(arity, PayloadType.VOID)
+    val o = allocator.alloc(sz)
+    Allocator.setInt(o + Allocator.symIdOffset, symId)
+    Allocator.setInt(o + Allocator.arityOffset, arity)
+    o
+  }
 
   // ptw methods:
 
@@ -101,6 +132,18 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, labelCreate)
 
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
+
+  def getSingleton(symId: Int): Cell = singletons(symId)
+
+  def allocCell(length: Int): Cell = allocator.alloc(length)
+
+  def freeCell(address: Cell, length: Int): Unit = allocator.free(address, length)
+
+  def newRef: Long = {
+    val r = nextRef
+    nextRef += 1
+    r
+  }
 }
 
 
@@ -119,8 +162,8 @@ final class CutBuffer(initialSize: Int) {
     len -= 2
     val c1 = pairs(len)
     val c2 = pairs(len+1)
-    pairs(len) = null
-    pairs(len+1) = null
+    pairs(len) = 0
+    pairs(len+1) = 0
     (c1, c2)
   }
   def clear(): Unit =

@@ -61,8 +61,9 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   def field(access: Acc, ref: FieldRef, value: Any): FieldRef = field(access, ref.name, ref.desc, value)
   def field(access: Acc, ref: FieldRef): FieldRef = field(access, ref.name, ref.desc, null)
 
-  def method(access: Acc, name: String, desc: MethodDesc): MethodDSL = {
-    val m = new MethodDSL(access, name, desc)
+  def method(access: Acc, name: String, desc: MethodDesc,
+    debugLineNumbers: Boolean = false, debugLineNumbersClass: String = null): MethodDSL = {
+    val m = new MethodDSL(access, name, desc, debugLineNumbers, debugLineNumbersClass)
     methods.addOne(m)
     m
   }
@@ -93,7 +94,8 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   }
 }
 
-final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends IfDSL { self =>
+final class MethodDSL(access: Acc, val name: String, desc: MethodDesc,
+  debugLineNumbers: Boolean, debugLineNumbersClass: String) extends IfDSL { self =>
   protected[this] def ifEndLabel: Label = new Label
   protected[this] def method: MethodDSL = this
 
@@ -107,6 +109,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
   }
   private[this] def isStatic = access has Acc.STATIC
   private[this] val argsCount = Type.getArgumentsAndReturnSizes(desc.desc) >> 2
+  private[this] var currentDebugLine = -1
 
   val start, end = new Label
   def receiver: VarIdx =
@@ -115,6 +118,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
   def param(name: String, desc: ValDesc, access: Acc = Acc.none): VarIdx = {
     val l = new Local(name, desc, access, params.length + (if(isStatic) 0 else 1), start, end)
     params.addOne(l)
+    if(desc.width == 2) params.addOne(null)
     new VarIdx(l.idx)
   }
 
@@ -125,6 +129,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
     val idx = locals.length + argsCount - (if(isStatic) 1 else 0)
     val l = new Local(name, desc, Acc.none, idx, start, end)
     locals.addOne(l)
+    if(desc.width == 2) locals.addOne(null)
     new VarIdx(idx)
   }
   def storeLocal(desc: ValDesc, name: String = null, start: Label = null, end: Label = this.end): VarIdx = {
@@ -137,7 +142,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
     val mv = v.visitMethod(access.acc, name, desc.desc, null, null)
     if(!access.has(Acc.ABSTRACT)) {
       assert(params.length == argsCount - 1, s"Method $name ${desc.desc} has ${params.length} parameters, expected ${argsCount-1}")
-      params.foreach(p => mv.visitParameter(p.name, p.access.acc))
+      params.foreach(p => if(p != null) mv.visitParameter(p.name, p.access.acc))
       mv.visitCode()
       tryCatchBlocks.foreach(_.accept(mv))
       mv.visitLabel(start)
@@ -149,7 +154,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
             val v = if(isStatic) in.`var` + 1 else in.`var`
             if(v >= argsCount && v - argsCount < locals.length) {
               val l = locals(v-argsCount)
-              if(l.start == null && l.name != null && l.startPos == idx+1) {
+              if(l.start == null && l.startPos == idx+1) {
                 val ln = code(idx+1) match {
                   case ln: LabelNode => ln
                   case _ => val ln = new LabelNode; ln.accept(mv); ln
@@ -165,7 +170,7 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
       if(!isStatic)
         mv.visitLocalVariable("this", s"L${cls.name};", null, start, end, 0)
       (params.iterator ++ locals.iterator).foreach { l =>
-        if(l.name != null) {
+        if(l != null && l.name != null) {
           assert(l.start != null, s"Invalid local variable $l")
           mv.visitLocalVariable(l.name, l.desc.desc, null, l.start, l.end, l.idx)
         }
@@ -180,12 +185,31 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
     val idx = if(isStatic) varIdx.idx + 1 else varIdx.idx
     if(idx >= argsCount && idx - argsCount < locals.length) {
       val l = locals(idx - argsCount)
+      if(l == null) throw new RuntimeException(s"Illegal access to upper index of wide variable")
       if(l.startPos == -1) l.startPos = code.length
     }
     this
   }
 
-  private[this] def insn(i: AbstractInsnNode): this.type = { code.addOne(i); this }
+  private[this] def insn(in: AbstractInsnNode): this.type = {
+    if(debugLineNumbers) {
+      in match {
+        case _: LineNumberNode =>
+        case _: LabelNode => code.addOne(in)
+        case _ =>
+          MethodDSL.getCaller(debugLineNumbersClass).foreach { line =>
+            if(line != currentDebugLine) {
+              val l = new LabelNode(new Label)
+              code.addOne(l)
+              code.addOne(new LineNumberNode(line, l))
+              currentDebugLine = line
+            }
+          }
+          code.addOne(in)
+      }
+    } else code.addOne(in)
+    this
+  }
   private[this] def varInsn(opcode: Int, varIdx: VarIdx): this.type = { assert(varIdx != VarIdx.none, "VarIdx.none"); insn(new VarInsnNode(opcode, varIdx.idx)) }
   private[this] def insn(opcode: Int): this.type = insn(new InsnNode(opcode))
   private[this] def intInsn(opcode: Int, operand: Int): this.type = insn(new IntInsnNode(opcode, operand))
@@ -551,6 +575,20 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc) extends I
   }
 }
 
+object MethodDSL {
+  private[this] val ignorePrefix = classOf[MethodDSL].getName
+
+  private def getCaller(cls: String): Option[Int] = {
+    val e = new Exception()
+    e.fillInStackTrace()
+    val trace = e.getStackTrace
+    val el =
+      if(cls != null) trace.find(_.getClassName == cls)
+      else trace.find(!_.getClassName.startsWith(ignorePrefix))
+    el.map(_.getLineNumber)
+  }
+}
+
 trait IfDSL {
   protected[this] def ifEndLabel: Label
   protected[this] def method: MethodDSL
@@ -598,4 +636,6 @@ final class ThenDSL(posOpcode: Int, negOpcode: Int, m: MethodDSL, l1: Label) {
     m
   }
   def jump(l: Label): MethodDSL = m.jumpInsn(posOpcode, l)
+  def assert(): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m().V)().athrow)
+  def assert(msg: String): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m(Desc.Object).V)(m.ldc(msg)).athrow)
 }

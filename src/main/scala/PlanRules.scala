@@ -65,9 +65,9 @@ class PlanRules(val global: Global) extends Phase {
       case _ => true
     }
     def isLoop(reuse: Int, otherReuse: Int, sym: => Symbol) =
-      reuse != -1 && ((sym.isDef || otherReuse == -1) || !config.biasForCommonDispatch) && canBeActive(branch.principalConns(reuse))
-    val loopOn1 = isLoop(active(0), active(1), rule.get.sym1)
-    val loopOn2 = isLoop(active(1), active(0), rule.get.sym2)
+      reuse != -1 && sym == branch.cells(reuse) && config.loop && ((sym.isDef || otherReuse == -1) || !config.biasForCommonDispatch) && canBeActive(branch.principalConns(reuse))
+    val loopOn0 = isLoop(active(0), active(1), rule.get.sym1)
+    val loopOn1 = isLoop(active(1), active(0), rule.get.sym2)
     val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, active, allCells))
     val tempCount = payloadTemp.length + branches.map(_.totalTempCount).maxOption.getOrElse(0)
     branch.cond.foreach {
@@ -75,7 +75,7 @@ class PlanRules(val global: Global) extends Phase {
       case _: CheckPrincipal =>
     }
     new BranchPlan(active, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps, tempCount,
-      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches, loopOn1, loopOn2, branch.tempOffset,
+      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches, loopOn0, loopOn1, branch.tempOffset,
       needsCachedPayloads)
   }
 
@@ -269,7 +269,7 @@ class BranchPlan(val active: Vector[Int],
   val statSingletonUse: Int,
   val statLabelCreate: Int,
   val branches: Vector[BranchPlan],
-  val loopOn1: Boolean, val loopOn2: Boolean,
+  val loopOn0: Boolean, val loopOn1: Boolean,
   val tempOffset: Int,
   val needsCachedPayloads: Set[Int]) extends Node {
 
@@ -280,7 +280,7 @@ class BranchPlan(val active: Vector[Int],
   def show: String = {
     val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
     val n = needsCachedPayloads.mkString("{", ", ", "}")
-    s"a=${active.mkString("[", ", ", "]")}, loopOn1=$loopOn1, loopOn2=$loopOn2, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
+    s"a=${active.mkString("[", ", ", "]")}, loopOn0=$loopOn0, loopOn1=$loopOn1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (cond, "cond") += (cellCreateInstructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")

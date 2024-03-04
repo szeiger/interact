@@ -18,12 +18,18 @@ abstract class Desc {
 abstract class MethodDesc extends Desc
 abstract class ValDesc extends Desc {
   def a: ValDesc = new Desc.ValDescImpl("["+desc)
+  def width: Int = {
+    val d = desc
+    if(d == "J" || d == "D") 2
+    else 1
+  }
 }
 final class PrimitiveValDesc(val desc: String, val jvmType: Class[_]) extends ValDesc
 
 object Desc {
-  private[dsl] class ValDescImpl(val desc: String) extends ValDesc
-  private[this] class MethodDescImpl(val desc: String) extends MethodDesc
+  import java.lang.{String => JString}
+  private[dsl] class ValDescImpl(val desc: JString) extends ValDesc
+  private[this] class MethodDescImpl(val desc: JString) extends MethodDesc
   class MethodArgs private[Desc] (params: Seq[ValDesc]) {
     private[this] def d = params.iterator.map(_.desc).mkString("(", "", ")")
     def B: MethodDesc = new MethodDescImpl(s"${d}B")
@@ -46,13 +52,15 @@ object Desc {
   val F: PrimitiveValDesc = new PrimitiveValDesc("F", java.lang.Float.TYPE)
   val J: PrimitiveValDesc = new PrimitiveValDesc("J", java.lang.Long.TYPE)
   val V: PrimitiveValDesc = new PrimitiveValDesc("V", java.lang.Void.TYPE)
-  def m(desc: String): MethodDesc = new MethodDescImpl(desc)
+  val Object: ClassOwner = c("java/lang/Object")
+  val String: ClassOwner = c("java/lang/String")
+  def m(desc: JString): MethodDesc = new MethodDescImpl(desc)
   def m(jMethod: java.lang.reflect.Method): MethodDesc = m(Type.getMethodDescriptor(jMethod))
   def m(params: ValDesc*): MethodArgs = new MethodArgs(params)
-  def c(className: String): ClassOwner = new ClassOwner(className)
+  def c(className: JString): ClassOwner = new ClassOwner(className)
   def c(cls: Class[_]): ClassOwner = ClassOwner(cls)
   def c[T : ClassTag]: ClassOwner = ClassOwner.apply[T]
-  def i(className: String): InterfaceOwner = new InterfaceOwner(className)
+  def i(className: JString): InterfaceOwner = new InterfaceOwner(className)
   def i(cls: Class[_]): InterfaceOwner = InterfaceOwner(cls)
   def i[T : ClassTag]: InterfaceOwner = InterfaceOwner.apply[T]
   def o(cls: Class[_]): Owner = Owner(cls)

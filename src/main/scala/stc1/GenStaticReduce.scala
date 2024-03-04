@@ -106,21 +106,21 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     checkCondition(bp, branchEnd)
     incMetric(s"$branchMetricName", m, ptw)
 
-    val (cont1, cont2) = {
-      if(bp.loopOn1 || bp.loopOn2) {
-        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(active(0).sym), "cont1")
-        val cont2 = m.aconst_null.storeLocal(concreteCellTFor(active(1).sym), "cont2")
-        (cont1, cont2)
+    val (cont0, cont1) = {
+      if(bp.loopOn0 || bp.loopOn1) {
+        val cont0 = m.aconst_null.storeLocal(concreteCellTFor(active(0).sym), "cont0")
+        val cont1 = m.aconst_null.storeLocal(concreteCellTFor(active(1).sym), "cont1")
+        (cont0, cont1)
       } else (VarIdx.none, VarIdx.none)
     }
-    var skipCont1NullCheck = true // skip on first attempt
+    var skipCont0NullCheck = true // skip on first attempt
+    def setCont0(ct1: CellIdx, ct2: FreeIdx): Unit = {
+      ldCell(ct1).astore(cont0)
+      ldCell(ct2).checkcast(concreteCellTFor(active(1).sym)).astore(cont1)
+    }
     def setCont1(ct1: CellIdx, ct2: FreeIdx): Unit = {
       ldCell(ct1).astore(cont1)
-      ldCell(ct2).checkcast(concreteCellTFor(active(1).sym)).astore(cont2)
-    }
-    def setCont2(ct1: CellIdx, ct2: FreeIdx): Unit = {
-      ldCell(ct1).astore(cont2)
-      ldCell(ct2).checkcast(concreteCellTFor(active(0).sym)).astore(cont1)
+      ldCell(ct2).checkcast(concreteCellTFor(active(0).sym)).astore(cont0)
     }
 
     createCells(bp.cellCreateInstructions)
@@ -133,25 +133,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         ldPort(ct2).if_>=.thnElse {
           ldBoth(ct2); ldBoth(ct1).invoke(cell_setAux)
         } {
-          if(ct1.idx == bp.active(0) && bp.loopOn1) {
-            if(skipCont1NullCheck) {
-              skipCont1NullCheck = false
+          if(ct1.idx == bp.active(0) && bp.loopOn0) {
+            if(skipCont0NullCheck) {
+              skipCont0NullCheck = false
               ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
+              m.if_!=.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+            } else {
+              m.aload(cont0).ifNull.and {
+                ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
+              }.if_!=.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+            }
+          } else if(ct1.idx == bp.active(1) && bp.loopOn1) {
+            if(skipCont0NullCheck) {
+              skipCont0NullCheck = false
+              ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
               m.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
-              m.aload(cont1).ifNull.and {
-                ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
-              }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
-            }
-          } else if(ct1.idx == bp.active(1) && bp.loopOn2) {
-            if(skipCont1NullCheck) {
-              skipCont1NullCheck = false
-              ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
-              m.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
-            } else {
-              m.aload(cont1).ifNull.and {
+              m.aload(cont0).ifNull.and {
                 ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
-              }.if_!=.thnElse { setCont2(ct1, ct2) } { createCut(ct1, ct2) }
+              }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else createCut(ct1, ct2)
         }
@@ -201,11 +201,11 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
           if(a != null && a.reuse == -1) m.aload(a.vidx).invokestatic(cellCache_set(a.sym))
         }
 
-      recordStats(cont1, bp, parents)
+      recordStats(cont0, bp, parents)
 
-      if(cont1 != VarIdx.none) {
-        m.aload(cont1).ifNonNull.thn {
-          m.aload(cont1).astore(active(0).vidx).aload(cont2).astore(active(1).vidx)
+      if(cont0 != VarIdx.none) {
+        m.aload(cont0).ifNonNull.thn {
+          m.aload(cont0).astore(active(0).vidx).aload(cont1).astore(active(1).vidx)
           m.goto(methodStart) //TODO jump directly to the right branch if it can be determined statically
         }
       }
