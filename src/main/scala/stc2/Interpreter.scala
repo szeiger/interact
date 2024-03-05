@@ -41,7 +41,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   private[this] var active0, active1: Cell = _
   private[this] var allocator: Allocator = _
   private[this] val singletons: Array[Cell] = new Array(symIds.size)
-  private[this] var nextRef = Long.MinValue
+  private[this] var nextLabel = Long.MinValue
 
   def getMetrics: ExecutionMetrics = metrics
 
@@ -78,7 +78,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     freeWires.clear()
     freeWireLookup.clear()
     dispose()
-    nextRef = Long.MinValue
+    nextLabel = Long.MinValue
     allocator = new Allocator
     singletons.indices.foreach { i =>
       val s = reverseSymIds(i)
@@ -113,14 +113,6 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       dispatch.reduce(a0, a1, this)
     }
 
-  def newCell(symId: Int, arity: Int): Long = {
-    val sz = Allocator.cellSize(arity, PayloadType.VOID)
-    val o = allocator.alloc(sz)
-    Allocator.setInt(o + Allocator.symIdOffset, symId)
-    Allocator.setInt(o + Allocator.arityOffset, arity)
-    o
-  }
-
   // ptw methods:
 
   def addActive(a0: Cell, a1: Cell): Unit =
@@ -139,9 +131,9 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def freeCell(address: Cell, length: Int): Unit = allocator.free(address, length)
 
-  def newRef: Long = {
-    val r = nextRef
-    nextRef += 1
+  def newLabel: Long = {
+    val r = nextLabel
+    nextLabel += 1
     r
   }
 }

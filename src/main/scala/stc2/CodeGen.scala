@@ -31,11 +31,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val allocator_getInt = allocatorT.method("getInt", tp.m(tp.J).I)
   val allocator_setLong = allocatorT.method("setLong", tp.m(tp.J, tp.J).V)
   val allocator_getLong = allocatorT.method("getLong", tp.m(tp.J).J)
-  val allocator_newRef = allocatorT.method("newRef", tp.m().J)
-  //val cell_auxCell = cellT.method("auxCell", tp.m(tp.I)(cellT))
-  //val cell_auxPort = cellT.method("auxPort", tp.m(tp.I).I)
-  //val cell_setAux = cellT.method("setAux", tp.m(tp.I, cellT, tp.I).V)
-  //val cell_symId = cellT.field("symId", tp.I)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
   val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
@@ -43,7 +38,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val ptw_getSingleton = ptwT.method("getSingleton", tp.m(tp.I)(cellT))
   val ptw_allocCell = ptwT.method("allocCell", tp.m(tp.I)(cellT))
   val ptw_freeCell = ptwT.method("freeCell", tp.m(cellT, tp.I).V)
-  val ptw_newRef = ptwT.method("freeCell", tp.m().J)
+  val ptw_newLabel = ptwT.method("newLabel", tp.m().J)
 
   val intBox_getValue = intBoxT.method("getValue", tp.m().I)
   val intBox_setValue = intBoxT.method("setValue", tp.m(tp.I).V)
@@ -60,18 +55,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   def initialRuleT_static_reduce(idx: Int) =
     tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, ptwT).V)
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
-  //def concreteCellTFor(sk: SymbolKind): ClassOwner = tp.c(s"$genPackage/C_${sk.arity}${sk.boxType}")
-  //def concreteCellTFor(sym: Symbol): ClassOwner = if(sym.isDefined) concreteCellTFor(SymbolKind(sym)) else cellT
-  //def concreteConstrFor(sym: Symbol) =
-  //  concreteCellTFor(sym).constr(tp.m(tp.I +: (0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
-  //def concreteReinitFor(sk: SymbolKind): MethodRef = concreteCellTFor(sk).method("reinit", tp.m((0 until sk.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
-  //def concreteReinitFor(sym: Symbol): MethodRef = concreteReinitFor(SymbolKind(sym))
-  //def concretePayloadFieldFor(sk: SymbolKind) = concreteCellTFor(sk).field("value", sk.boxType match {
-  //  case "I" => tp.I
-  //  case _ => tp.c[AnyRef]
-  //})
-  //def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
-  //def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
   def metaClass_singleton(sym: Symbol) = { val tp = concreteMetaClassTFor(sym); tp.field("singleton", tp) }
 
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
@@ -119,13 +102,13 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
 
     def mkRuleKey(s1: Int, s2: Int): Int = (s1 << symBits) | s2
 
-    val m = c.method(Acc.PUBLIC.FINAL, dispatch_reduce)
+    val m = c.method(Acc.PUBLIC.FINAL, dispatch_reduce.name, dispatch_reduce.desc)
     val c1 = m.param("c1", cellT)
     val c2 = m.param("c2", cellT)
     val ptw = m.param("ptw", ptwT)
 
-    m.lload(c1).lconst(Allocator.symIdOffset).ladd.invokestatic(allocator_getInt).iconst(symBits).ishl
-    m.lload(c2).lconst(Allocator.symIdOffset).ladd.invokestatic(allocator_getInt).ior
+    m.lload(c1).invokestatic(allocator_getInt).iconst(1).ishr.iconst(symBits).ishl
+    m.lload(c2).invokestatic(allocator_getInt).iconst(1).ishr.ior
 
     val keys = rules.flatMap { case (rk, rp) if !rp.initial =>
       Iterator(

@@ -131,7 +131,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   }
 
   private[this] def isCellInstance(sym: Symbol): m.type =
-    m.invokestatic(allocator_getInt).iconst(symIds(sym))
+    m.invokestatic(allocator_getInt).iconst(1).ishr.iconst(symIds(sym))
 
   def auxCellAddress(m: MethodDSL): m.type = // stack: c1, p1 -> address
     m.i2l.lconst(16).lmul.ladd.lconst(8).ladd
@@ -296,11 +296,11 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       assert(symIds(sym) >= 0)
       cells(idx) = active(act).vidx
       if(sym != active(act).sym)
-        m.lload(active(act).vidx).iconst(symIds(sym)).invokestatic(allocator_setInt)
+        m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_setInt)
     case NewCell(idx, sym, args) =>
       m.aload(ptw).iconst(Allocator.cellSize(sym.arity, sym.payloadType)).invoke(ptw_allocCell)
       assert(symIds(sym) >= 0)
-      m.dup2.iconst(symIds(sym)).invokestatic(allocator_setInt)
+      m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_setInt)
       args.zipWithIndex.foreach {
         case (CellIdx(-1, p2), p1) =>
           m.dup2.lconst(Allocator.auxPortOffset(p1)).ladd.iconst(p2).invokestatic(allocator_setInt)
@@ -414,7 +414,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       }, boxed)
     case CreateLabelsComp(_, ea) =>
       assert(elseTarget == null)
-      m.aload(ptw).invoke(ptw_newRef)
+      m.aload(ptw).invoke(ptw_newLabel)
       setLabels(ea)
     case ReuseLabelsComp(idx, ea) =>
       assert(elseTarget == null)

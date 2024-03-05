@@ -10,7 +10,6 @@ object Allocator {
   }
   val allocLength = 1024L * 1024L * 1024L
 
-  def symIdOffset: Int = 0
   def arityOffset: Int = 4
   def auxCellOffset(p: Int): Int = 8 + (p * 16)
   def auxPortOffset(p: Int): Int = 16 + (p * 16)
@@ -25,7 +24,7 @@ object Allocator {
     arity*16 + 8 + psize
   }
 
-  def symId(c: Long): Int = getInt(c + symIdOffset)
+  def symId(c: Long): Int = getInt(c) >> 1
   def auxCell(c: Long, p: Int): Long = getLong(c + auxCellOffset(p))
   def auxPort(c: Long, p: Int): Int = getInt(c + auxPortOffset(p))
   def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit ={
@@ -63,15 +62,14 @@ class Allocator {
     val sz = cellSize(arity, pt)
     val o = alloc(sz)
     UNSAFE.setMemory(o, sz, 0)
-    setInt(o + symIdOffset, symId)
-    setInt(o + arityOffset, arity)
+    setInt(o, (symId << 1) | 1)
     o
   }
 
   def freeCell(address: Long, arity: Int, pt: PayloadType = PayloadType.VOID): Unit =
     free(address, cellSize(arity, pt))
 
-  // 4 symId
+  // 4 (symId << 1) | 1
   // 4 pad
   // 8 c0
   // 4 p0
