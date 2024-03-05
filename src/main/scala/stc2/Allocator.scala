@@ -72,7 +72,7 @@ class Allocator {
     free(address, cellSize(arity, pt))
 
   // 4 symId
-  // 4 arity
+  // 4 pad
   // 8 c0
   // 4 p0
   // 4 pad
