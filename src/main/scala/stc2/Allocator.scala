@@ -10,10 +10,8 @@ object Allocator {
   }
   val allocLength = 1024L * 1024L * 1024L
 
-  def arityOffset: Int = 4
-  def auxCellOffset(p: Int): Int = 8 + (p * 16)
-  def auxPortOffset(p: Int): Int = 16 + (p * 16)
-  def payloadOffset(arity: Int): Int = 8 + (arity * 16)
+  def auxCPOffset(p: Int): Int = 8 + (p * 8)
+  def payloadOffset(arity: Int): Int = 8 + (arity * 8)
 
   def cellSize(arity: Int, pt: PayloadType) = {
     val psize = pt match {
@@ -21,15 +19,19 @@ object Allocator {
       case PayloadType.INT => 8 // with padding
       case PayloadType.LABEL | PayloadType.REF => 8
     }
-    arity*16 + 8 + psize
+    arity*8 + 8 + psize
   }
 
   def symId(c: Long): Int = getInt(c) >> 1
-  def auxCell(c: Long, p: Int): Long = getLong(c + auxCellOffset(p))
-  def auxPort(c: Long, p: Int): Int = getInt(c + auxPortOffset(p))
-  def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit ={
-    setLong(c + auxCellOffset(p), c2)
-    setInt(c + auxPortOffset(p), p2)
+  def auxCP(c: Long, p: Int): Long = getLong(c + auxCPOffset(p))
+  def setAuxCP(c: Long, p: Int, cp2: Long): Unit = setLong(c + auxCPOffset(p), cp2)
+  def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, c2 + auxCPOffset(p2))
+
+  def findCellAndPort(cp: Long): (Long, Int) = {
+    var p = -1
+    while((getInt(cp - auxCPOffset(p)) & 1) == 0)
+      p += 1
+    (cp - auxCPOffset(p), p)
   }
 
   // used by code generator:
@@ -71,12 +73,8 @@ class Allocator {
 
   // 4 (symId << 1) | 1
   // 4 pad
-  // 8 c0
-  // 4 p0
-  // 4 pad
+  // 8 cp_0
   // ...
-  // 8 cn
-  // 4 pn
-  // 4 pad
+  // 8 cp_n
   // (0/4/8) payload
 }

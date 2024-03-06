@@ -41,102 +41,71 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   }
 
   // Temporary cache to reduce repeated loads
-  val idxCellCache = mutable.HashMap.empty[Idx, VarIdx]
-  val idxPortCache = mutable.HashMap.empty[Idx, VarIdx]
+  val idxCPCache = mutable.HashMap.empty[Idx, VarIdx]
   def idxCached(indices: Idx*)(f: => Unit): MethodDSL = {
     indices.foreach {
-      case idx: FreeIdx =>
-        ldCellFRaw(idx); idxCellCache.put(idx, m.storeLocal(tp.J))
-        ldPortFRaw(idx); idxPortCache.put(idx, m.storeLocal(tp.I))
+      case idx: FreeIdx => ldCPFRaw(idx); idxCPCache.put(idx, m.storeLocal(tp.J))
       case _ =>
     }
     f
-    idxCellCache.clear()
-    idxPortCache.clear()
+    idxCPCache.clear()
     m
   }
 
   // Local vars to buffer writes to a reused cell
   class WriteBuffer(ac: ActiveCell) {
     val cellIdx: Int = ac.reuse
-    private[this] val cs, ps = new VarIdxArray(ac.arity)
-    private[this] val constps = new Array[Int](ac.arity)
-    def set(port: Int, ct2: Idx): Unit = ct2 match {
-      case CellIdx(_, p) =>
-        ldCell(ct2)
-        constps(port) = p
-        cs(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}_c")
-      case _ =>
-        ldBoth(ct2)
-        ps(port) = m.storeLocal(tp.I, s"writeBuffer${ac.id}_${port}_p")
-        cs(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}_c")
+    private[this] val cps = new VarIdxArray(ac.arity)
+    def set(port: Int, ct2: Idx): Unit = {
+      ldCP(ct2)
+      cps(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}")
     }
     def flush(): Unit =
-      for(p <- 0 until cs.length if cs(p) != VarIdx.none) {
-        m.lload(cells(cellIdx)).lconst(Allocator.auxCellOffset(p)).ladd
-        m.lload(cs(p)).invokestatic(allocator_setLong)
-        m.lload(cells(cellIdx)).lconst(Allocator.auxPortOffset(p)).ladd
-        if(ps(p) != VarIdx.none) m.iload(ps(p)) else m.iconst(constps(p))
-        m.invokestatic(allocator_setInt)
+      for(p <- 0 until cps.length if cps(p) != VarIdx.none) {
+        m.lload(cells(cellIdx)).lconst(Allocator.auxCPOffset(p)).ladd
+        m.lload(cps(p)).invokestatic(allocator_setLong)
       }
   }
 
   // Cell accessors
-  private def ldCellC(idx: CellIdx) = m.lload(cells(idx.idx))
-  private def ldPortC(idx: CellIdx) = m.iconst(idx.port)
-  private def ldCellFRaw(idx: FreeIdx) = m.lload(active(idx.active).vidx).lconst(Allocator.auxCellOffset(idx.port)).ladd.invokestatic(allocator_getLong)
-  private def ldPortFRaw(idx: FreeIdx) = m.lload(active(idx.active).vidx).lconst(Allocator.auxPortOffset(idx.port)).ladd.invokestatic(allocator_getInt)
+  private def ldCPC(idx: CellIdx) = m.lload(cells(idx.idx)).lconst(Allocator.auxCPOffset(idx.port)).ladd
 
-  private def ldCellF(idx: FreeIdx) = idxCellCache.get(idx) match {
+  private def ldCPFRaw(idx: FreeIdx) = m.lload(active(idx.active).vidx).lconst(Allocator.auxCPOffset(idx.port)).ladd.invokestatic(allocator_getLong)
+
+  private def ldCPF(idx: FreeIdx) = idxCPCache.get(idx) match {
     case Some(v) => m.lload(v)
-    case None => ldCellFRaw(idx)
-  }
-  private def ldPortF(idx: FreeIdx) = idxPortCache.get(idx) match {
-    case Some(v) => m.iload(v)
-    case None => ldPortFRaw(idx)
+    case None => ldCPFRaw(idx)
   }
 
-  private def ldCell(idx: Idx) = idx match {
-    case f: FreeIdx => ldCellF(f)
-    case c: CellIdx => ldCellC(c)
+  private def ldCP(idx: Idx) = idx match {
+    case f: FreeIdx => ldCPF(f)
+    case c: CellIdx => ldCPC(c)
   }
-  private def ldPort(idx: Idx) = idx match {
-    case f: FreeIdx => ldPortF(f)
-    case c: CellIdx => ldPortC(c)
-  }
-  private def ldBothC(idx: CellIdx) = { ldCellC(idx); ldPortC(idx) }
-  private def ldBothF(idx: FreeIdx) = { ldCellF(idx); ldPortF(idx) }
-  private def ldBoth(idx: Idx) = { ldCell(idx); ldPort(idx) }
 
   // Write to internal cell or reuse buffer for reused cells
-  private def setAux(idx: CellIdx, ct2: Idx, setPort: Boolean = true): Unit =
+  private def setAux(idx: CellIdx, ct2: Idx): Unit =
     reuseBuffers.find(w => w != null && w.cellIdx == idx.idx) match {
       case Some(b) => b.set(idx.port, ct2)
       case None =>
         m.lload(cells(idx.idx))
-        if(setPort) m.dup2
-        m.lconst(Allocator.auxCellOffset(idx.port)).ladd
-        ldCell(ct2).invokestatic(allocator_setLong)
-        if(setPort) {
-          m.lconst(Allocator.auxPortOffset(idx.port)).ladd
-          ldPort(ct2).invokestatic(allocator_setInt)
-        }
+        m.lconst(Allocator.auxCPOffset(idx.port)).ladd
+        ldCP(ct2).invokestatic(allocator_setLong)
     }
 
   private def createCut(ct1: Idx, ct2: Idx) = {
     m.aload(ptw)
-    ldCell(ct1)
-    ldCell(ct2)
+    ldCP(ct1)
+    ldCP(ct2)
     m.invoke(ptw_addActive)
   }
 
-  private[this] def isCellInstance(sym: Symbol): m.type =
-    m.invokestatic(allocator_getInt).iconst(1).ishr.iconst(symIds(sym))
+  private[this] def isCellInstance(sym: Symbol): m.type = // stack: c1 -> mSymId1, mSymId2 for if_icmpeq
+    m.invokestatic(allocator_getInt).iconst((symIds(sym) << 1) | 1)
 
-  def auxCellAddress(m: MethodDSL): m.type = // stack: c1, p1 -> address
-    m.i2l.lconst(16).lmul.ladd.lconst(8).ladd
-  def auxPortAddress(m: MethodDSL): m.type = // stack: c1, p1 -> address
-    m.i2l.lconst(16).lmul.ladd.lconst(16).ladd
+  private[this] def ifAux(idx: FreeIdx) = {
+    ldCPF(idx)
+    m.invokestatic(allocator_getInt).iconst(1).iand.if_==
+  }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
@@ -157,12 +126,12 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
     var skipCont0NullCheck = true // skip on first attempt
     def setCont0(ct1: CellIdx, ct2: FreeIdx): Unit = {
-      ldCellC(ct1).lstore(cont0)
-      ldCellF(ct2).lstore(cont1)
+      ldCPC(ct1).lstore(cont0)
+      ldCPF(ct2).lstore(cont1)
     }
     def setCont1(ct1: CellIdx, ct2: FreeIdx): Unit = {
-      ldCellC(ct1).lstore(cont1)
-      ldCellF(ct2).lstore(cont0)
+      ldCPC(ct1).lstore(cont1)
+      ldCPF(ct2).lstore(cont0)
     }
 
     createCells(bp.cellCreateInstructions)
@@ -170,37 +139,37 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     bp.payloadComps.foreach(computePayload(_))
 
     def ldAndSetAux(ct1: FreeIdx, ct2: Idx) = {
-      ldBothF(ct1); auxCellAddress(m); ldCell(ct2).invokestatic(allocator_setLong)
-      ldBothF(ct1); auxPortAddress(m); ldPort(ct2).invokestatic(allocator_setInt)
+      ldCPF(ct1)
+      ldCP(ct2).invokestatic(allocator_setLong)
     }
 
     // Connect remaining wires
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = idxCached(ct1, ct2) {
       if(ct1.isPrincipal) {
-        ldPortF(ct2).if_>=.thnElse {
+        ifAux(ct2).thnElse {
           ldAndSetAux(ct2, ct1)
         } {
           if(ct1.idx == bp.active(0) && bp.loopOn0) {
             if(skipCont0NullCheck) {
               skipCont0NullCheck = false
-              ldCellF(ct2)
+              ldCPF(ct2)
               isCellInstance(active(1).sym)
               m.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.lload(cont0).lconst(0).lcmp.if_==.and {
-                ldCellF(ct2)
+                ldCPF(ct2)
                 isCellInstance(active(1).sym)
               }.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else if(ct1.idx == bp.active(1) && bp.loopOn1) {
             if(skipCont0NullCheck) {
               skipCont0NullCheck = false
-              ldCellF(ct2)
+              ldCPF(ct2)
               isCellInstance(active(0).sym)
               m.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.lload(cont0).lconst(0).lcmp.if_==.and {
-                ldCellF(ct2)
+                ldCPF(ct2)
                 isCellInstance(active(0).sym)
               }.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             }
@@ -210,19 +179,19 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         }
       } else {
         if(bp.isReuse(ct1)) setAux(ct1, ct2)
-        ldPortF(ct2).if_>=.thn {
+        ifAux(ct2).thn {
           ldAndSetAux(ct2, ct1)
         }
       }
     }
     def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = idxCached(ct1, ct2) {
-      ldPortF(ct1).if_>=.thnElse {
+      ifAux(ct1).thnElse {
         ldAndSetAux(ct1, ct2)
-        ldPortF(ct2).if_>=.thn {
+        ifAux(ct2).thn {
           ldAndSetAux(ct2, ct1)
         }
       } {
-        ldPortF(ct2).if_>=.thnElse {
+        ifAux(ct2).thnElse {
           ldAndSetAux(ct2, ct1)
         } {
           createCut(ct1, ct2)
@@ -231,9 +200,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = idxCached(ct1, ct2) {
       if(ct1.isAux && !bp.cellPortsConnected.contains(ct1))
-        setAux(ct1, ct2, bp.isReuse(ct1))
+        setAux(ct1, ct2)
       if(ct2.isAux && !bp.cellPortsConnected.contains(ct2))
-        setAux(ct2, ct1, bp.isReuse(ct2))
+        setAux(ct2, ct1)
       if(ct1.isPrincipal && ct2.isPrincipal)
         createCut(ct1, ct2)
     }
@@ -302,13 +271,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       assert(symIds(sym) >= 0)
       m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_setInt)
       args.zipWithIndex.foreach {
-        case (CellIdx(-1, p2), p1) =>
-          m.dup2.lconst(Allocator.auxPortOffset(p1)).ladd.iconst(p2).invokestatic(allocator_setInt)
+        case (CellIdx(-1, _), _) =>
         case (idx, p1) =>
-          m.dup2.lconst(Allocator.auxCellOffset(p1)).ladd
-          ldCell(idx).invokestatic(allocator_setLong)
-          m.dup2.lconst(Allocator.auxPortOffset(p1)).ladd
-          ldPort(idx).invokestatic(allocator_setInt)
+          m.dup2.lconst(Allocator.auxCPOffset(p1)).ladd
+          ldCP(idx).invokestatic(allocator_setLong)
       }
       if(config.collectStats) m.iinc(statCellAllocations)
       cells(idx) = m.storeLocal(cellT, s"cell$idx")
@@ -385,8 +351,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private def checkCondition(bp: BranchPlan, endTarget: Label) = {
     bp.cond.foreach {
       case CheckPrincipal(wire, sym, activeIdx) =>
-        ldPortF(wire).ifge(endTarget)
-        ldCellF(wire).dup2
+        ifAux(wire).jump(endTarget)
+        ldCPF(wire).dup2
         isCellInstance(sym).ifI_!=.thnElse {
           m.pop2.goto(endTarget)
         } {

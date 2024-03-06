@@ -51,7 +51,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def rootCells = (self.freeWires.iterator ++ principals.keysIterator).toSet
     def getSymbol(c: Cell): Symbol = reverseSymIds.getOrElse(Allocator.symId(c), freeWireLookup.getOrElse(Allocator.symId(c), Symbol.NoSymbol))
     def getConnected(c: Cell, port: Int): (Cell, Int) =
-      if(port == -1) principals.get(c).map((_, -1)).orNull else (Allocator.auxCell(c, port), Allocator.auxPort(c, port))
+      if(port == -1) principals.get(c).map((_, -1)).orNull else Allocator.findCellAndPort(Allocator.auxCP(c, port))
     def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(Allocator.symId(c))
     def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
     override def getPayload(c: Cell): Any = {
