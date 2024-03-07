@@ -24,7 +24,7 @@ object Allocator {
 
   def symId(c: Long): Int = getInt(c) >> 1
   def auxCP(c: Long, p: Int): Long = getLong(c + auxCPOffset(p))
-  def setAuxCP(c: Long, p: Int, cp2: Long): Unit = setLong(c + auxCPOffset(p), cp2)
+  def setAuxCP(c: Long, p: Int, cp2: Long): Unit = putLong(c + auxCPOffset(p), cp2)
   def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, c2 + auxCPOffset(p2))
 
   def findCellAndPort(cp: Long): (Long, Int) = {
@@ -35,9 +35,9 @@ object Allocator {
   }
 
   // used by code generator:
-  def setInt(address: Long, value: Int): Unit = UNSAFE.putInt(address, value)
+  def putInt(address: Long, value: Int): Unit = UNSAFE.putInt(address, value)
   def getInt(address: Long): Int = UNSAFE.getInt(address)
-  def setLong(address: Long, value: Long): Unit = UNSAFE.putLong(address, value)
+  def putLong(address: Long, value: Long): Unit = UNSAFE.putLong(address, value)
   def getLong(address: Long): Long = UNSAFE.getLong(address)
 }
 
@@ -63,8 +63,7 @@ class Allocator {
   def newCell(symId: Int, arity: Int, pt: PayloadType = PayloadType.VOID): Long = {
     val sz = cellSize(arity, pt)
     val o = alloc(sz)
-    UNSAFE.setMemory(o, sz, 0)
-    setInt(o, (symId << 1) | 1)
+    putInt(o, (symId << 1) | 1)
     o
   }
 

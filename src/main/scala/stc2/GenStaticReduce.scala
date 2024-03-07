@@ -2,6 +2,7 @@ package de.szeiger.interact.stc2
 
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
+import de.szeiger.interact.codegen.AbstractCodeGen
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
@@ -25,9 +26,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   val reuseBuffers: Array[WriteBuffer] = new Array(rule.totalActiveCount)
   // payload temp vars and boxed flag, updated for the current branches
   val temp = new Array[(VarIdx, Boolean)](rule.totalTempCount)
+
   // cached payloads, updated for the current top-level branch
   for(ac <- active if ac != null) cachePayload(ac)
-
   private def cachePayload(ac: ActiveCell): Unit = {
     if(ac.needsCachedPayload) {
       val name = s"cachedPayload${ac.id}"
@@ -40,15 +41,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
   }
 
-  // Temporary cache to reduce repeated loads
-  val idxCPCache = mutable.HashMap.empty[Idx, VarIdx]
-  def idxCached(indices: Idx*)(f: => Unit): MethodDSL = {
-    indices.foreach {
-      case idx: FreeIdx => ldCPFRaw(idx); idxCPCache.put(idx, m.storeLocal(tp.J))
-      case _ =>
+  // Temporary caches to reduce repeated loads
+  private[this] val idxCPCache = mutable.HashMap.empty[FreeIdx, VarIdx]
+  private def cachedIdx(indices: FreeIdx*)(f: => Unit): MethodDSL = {
+    indices.foreach { idx =>
+      ldCPFRaw(idx)
+      idxCPCache.put(idx, m.storeLocal(tp.J, s"cachedIdx_f${idx.active}_${idx.port}"))
     }
     f
-    idxCPCache.clear()
+    indices.foreach(idxCPCache.remove)
+    m
+  }
+  private[this] val modSymIdCache = mutable.HashMap.empty[FreeIdx, VarIdx]
+  private def cachedModSymId(indices: FreeIdx*)(f: => Unit): MethodDSL = {
+    indices.foreach { idx =>
+      ldCPF(idx).invokestatic(allocator_getInt)
+      modSymIdCache.put(idx, m.storeLocal(tp.I, s"cachedModSymId_f${idx.active}_${idx.port}"))
+    }
+    f
+    indices.foreach(modSymIdCache.remove)
     m
   }
 
@@ -63,14 +74,28 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     def flush(): Unit =
       for(p <- 0 until cps.length if cps(p) != VarIdx.none) {
         m.lload(cells(cellIdx)).lconst(Allocator.auxCPOffset(p)).ladd
-        m.lload(cps(p)).invokestatic(allocator_setLong)
+        m.lload(cps(p)).invokestatic(allocator_putLong)
       }
   }
 
   // Cell accessors
-  private def ldCPC(idx: CellIdx) = m.lload(cells(idx.idx)).lconst(Allocator.auxCPOffset(idx.port)).ladd
+  private def ldCPC(idx: CellIdx): m.type = {
+    m.lload(cells(idx.idx))
+    Allocator.auxCPOffset(idx.port) match {
+      case 0 =>
+      case off => m.lconst(off).ladd
+    }
+    m
+  }
 
-  private def ldCPFRaw(idx: FreeIdx) = m.lload(active(idx.active).vidx).lconst(Allocator.auxCPOffset(idx.port)).ladd.invokestatic(allocator_getLong)
+  private def ldCPFRaw(idx: FreeIdx): m.type = {
+    m.lload(active(idx.active).vidx)
+    Allocator.auxCPOffset(idx.port) match {
+      case 0 =>
+      case off => m.lconst(off).ladd
+    }
+    m.invokestatic(allocator_getLong)
+  }
 
   private def ldCPF(idx: FreeIdx) = idxCPCache.get(idx) match {
     case Some(v) => m.lload(v)
@@ -89,23 +114,31 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       case None =>
         m.lload(cells(idx.idx))
         m.lconst(Allocator.auxCPOffset(idx.port)).ladd
-        ldCP(ct2).invokestatic(allocator_setLong)
+        ldCP(ct2).invokestatic(allocator_putLong)
     }
 
-  private def createCut(ct1: Idx, ct2: Idx) = {
+  private def createCut(ct1: Idx, ct2: Idx): m.type = {
     m.aload(ptw)
     ldCP(ct1)
     ldCP(ct2)
     m.invoke(ptw_addActive)
   }
 
-  private[this] def isCellInstance(sym: Symbol): m.type = // stack: c1 -> mSymId1, mSymId2 for if_icmpeq
-    m.invokestatic(allocator_getInt).iconst((symIds(sym) << 1) | 1)
-
-  private[this] def ifAux(idx: FreeIdx) = {
+  private[this] def ldModSymIdRaw(idx: FreeIdx): m.type = {
     ldCPF(idx)
-    m.invokestatic(allocator_getInt).iconst(1).iand.if_==
+    m.invokestatic(allocator_getInt)
   }
+
+  private[this] def ldModSymId(idx: FreeIdx): m.type = modSymIdCache.get(idx) match {
+    case Some(v) => m.iload(v)
+    case None => ldModSymIdRaw(idx)
+  }
+
+  private[this] def isCellInstance(idx: FreeIdx, sym: Symbol): m.type = // stack: () -> mSymId1, mSymId2 for if_icmpeq
+    ldModSymId(idx).iconst((symIds(sym) << 1) | 1)
+
+  private[this] def ifAux(idx: FreeIdx) =
+    ldModSymId(idx).iconst(1).iand.if_==
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
@@ -140,51 +173,51 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
 
     def ldAndSetAux(ct1: FreeIdx, ct2: Idx) = {
       ldCPF(ct1)
-      ldCP(ct2).invokestatic(allocator_setLong)
+      ldCP(ct2).invokestatic(allocator_putLong)
     }
 
     // Connect remaining wires
-    def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = idxCached(ct1, ct2) {
+    def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = cachedIdx(ct2) {
       if(ct1.isPrincipal) {
-        ifAux(ct2).thnElse {
-          ldAndSetAux(ct2, ct1)
-        } {
-          if(ct1.idx == bp.active(0) && bp.loopOn0) {
-            if(skipCont0NullCheck) {
-              skipCont0NullCheck = false
-              ldCPF(ct2)
-              isCellInstance(active(1).sym)
-              m.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+        val mayLoopOn0 = ct1.idx == bp.active(0) && bp.loopOn0
+        val mayLoopOn1 = ct1.idx == bp.active(1) && bp.loopOn1
+        cachedModSymId((if(mayLoopOn0 || mayLoopOn1) Seq(ct2) else Nil): _*) {
+          ifAux(ct2).thnElse {
+            ldAndSetAux(ct2, ct1)
+          } {
+            if(mayLoopOn0) {
+              if(skipCont0NullCheck) {
+                skipCont0NullCheck = false
+                isCellInstance(ct2, active(1).sym)
+                m.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+              } else {
+                m.lload(cont0).lconst(0).lcmp.if_==.and {
+                  isCellInstance(ct2, active(1).sym)
+                }.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+              }
+            } else if(mayLoopOn1) {
+              if(skipCont0NullCheck) {
+                skipCont0NullCheck = false
+                isCellInstance(ct2, active(0).sym)
+                m.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+              } else {
+                m.lload(cont0).lconst(0).lcmp.if_==.and {
+                  isCellInstance(ct2, active(0).sym)
+                }.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+              }
             } else {
-              m.lload(cont0).lconst(0).lcmp.if_==.and {
-                ldCPF(ct2)
-                isCellInstance(active(1).sym)
-              }.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+              createCut(ct1, ct2)
             }
-          } else if(ct1.idx == bp.active(1) && bp.loopOn1) {
-            if(skipCont0NullCheck) {
-              skipCont0NullCheck = false
-              ldCPF(ct2)
-              isCellInstance(active(0).sym)
-              m.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
-            } else {
-              m.lload(cont0).lconst(0).lcmp.if_==.and {
-                ldCPF(ct2)
-                isCellInstance(active(0).sym)
-              }.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
-            }
-          } else {
-            createCut(ct1, ct2)
           }
         }
       } else {
-        if(bp.isReuse(ct1)) setAux(ct1, ct2)
+        setAux(ct1, ct2)
         ifAux(ct2).thn {
           ldAndSetAux(ct2, ct1)
         }
       }
     }
-    def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = idxCached(ct1, ct2) {
+    def connectFF(ct1: FreeIdx, ct2: FreeIdx): Unit = cachedIdx(ct1, ct2) {
       ifAux(ct1).thnElse {
         ldAndSetAux(ct1, ct2)
         ifAux(ct2).thn {
@@ -198,7 +231,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         }
       }
     }
-    def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = idxCached(ct1, ct2) {
+    def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       if(ct1.isAux && !bp.cellPortsConnected.contains(ct1))
         setAux(ct1, ct2)
       if(ct2.isAux && !bp.cellPortsConnected.contains(ct2))
@@ -258,26 +291,33 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     m.return_
   }
 
-  private def createCells(instrs: Vector[CreateInstruction]): Unit = instrs.foreach {
-    case GetSingletonCell(idx, sym) =>
-      cells(idx) = m.aload(ptw).iconst(symIds(sym)).invoke(ptw_getSingleton).storeLocal(cellT, s"cell${idx}_singleton")
-    case ReuseActiveCell(idx, act, sym) =>
-      assert(symIds(sym) >= 0)
-      cells(idx) = active(act).vidx
-      if(sym != active(act).sym)
-        m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_setInt)
-    case NewCell(idx, sym, args) =>
-      m.aload(ptw).iconst(Allocator.cellSize(sym.arity, sym.payloadType)).invoke(ptw_allocCell)
-      assert(symIds(sym) >= 0)
-      m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_setInt)
-      args.zipWithIndex.foreach {
-        case (CellIdx(-1, _), _) =>
-        case (idx, p1) =>
-          m.dup2.lconst(Allocator.auxCPOffset(p1)).ladd
-          ldCP(idx).invokestatic(allocator_setLong)
-      }
-      if(config.collectStats) m.iinc(statCellAllocations)
-      cells(idx) = m.storeLocal(cellT, s"cell$idx")
+  private def createCells(instrs: Vector[CreateInstruction]): Unit = {
+    val singletonCache = mutable.HashMap.empty[Symbol, VarIdx]
+    instrs.foreach {
+      case GetSingletonCell(idx, sym) if(singletonCache.contains(sym)) =>
+        cells(idx) = singletonCache(sym)
+      case GetSingletonCell(idx, sym) =>
+        cells(idx) = m.aload(ptw).iconst(symIds(sym)).invoke(ptw_getSingleton).storeLocal(cellT, s"cell${idx}_singleton_${AbstractCodeGen.encodeName(sym)}")
+        singletonCache.put(sym, cells(idx))
+      case ReuseActiveCell(idx, act, sym) =>
+        assert(symIds(sym) >= 0)
+        cells(idx) = active(act).vidx
+        if(sym != active(act).sym)
+          m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
+      case NewCell(idx, sym, args) =>
+        m.aload(ptw).iconst(Allocator.cellSize(sym.arity, sym.payloadType)).invoke(ptw_allocCell)
+        assert(symIds(sym) >= 0)
+        m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
+        args.zipWithIndex.foreach {
+          case (CellIdx(-1, _), _) => // principal, nothing to connect
+          case (_: FreeIdx, _) => // done later when connecting opposite direction
+          case (idx, p1) =>
+            m.dup2.lconst(Allocator.auxCPOffset(p1)).ladd
+            ldCP(idx).invokestatic(allocator_putLong)
+        }
+        if(config.collectStats) m.iinc(statCellAllocations)
+        cells(idx) = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")
+    }
   }
 
   // load cached payload value (which is always unboxed) and adapt to class
@@ -326,8 +366,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     case EmbArg.Cell(idx) =>
       m.lload(cells(idx)).lconst(Allocator.payloadOffset(cellSyms(idx).arity)).ladd
       loadSource
-      if(boxCls == classOf[LongBox]) m.invokestatic(allocator_setLong)
-      else if(boxCls == classOf[IntBox]) m.invokestatic(allocator_setInt)
+      if(boxCls == classOf[LongBox]) m.invokestatic(allocator_putLong)
+      else if(boxCls == classOf[IntBox]) m.invokestatic(allocator_putInt)
       else ???
     case _ =>
       loadArg(ea, boxCls)
@@ -352,10 +392,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     bp.cond.foreach {
       case CheckPrincipal(wire, sym, activeIdx) =>
         ifAux(wire).jump(endTarget)
-        ldCPF(wire).dup2
-        isCellInstance(sym).ifI_!=.thnElse {
-          m.pop2.goto(endTarget)
+        isCellInstance(wire, sym).ifI_!=.thnElse {
+          m.goto(endTarget)
         } {
+          ldCPF(wire)
           val vidx = m.storeLocal(cellT, s"active$activeIdx")
           val ac = new ActiveCell(activeIdx, vidx, sym, sym.arity, bp.needsCachedPayloads(activeIdx))
           ac.reuse = bp.active(activeIdx)
@@ -382,9 +422,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       assert(elseTarget == null)
       m.aload(ptw).invoke(ptw_newLabel)
       setLabels(ea)
-    case ReuseLabelsComp(idx, ea) =>
+    case ReuseLabelsComp(idx, ea) => // can't mix reuse with non-address labels
       assert(elseTarget == null)
-      m.lload(cells(idx))
+      //m.lload(cells(idx))
+      m.aload(ptw).invoke(ptw_newLabel)
       setLabels(ea)
     case pc: PayloadMethodApplication =>
       if(elseTarget == null) assert(pc.jMethod.getReturnType == Void.TYPE)

@@ -249,10 +249,10 @@ class FFMBenchmark {
     val a = new Allocator
     for(i <- buf.indices) buf(i) = a.alloc(24)
     for(i <- 1 until buf.length-1) {
-      Allocator.setLong(buf(i), buf(i-1))
-      Allocator.setLong(buf(i)+8, buf(i+1))
-      Allocator.setInt(buf(i)+16, -1)
-      Allocator.setInt(buf(i)+20, i)
+      Allocator.putLong(buf(i), buf(i-1))
+      Allocator.putLong(buf(i)+8, buf(i+1))
+      Allocator.putInt(buf(i)+16, -1)
+      Allocator.putInt(buf(i)+20, i)
     }
     var sum = 0L
     for(i <- 1 until buf.length-1) {
