@@ -49,7 +49,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     val principals = (cutBuffer.iterator ++ irreducible.iterator).flatMap { case (c1, c2) => Seq((c1, c2), (c2, c1)) }.toMap
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     def rootCells = (self.freeWires.iterator ++ principals.keysIterator).toSet
-    def getSymbol(c: Cell): Symbol = reverseSymIds.getOrElse(Allocator.symId(c), freeWireLookup.getOrElse(Allocator.symId(c), Symbol.NoSymbol))
+    def getSymbol(c: Cell): Symbol = {
+      val sid = Allocator.symId(c)
+      reverseSymIds.getOrElse(sid, freeWireLookup.getOrElse(Allocator.symId(c), new Symbol(s"<NoSymbol $sid>")))
+    }
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).orNull else Allocator.findCellAndPort(Allocator.auxCP(c, port))
     def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(Allocator.symId(c))

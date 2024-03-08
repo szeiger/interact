@@ -23,15 +23,26 @@ object Allocator {
   }
 
   def symId(c: Long): Int = getInt(c) >> 1
-  def auxCP(c: Long, p: Int): Long = getLong(c + auxCPOffset(p))
-  def setAuxCP(c: Long, p: Int, cp2: Long): Unit = putLong(c + auxCPOffset(p), cp2)
-  def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, c2 + auxCPOffset(p2))
+  def auxCP(c: Long, p: Int): Long = getLong(c + auxCPOffset(p)) & -3L
+  private[this] def setAuxCP(c: Long, p: Int, cp2: Long): Unit = putLong(c + auxCPOffset(p), cp2)
+  def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, encodeAux(c2, p2))
 
-  def findCellAndPort(cp: Long): (Long, Int) = {
-    var p = -1
-    while((getInt(cp - auxCPOffset(p)) & 1) == 0)
-      p += 1
-    (cp - auxCPOffset(p), p)
+  private[this] def encodeAux(c: Long, p: Int) = {
+    val l = c + auxCPOffset(p)
+    if(p >= 0) l | 2L else l
+  }
+
+  def findCellAndPort(_cp: Long): (Long, Int) = {
+    var cp = _cp
+    if((cp & 1L) == 1L) {
+      (cp, -1)
+    } else {
+      cp = cp & -3L
+      var p = -1
+      while((getInt(cp - auxCPOffset(p)) & 1) == 0)
+        p += 1
+      (cp - auxCPOffset(p), p)
+    }
   }
 
   // used by code generator:

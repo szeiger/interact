@@ -45,7 +45,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private[this] val idxCPCache = mutable.HashMap.empty[FreeIdx, VarIdx]
   private def cachedIdx(indices: FreeIdx*)(f: => Unit): MethodDSL = {
     indices.foreach { idx =>
-      ldCPFRaw(idx)
+      ldTaggedCPFRaw(idx)
       idxCPCache.put(idx, m.storeLocal(tp.J, s"cachedIdx_f${idx.active}_${idx.port}"))
     }
     f
@@ -55,7 +55,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private[this] val modSymIdCache = mutable.HashMap.empty[FreeIdx, VarIdx]
   private def cachedModSymId(indices: FreeIdx*)(f: => Unit): MethodDSL = {
     indices.foreach { idx =>
-      ldCPF(idx).invokestatic(allocator_getInt)
+      ldModSymIdRaw(idx)
       modSymIdCache.put(idx, m.storeLocal(tp.I, s"cachedModSymId_f${idx.active}_${idx.port}"))
     }
     f
@@ -68,7 +68,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     val cellIdx: Int = ac.reuse
     private[this] val cps = new VarIdxArray(ac.arity)
     def set(port: Int, ct2: Idx): Unit = {
-      ldCP(ct2)
+      ldTaggedCP(ct2)
       cps(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}")
     }
     def flush(): Unit =
@@ -79,16 +79,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   }
 
   // Cell accessors
-  private def ldCPC(idx: CellIdx): m.type = {
-    m.lload(cells(idx.idx))
-    Allocator.auxCPOffset(idx.port) match {
-      case 0 =>
-      case off => m.lconst(off).ladd
-    }
-    m
-  }
 
-  private def ldCPFRaw(idx: FreeIdx): m.type = {
+  private def ldTaggedCPFRaw(idx: FreeIdx): m.type = {
     m.lload(active(idx.active).vidx)
     Allocator.auxCPOffset(idx.port) match {
       case 0 =>
@@ -97,14 +89,38 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     m.invokestatic(allocator_getLong)
   }
 
-  private def ldCPF(idx: FreeIdx) = idxCPCache.get(idx) match {
-    case Some(v) => m.lload(v)
-    case None => ldCPFRaw(idx)
+  private def ldTaggedCP(idx: Idx): m.type = {
+    idx match {
+      case idx: FreeIdx =>
+        idxCPCache.get(idx) match {
+          case Some(v) => m.lload(v)
+          case None => ldTaggedCPFRaw(idx)
+        }
+      case idx: CellIdx =>
+        m.lload(cells(idx.idx))
+        var l = Allocator.auxCPOffset(idx.port)
+        if(idx.port >= 0) l += 2
+        if(l != 0) m.lconst(l).ladd
+    }
+    m
   }
 
-  private def ldCP(idx: Idx) = idx match {
-    case f: FreeIdx => ldCPF(f)
-    case c: CellIdx => ldCPC(c)
+  private def ldUntaggedCP(idx: Idx): m.type = {
+    idx match {
+      case idx: FreeIdx => ldTaggedCP(idx).lconst(-3L).land
+      case idx: CellIdx =>
+        m.lload(cells(idx.idx))
+        Allocator.auxCPOffset(idx.port) match {
+          case 0 =>
+          case off => m.lconst(off).ladd
+        }
+    }
+    m
+  }
+
+  private def ldFastCP(idx: Idx): m.type = idx match {
+    case idx: FreeIdx => ldTaggedCP(idx)
+    case idx: CellIdx => ldUntaggedCP(idx)
   }
 
   // Write to internal cell or reuse buffer for reused cells
@@ -114,18 +130,18 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       case None =>
         m.lload(cells(idx.idx))
         m.lconst(Allocator.auxCPOffset(idx.port)).ladd
-        ldCP(ct2).invokestatic(allocator_putLong)
+        ldTaggedCP(ct2).invokestatic(allocator_putLong)
     }
 
   private def createCut(ct1: Idx, ct2: Idx): m.type = {
     m.aload(ptw)
-    ldCP(ct1)
-    ldCP(ct2)
+    ldFastCP(ct1)
+    ldFastCP(ct2)
     m.invoke(ptw_addActive)
   }
 
   private[this] def ldModSymIdRaw(idx: FreeIdx): m.type = {
-    ldCPF(idx)
+    ldFastCP(idx)
     m.invokestatic(allocator_getInt)
   }
 
@@ -138,7 +154,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     ldModSymId(idx).iconst((symIds(sym) << 1) | 1)
 
   private[this] def ifAux(idx: FreeIdx) =
-    ldModSymId(idx).iconst(1).iand.if_==
+    ldTaggedCP(idx).lconst(2).land.lconst(0).lcmp.if_!=
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
@@ -159,12 +175,12 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
     var skipCont0NullCheck = true // skip on first attempt
     def setCont0(ct1: CellIdx, ct2: FreeIdx): Unit = {
-      ldCPC(ct1).lstore(cont0)
-      ldCPF(ct2).lstore(cont1)
+      ldFastCP(ct1).lstore(cont0)
+      ldFastCP(ct2).lstore(cont1)
     }
     def setCont1(ct1: CellIdx, ct2: FreeIdx): Unit = {
-      ldCPC(ct1).lstore(cont1)
-      ldCPF(ct2).lstore(cont0)
+      ldFastCP(ct1).lstore(cont1)
+      ldFastCP(ct2).lstore(cont0)
     }
 
     createCells(bp.cellCreateInstructions)
@@ -172,8 +188,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     bp.payloadComps.foreach(computePayload(_))
 
     def ldAndSetAux(ct1: FreeIdx, ct2: Idx) = {
-      ldCPF(ct1)
-      ldCP(ct2).invokestatic(allocator_putLong)
+      ldUntaggedCP(ct1)
+      ldTaggedCP(ct2)
+      m.invokestatic(allocator_putLong)
     }
 
     // Connect remaining wires
@@ -313,7 +330,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
           case (_: FreeIdx, _) => // done later when connecting opposite direction
           case (idx, p1) =>
             m.dup2.lconst(Allocator.auxCPOffset(p1)).ladd
-            ldCP(idx).invokestatic(allocator_putLong)
+            ldTaggedCP(idx).invokestatic(allocator_putLong)
         }
         if(config.collectStats) m.iinc(statCellAllocations)
         cells(idx) = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")
@@ -395,7 +412,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         isCellInstance(wire, sym).ifI_!=.thnElse {
           m.goto(endTarget)
         } {
-          ldCPF(wire)
+          ldUntaggedCP(wire)
           val vidx = m.storeLocal(cellT, s"active$activeIdx")
           val ac = new ActiveCell(activeIdx, vidx, sym, sym.arity, bp.needsCachedPayloads(activeIdx))
           ac.reuse = bp.active(activeIdx)
