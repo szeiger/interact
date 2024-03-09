@@ -353,11 +353,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   private def createCells(instrs: Vector[CreateInstruction]): Unit = {
     val singletonCache = mutable.HashMap.empty[Symbol, VarIdx]
     instrs.foreach {
-      case GetSingletonCell(idx, sym) if(singletonCache.contains(sym)) =>
-        cells(idx) = singletonCache(sym)
       case GetSingletonCell(idx, sym) =>
-        cells(idx) = m.aload(ptw).iconst(symIds(sym)).invoke(ptw_getSingleton).storeLocal(cellT, s"cell${idx}_singleton_${AbstractCodeGen.encodeName(sym)}")
-        singletonCache.put(sym, cells(idx))
+        cells(idx) = active.find(_.sym == sym) match {
+          case Some(a) => a.vidx
+          case None =>
+            singletonCache.getOrElseUpdate(sym, {
+              m.aload(ptw).iconst(symIds(sym)).invoke(ptw_getSingleton).storeLocal(cellT, s"cell${idx}_singleton_${AbstractCodeGen.encodeName(sym)}")
+            })
+        }
       case ReuseActiveCell(idx, act, sym) =>
         assert(symIds(sym) >= 0)
         cells(idx) = active(act).vidx
