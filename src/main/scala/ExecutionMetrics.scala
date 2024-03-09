@@ -4,19 +4,20 @@ import scala.collection.mutable
 
 class ExecutionMetrics {
   private[this] final class MutInt(var i: Int)
-  private[this] var steps, cellAlloc, cellReuse, singletonUse, loopSave, directTail, labelCreate = 0
+  private[this] var steps, cellAlloc, cellReuse, singletonUse, loopSave, directTail, singleDispatchTail, labelCreate = 0
   private[this] var metrics = mutable.Map.empty[String, MutInt]
 
   def getSteps: Int = steps
 
   @inline def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
-    loopSave: Int, directTail: Int, labelCreate: Int): Unit = {
+    loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit = {
     this.steps += steps
     this.cellAlloc += cellAllocations
     this.cellReuse += cachedCellReuse
     this.singletonUse += singletonUse
     this.loopSave += loopSave
     this.directTail += directTail
+    this.singleDispatchTail += singleDispatchTail
     this.labelCreate += labelCreate
   }
 
@@ -31,9 +32,12 @@ class ExecutionMetrics {
     logStats()
     logMetrics()
   }
+
   def logStats(): Unit = {
-    println(s"Steps: ${steps} ($loopSave loop, $directTail tail, ${steps-loopSave-directTail} other), cells created: ${cellAlloc} new, ${cellReuse} cached, ${singletonUse} singleton, ${labelCreate} new labels created")
+    println(s"Steps: ${steps} ($loopSave loop, $directTail tail ($singleDispatchTail single-dispatch), ${steps-loopSave-directTail} other)")
+    println(s"  Cells created: ${cellAlloc} new, ${cellReuse} cached, ${singletonUse} singleton; Labels created: ${labelCreate}")
   }
+
   def logMetrics(): Unit = {
     val data = metrics.toVector.sortBy(_._1).map { case (k, v) => (k, v.i.toString) }
     val maxLen = data.iterator.map { case (k, v) => k.length + v.length }.max

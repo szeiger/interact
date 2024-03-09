@@ -551,11 +551,22 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc,
     if(keys.nonEmpty) {
       var i = keys(0)
       keys.iterator.drop(1).foreach { j =>
-        assert(j > i)
+        assert(j > i, s"tableswitch keys not in ascending order: $j follows $i")
         i = j
       }
     }
     insn(new LookupSwitchInsnNode(new LabelNode(deflt), keys, labels.iterator.map(new LabelNode(_)).toArray))
+  }
+
+  def lookupswitchOrTableswitch(keys: Array[Int], deflt: Label, labels: Seq[Label]): this.type = {
+    val minV = keys.head
+    val maxV = keys.last
+    if(keys.length*2 >= maxV-minV) {
+      val map = keys.iterator.zip(labels).map { case (k, l) => (k, l) }.toMap
+      tableswitch(minV, maxV, deflt, (minV to maxV).map { v => map.getOrElse(v, deflt) })
+    } else {
+      lookupswitch(keys, deflt, labels)
+    }
   }
 
   def tableSwitch(range: Range)(f: => Option[Int] => _): this.type = {

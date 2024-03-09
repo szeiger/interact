@@ -24,7 +24,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val refBoxImplT = tp.c[RefBoxImpl]
   val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
   val dispatch_reduce = dispatchT.method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
-  val dispatch_staticReduce = dispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
+  val dispatch_staticReduce = generatedDispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   val ri_freeWires = riT.method("freeWires", tp.m()(symbolT.a))
   val metaClass_symId = metaClassT.field("symId", tp.I)
@@ -33,7 +33,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val allocator_putLong = allocatorT.method("putLong", tp.m(tp.J, tp.J).V)
   val allocator_getLong = allocatorT.method("getLong", tp.m(tp.J).J)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
-  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
+  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   val ptw_addIrreducible = ptwT.method("addIrreducible", tp.m(cellT, cellT).V)
   val ptw_getSingleton = ptwT.method("getSingleton", tp.m(tp.I)(cellT))
@@ -57,6 +57,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
   def metaClass_singleton(sym: Symbol) = { val tp = concreteMetaClassTFor(sym); tp.field("singleton", tp) }
+  def metaClass_reduce(sym: Symbol) = concreteMetaClassTFor(sym).method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
 
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
 
@@ -95,14 +96,43 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     // class init
     c.clinit().newInitDup(concreteMetaClassTFor(sym).constr(tp.m().V))().putstatic(metaClass_singleton(sym)).return_
 
+    // static reduce
+    {
+      val mref = metaClass_reduce(sym)
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, mref.name, mref.desc)
+      val c1 = m.param("c1", cellT)
+      val c2 = m.param("c2", cellT)
+      val level = m.param("level", tp.I)
+      val ptw = m.param("ptw", ptwT)
+
+      m.lload(c2).invokestatic(allocator_getInt)
+
+      val keys = rules.iterator.flatMap {
+        case (rk, rp) if rk.sym1 == sym && !rp.initial => Iterator( (rk, (symIds(rk.sym2) << 1) | 1, m.newLabel, false) )
+        case (rk, rp) if rk.sym2 == sym && !rp.initial => Iterator( (rk, (symIds(rk.sym1) << 1) | 1, m.newLabel, true) )
+        case _ => Iterator.empty
+      }.toVector.sortBy(_._2)
+      val dflt = m.newLabel
+      m.lookupswitchOrTableswitch(keys.iterator.map(_._2).toArray, dflt, keys.map(_._3))
+      keys.foreach { case (rk, _, l, rev) =>
+        m.setLabel(l)
+        val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
+        if(rev) m.lload(c2).lload(c1)
+        else m.lload(c1).lload(c2)
+        m.iload(level).aload(ptw).invokestatic(staticMR)
+        m.return_
+      }
+      m.setLabel(dflt)
+      m.aload(ptw).lload(c1).lload(c2).invoke(ptw_addIrreducible)
+      m.return_
+    }
+
     addClass(classWriter, c)
   }
 
   private def compileDispatch(): Unit = {
     val c = DSL.newClass(Acc.PUBLIC.FINAL, generatedDispatchT.className, dispatchT)
     c.emptyNoArgsConstructor()
-
-    def mkRuleKey(s1: Int, s2: Int): Int = (s1 << symBits) | s2
 
     // staticReduce
     {
@@ -115,6 +145,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       m.lload(c1).invokestatic(allocator_getInt).iconst(1).ishr.iconst(symBits).ishl
       m.lload(c2).invokestatic(allocator_getInt).iconst(1).ishr.ior
 
+      def mkRuleKey(s1: Int, s2: Int): Int = (s1 << symBits) | s2
       val keys = rules.flatMap { case (rk, rp) if !rp.initial =>
         Iterator(
           (mkRuleKey(symIds(rk.sym1), symIds(rk.sym2)), (rk, m.newLabel, false)),
@@ -122,7 +153,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
         )
       }.toVector.sortBy(_._1)
       val dflt = m.newLabel
-      m.lookupswitch(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
+      m.lookupswitchOrTableswitch(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
       keys.foreach { case (_, (rk, l, rev)) =>
         m.setLabel(l)
         val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
@@ -143,7 +174,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
-      m.lload(c1).lload(c2).iload(level).aload(ptw).invokestatic(dispatch_staticReduce.on(generatedDispatchT)).return_
+      m.lload(c1).lload(c2).iload(level).aload(ptw).invokestatic(dispatch_staticReduce).return_
     }
 
     addClass(classWriter, c)

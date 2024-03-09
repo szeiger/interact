@@ -175,6 +175,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       ldFastCP(ct1).lstore(cont1)
       ldFastCP(ct2).lstore(cont0)
     }
+    val tail0Syms = mutable.Set.empty[Symbol]
 
     createCells(bp.cellCreateInstructions)
 
@@ -186,18 +187,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       m.invokestatic(allocator_putLong)
     }
 
+    def addActive(ct1: Idx, ct2: Idx) = {
+      m.aload(ptw)
+      ldFastCP(ct1)
+      ldFastCP(ct2)
+      m.invoke(ptw_addActive)
+    }
+
     def createCut(ct1: Idx, ct2: Idx): Unit = {
-      def addActive() = {
-        m.aload(ptw)
-        ldFastCP(ct1)
-        ldFastCP(ct2)
-        m.invoke(ptw_addActive)
+      if(!tailCont) addActive(ct1, ct2)
+      else {
+        ct1 match {
+          case ct1: CellIdx => tail0Syms += cellSyms(ct1.idx)
+          case _ => tail0Syms += Symbol.NoSymbol
+        }
+        if(!tailContUsed) {
+          tailContUsed = true
+          setCont0(ct1, ct2)
+        } else m.lload(cont0).lconst(0).lcmp.if_==.thnElse { setCont0(ct1, ct2) } { addActive(ct1, ct2) }
       }
-      if(!tailCont) addActive()
-      else if(!tailContUsed) {
-        tailContUsed = true
-        setCont0(ct1, ct2)
-      } else m.lload(cont0).lconst(0).lcmp.if_==.thnElse { setCont0(ct1, ct2) } { addActive() }
     }
 
     // Connect remaining wires
@@ -275,7 +283,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     else {
       for(w <- reuseBuffers if w != null) w.flush()
 
-      recordStats(cont0, bp, parents, loopCont, tailCont, level)
+      def singleDispatchTail = tail0Syms.size == 1 && tail0Syms.head.isDefined
+      recordStats(cont0, bp, parents, loopCont, tailCont, singleDispatchTail, level)
 
       if(loopCont) {
         m.lload(cont0).lconst(0).lcmp.if_!=.thn {
@@ -286,7 +295,12 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         m.lload(cont0).lconst(0).lcmp.if_!=.thn {
           m.iload(level).if_!=.thnElse {
             m.iinc(level, -1)
-            m.lload(cont0).lload(cont1).iload(level).aload(ptw).invokestatic(dispatch_staticReduce.on(generatedDispatchT))
+            m.lload(cont0).lload(cont1).iload(level).aload(ptw)
+            if(singleDispatchTail) {
+              m.invokestatic(metaClass_reduce(tail0Syms.head))
+            } else {
+              m.invokestatic(dispatch_staticReduce)
+            }
           } {
             m.aload(ptw).lload(cont0).lload(cont1).invoke(ptw_addActive)
           }
@@ -300,15 +314,23 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   private def recordStats(contMarker: VarIdx /* defined if loopSave */, lastBranch: BranchPlan, parents: List[BranchPlan],
-    loopCont: Boolean, tailCont: Boolean, level: VarIdx): Unit = {
+    loopCont: Boolean, tailCont: Boolean, singleDispatchTail: Boolean, level: VarIdx): Unit = {
     if(config.collectStats) {
       m.aload(ptw).iconst((lastBranch :: parents).map(_.statSteps).sum)
       m.iload(statCellAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
       if(loopCont) m.lload(contMarker).lconst(0).lcmp.if_!=.thnElse(m.iconst(1))(m.iconst(0))
       else m.iconst(0)
       if(tailCont) {
-        m.iload(level).if_==.thnElse { m.iconst(0) } { m.lload(contMarker).lconst(0).lcmp.if_!=.thnElse(m.iconst(1))(m.iconst(0)) }
-      } else m.iconst(0)
+        m.iload(level).if_==.thnElse {
+          m.iconst(0).iconst(0)
+        } {
+          m.lload(contMarker).lconst(0).lcmp.if_!=.thnElse {
+            m.iconst(1).iconst(if(singleDispatchTail) 1 else 0)
+          } {
+            m.iconst(0).iconst(0)
+          }
+        }
+      } else m.iconst(0).iconst(0)
       m.iconst(lastBranch.statLabelCreate).invoke(ptw_recordStats)
     }
   }
