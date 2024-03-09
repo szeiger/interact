@@ -119,7 +119,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   // ptw methods:
 
   def addActive(a0: Cell, a1: Cell): Unit =
-    if(active0 == null) { active0 = a0; active1 = a1 } else cutBuffer.addOne(a0, a1)
+    if(active0 == 0L) { active0 = a0; active1 = a1 } else cutBuffer.addOne(a0, a1)
 
   def addIrreducible(a0: Cell, a1: Cell): Unit = irreducible.addOne(a0, a1)
 
@@ -157,8 +157,6 @@ final class CutBuffer(initialSize: Int) {
     len -= 2
     val c1 = pairs(len)
     val c2 = pairs(len+1)
-    pairs(len) = 0
-    pairs(len+1) = 0
     (c1, c2)
   }
   def clear(): Unit =
