@@ -558,15 +558,25 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc,
     insn(new LookupSwitchInsnNode(new LabelNode(deflt), keys, labels.iterator.map(new LabelNode(_)).toArray))
   }
 
-  def lookupswitchOrTableswitch(keys: Array[Int], deflt: Label, labels: Seq[Label]): this.type = {
-    val minV = keys.head
-    val maxV = keys.last
-    if(keys.length*2 >= maxV-minV) {
-      val map = keys.iterator.zip(labels).map { case (k, l) => (k, l) }.toMap
-      tableswitch(minV, maxV, deflt, (minV to maxV).map { v => map.getOrElse(v, deflt) })
-    } else {
-      lookupswitch(keys, deflt, labels)
+  def tableswitchOpt(keys: Array[Int], deflt: Label, labels: Seq[Label]): this.type = {
+    assert(keys.length == labels.length)
+    keys.length match {
+      case 0 => goto(deflt)
+      case 1 =>
+        val k = keys(0)
+        if(k == 0) if_==.thnElse { goto(labels.head) } { goto(deflt) }
+        else iconst(k).ifI_==.thnElse { goto(labels.head) } { goto(deflt) }
+      case n =>
+        val minV = keys.head
+        val maxV = keys.last
+        if(n*2 >= maxV-minV) {
+          val map = keys.iterator.zip(labels).map { case (k, l) => (k, l) }.toMap
+          tableswitch(minV, maxV, deflt, (minV to maxV).map { v => map.getOrElse(v, deflt) })
+        } else {
+          lookupswitch(keys, deflt, labels)
+        }
     }
+    this
   }
 
   def tableSwitch(range: Range)(f: => Option[Int] => _): this.type = {

@@ -113,7 +113,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
         case _ => Iterator.empty
       }.toVector.sortBy(_._2)
       val dflt = m.newLabel
-      m.lookupswitchOrTableswitch(keys.iterator.map(_._2).toArray, dflt, keys.map(_._3))
+      m.tableswitchOpt(keys.iterator.map(_._2).toArray, dflt, keys.map(_._3))
       keys.foreach { case (rk, _, l, rev) =>
         m.setLabel(l)
         val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
@@ -153,7 +153,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
         )
       }.toVector.sortBy(_._1)
       val dflt = m.newLabel
-      m.lookupswitchOrTableswitch(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
+      m.tableswitchOpt(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
       keys.foreach { case (_, (rk, l, rev)) =>
         m.setLabel(l)
         val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
