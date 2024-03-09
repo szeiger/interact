@@ -8,7 +8,7 @@ import org.objectweb.asm.Label
 
 import scala.collection.mutable
 
-class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
+class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: VarIdx, ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
   import codeGen._
 
   val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.nonEmpty) m.newLabel else null
@@ -133,13 +133,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         ldTaggedCP(ct2).invokestatic(allocator_putLong)
     }
 
-  private def createCut(ct1: Idx, ct2: Idx): m.type = {
-    m.aload(ptw)
-    ldFastCP(ct1)
-    ldFastCP(ct2)
-    m.invoke(ptw_addActive)
-  }
-
   private[this] def ldModSymIdRaw(idx: FreeIdx): m.type = {
     ldFastCP(idx)
     m.invokestatic(allocator_getInt)
@@ -166,19 +159,19 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     checkCondition(bp, branchEnd)
     incMetric(s"$branchMetricName", m, ptw)
 
-    val (cont0, cont1) = {
-      if(bp.loopOn0 || bp.loopOn1) {
-        val cont0 = m.lconst(0).storeLocal(cellT, "cont0")
-        val cont1 = m.lconst(0).storeLocal(cellT, "cont1")
-        (cont0, cont1)
-      } else (VarIdx.none, VarIdx.none)
+    val (cont0, cont1, loopCont, tailCont) = {
+      val cont0 = m.lconst(0).storeLocal(cellT, "cont0")
+      val cont1 = m.lconst(0).storeLocal(cellT, "cont1")
+      val l = bp.loopOn0 || bp.loopOn1
+      (cont0, cont1, l, !l && bp.branches.isEmpty)
     }
-    var skipCont0NullCheck = true // skip on first attempt
-    def setCont0(ct1: CellIdx, ct2: FreeIdx): Unit = {
+    var firstContCheck = true // skip null check on first attempt
+    var tailContUsed = false // set to true on first createCut attempt
+    def setCont0(ct1: Idx, ct2: Idx): Unit = {
       ldFastCP(ct1).lstore(cont0)
       ldFastCP(ct2).lstore(cont1)
     }
-    def setCont1(ct1: CellIdx, ct2: FreeIdx): Unit = {
+    def setCont1(ct1: Idx, ct2: Idx): Unit = {
       ldFastCP(ct1).lstore(cont1)
       ldFastCP(ct2).lstore(cont0)
     }
@@ -193,18 +186,32 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       m.invokestatic(allocator_putLong)
     }
 
+    def createCut(ct1: Idx, ct2: Idx): Unit = {
+      def addActive() = {
+        m.aload(ptw)
+        ldFastCP(ct1)
+        ldFastCP(ct2)
+        m.invoke(ptw_addActive)
+      }
+      if(!tailCont) addActive()
+      else if(!tailContUsed) {
+        tailContUsed = true
+        setCont0(ct1, ct2)
+      } else m.lload(cont0).lconst(0).lcmp.if_==.thnElse { setCont0(ct1, ct2) } { addActive() }
+    }
+
     // Connect remaining wires
     def connectCF(ct1: CellIdx, ct2: FreeIdx): Unit = cachedIdx(ct2) {
       if(ct1.isPrincipal) {
-        val mayLoopOn0 = ct1.idx == bp.active(0) && bp.loopOn0
-        val mayLoopOn1 = ct1.idx == bp.active(1) && bp.loopOn1
+        val mayLoopOn0 = loopCont & ct1.idx == bp.active(0) && bp.loopOn0
+        val mayLoopOn1 = loopCont & ct1.idx == bp.active(1) && bp.loopOn1
         cachedModSymId((if(mayLoopOn0 || mayLoopOn1) Seq(ct2) else Nil): _*) {
           ifAux(ct2).thnElse {
             ldAndSetAux(ct2, ct1)
           } {
             if(mayLoopOn0) {
-              if(skipCont0NullCheck) {
-                skipCont0NullCheck = false
+              if(firstContCheck) {
+                firstContCheck = false
                 isCellInstance(ct2, active(1).sym)
                 m.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
               } else {
@@ -213,8 +220,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
                 }.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
               }
             } else if(mayLoopOn1) {
-              if(skipCont0NullCheck) {
-                skipCont0NullCheck = false
+              if(firstContCheck) {
+                firstContCheck = false
                 isCellInstance(ct2, active(0).sym)
                 m.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
               } else {
@@ -268,12 +275,21 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     else {
       for(w <- reuseBuffers if w != null) w.flush()
 
-      recordStats(cont0, bp, parents)
+      recordStats(cont0, bp, parents, loopCont, tailCont, level)
 
-      if(cont0 != VarIdx.none) {
+      if(loopCont) {
         m.lload(cont0).lconst(0).lcmp.if_!=.thn {
           m.lload(cont0).lstore(active(0).vidx).lload(cont1).lstore(active(1).vidx)
           m.goto(methodStart) //TODO jump directly to the right branch if it can be determined statically
+        }
+      } else if(tailContUsed) {
+        m.lload(cont0).lconst(0).lcmp.if_!=.thn {
+          m.iload(level).if_!=.thnElse {
+            m.iinc(level, -1)
+            m.lload(cont0).lload(cont1).iload(level).aload(ptw).invokestatic(dispatch_staticReduce.on(generatedDispatchT))
+          } {
+            m.aload(ptw).lload(cont0).lload(cont1).invoke(ptw_addActive)
+          }
         }
       }
 
@@ -283,12 +299,16 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     if(bp.cond.isDefined) m.setLabel(branchEnd)
   }
 
-  private def recordStats(loopMarker: VarIdx /* defined if loopSave */, lastBranch: BranchPlan, parents: List[BranchPlan]): Unit = {
+  private def recordStats(contMarker: VarIdx /* defined if loopSave */, lastBranch: BranchPlan, parents: List[BranchPlan],
+    loopCont: Boolean, tailCont: Boolean, level: VarIdx): Unit = {
     if(config.collectStats) {
       m.aload(ptw).iconst((lastBranch :: parents).map(_.statSteps).sum)
       m.iload(statCellAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
-      if(loopMarker != VarIdx.none) m.lload(loopMarker).lconst(0).lcmp.if_!=.thnElse(m.iconst(1))(m.iconst(0))
+      if(loopCont) m.lload(contMarker).lconst(0).lcmp.if_!=.thnElse(m.iconst(1))(m.iconst(0))
       else m.iconst(0)
+      if(tailCont) {
+        m.iload(level).if_==.thnElse { m.iconst(0) } { m.lload(contMarker).lconst(0).lcmp.if_!=.thnElse(m.iconst(1))(m.iconst(0)) }
+      } else m.iconst(0)
       m.iconst(lastBranch.statLabelCreate).invoke(ptw_recordStats)
     }
   }

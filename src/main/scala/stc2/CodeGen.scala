@@ -23,7 +23,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val intBoxImplT = tp.c[IntBoxImpl]
   val refBoxImplT = tp.c[RefBoxImpl]
   val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
-  val dispatch_reduce = dispatchT.method("reduce", tp.m(cellT, cellT, ptwT).V)
+  val dispatch_reduce = dispatchT.method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
+  val dispatch_staticReduce = dispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   val ri_freeWires = riT.method("freeWires", tp.m()(symbolT.a))
   val metaClass_symId = metaClassT.field("symId", tp.I)
@@ -32,7 +33,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val allocator_putLong = allocatorT.method("putLong", tp.m(tp.J, tp.J).V)
   val allocator_getLong = allocatorT.method("getLong", tp.m(tp.J).J)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
-  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
+  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   val ptw_addIrreducible = ptwT.method("addIrreducible", tp.m(cellT, cellT).V)
   val ptw_getSingleton = ptwT.method("getSingleton", tp.m(tp.I)(cellT))
@@ -51,9 +52,9 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val new_RefBoxImpl = refBoxImplT.constr(tp.m().V)
 
   def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
-    tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(cellT, cellT, ptwT).V)
+    tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   def initialRuleT_static_reduce(idx: Int) =
-    tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, ptwT).V)
+    tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
   def metaClass_singleton(sym: Symbol) = { val tp = concreteMetaClassTFor(sym); tp.field("singleton", tp) }
 
@@ -66,10 +67,11 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       new ActiveCell(0, m.param("active0", cellT), rule.sym1, rule.arity1, needsCachedPayloads.contains(0)),
       new ActiveCell(1, m.param("active1", cellT), rule.sym2, rule.arity2, needsCachedPayloads.contains(1)),
     )
+    val level = m.param("level", tp.I)
     val ptw = m.param("ptw", ptwT)
     val metricName = s"${classDSL.name}.${m.name}"
     incMetric(metricName, m, ptw)
-    new GenStaticReduce(m, active, ptw, rule, this, metricName).emitRule()
+    new GenStaticReduce(m, active, level, ptw, rule, this, metricName).emitRule()
   }
 
   def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
@@ -102,33 +104,47 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
 
     def mkRuleKey(s1: Int, s2: Int): Int = (s1 << symBits) | s2
 
-    val m = c.method(Acc.PUBLIC.FINAL, dispatch_reduce.name, dispatch_reduce.desc)
-    val c1 = m.param("c1", cellT)
-    val c2 = m.param("c2", cellT)
-    val ptw = m.param("ptw", ptwT)
+    // staticReduce
+    {
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, dispatch_staticReduce.name, dispatch_staticReduce.desc)
+      val c1 = m.param("c1", cellT)
+      val c2 = m.param("c2", cellT)
+      val level = m.param("level", tp.I)
+      val ptw = m.param("ptw", ptwT)
 
-    m.lload(c1).invokestatic(allocator_getInt).iconst(1).ishr.iconst(symBits).ishl
-    m.lload(c2).invokestatic(allocator_getInt).iconst(1).ishr.ior
+      m.lload(c1).invokestatic(allocator_getInt).iconst(1).ishr.iconst(symBits).ishl
+      m.lload(c2).invokestatic(allocator_getInt).iconst(1).ishr.ior
 
-    val keys = rules.flatMap { case (rk, rp) if !rp.initial =>
-      Iterator(
-        (mkRuleKey(symIds(rk.sym1), symIds(rk.sym2)), (rk, m.newLabel, false)),
-        (mkRuleKey(symIds(rk.sym2), symIds(rk.sym1)), (rk, m.newLabel, true))
-      )
-    }.toVector.sortBy(_._1)
-    val dflt = m.newLabel
-    m.lookupswitch(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
-    keys.foreach { case (_, (rk, l, rev)) =>
-      m.setLabel(l)
-      val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
-      if(rev) m.lload(c2).lload(c1)
-      else m.lload(c1).lload(c2)
-      m.aload(ptw).invokestatic(staticMR)
+      val keys = rules.flatMap { case (rk, rp) if !rp.initial =>
+        Iterator(
+          (mkRuleKey(symIds(rk.sym1), symIds(rk.sym2)), (rk, m.newLabel, false)),
+          (mkRuleKey(symIds(rk.sym2), symIds(rk.sym1)), (rk, m.newLabel, true))
+        )
+      }.toVector.sortBy(_._1)
+      val dflt = m.newLabel
+      m.lookupswitch(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
+      keys.foreach { case (_, (rk, l, rev)) =>
+        m.setLabel(l)
+        val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
+        if(rev) m.lload(c2).lload(c1)
+        else m.lload(c1).lload(c2)
+        m.iload(level).aload(ptw).invokestatic(staticMR)
+        m.return_
+      }
+      m.setLabel(dflt)
+      m.aload(ptw).lload(c1).lload(c2).invoke(ptw_addIrreducible)
       m.return_
     }
-    m.setLabel(dflt)
-    m.aload(ptw).lload(c1).lload(c2).invoke(ptw_addIrreducible)
-    m.return_
+
+    // reduce
+    {
+      val m = c.method(Acc.PUBLIC.FINAL, dispatch_reduce.name, dispatch_reduce.desc)
+      val c1 = m.param("c1", cellT)
+      val c2 = m.param("c2", cellT)
+      val level = m.param("level", tp.I)
+      val ptw = m.param("ptw", ptwT)
+      m.lload(c1).lload(c2).iload(level).aload(ptw).invokestatic(dispatch_staticReduce.on(generatedDispatchT)).return_
+    }
 
     addClass(classWriter, c)
   }
@@ -169,7 +185,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val c1 = m.param("c1", cellT)
       val c2 = m.param("c2", cellT)
       val ptw = m.param("ptw", ptwT)
-      m.lload(c1).lload(c2).aload(ptw).invokestatic(staticMR).return_
+      m.lload(c1).lload(c2).iconst(0).aload(ptw).invokestatic(staticMR).return_
     }
 
     val freeSymFields = rule.initialSyms.get.zipWithIndex.map { case (sym, i) =>

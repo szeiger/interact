@@ -338,7 +338,7 @@ final class PerThreadWorker(val inter: Interpreter, val metrics: ExecutionMetric
   }
 
   def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit =
-    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, labelCreate)
+    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, 0, labelCreate)
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 
   def processNext(): Unit = {

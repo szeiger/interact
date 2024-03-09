@@ -18,7 +18,7 @@ abstract class InitialRuleImpl {
 }
 
 abstract class Dispatch {
-  def reduce(c1: Cell, c2: Cell, ptw: Interpreter): Unit
+  def reduce(c1: Cell, c2: Cell, level: Int, ptw: Interpreter): Unit
 }
 
 final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, config: Config) extends BaseInterpreter { self =>
@@ -42,6 +42,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   private[this] var allocator: Allocator = _
   private[this] val singletons: Array[Cell] = new Array(symIds.size)
   private[this] var nextLabel = Long.MinValue
+  private[this] val tailCallDepth = config.tailCallDepth
 
   def getMetrics: ExecutionMetrics = metrics
 
@@ -109,11 +110,11 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       while(active0 != 0) {
         val a0 = active0
         active0 = 0
-        dispatch.reduce(a0, active1, this)
+        dispatch.reduce(a0, active1, tailCallDepth, this)
       }
       if(cutBuffer.isEmpty) return
       val (a0, a1) = cutBuffer.pop()
-      dispatch.reduce(a0, a1, this)
+      dispatch.reduce(a0, a1, tailCallDepth, this)
     }
 
   // ptw methods:
@@ -123,8 +124,9 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def addIrreducible(a0: Cell, a1: Cell): Unit = irreducible.addOne(a0, a1)
 
-  def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit =
-    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, labelCreate)
+  def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
+    loopSave: Int, directTail: Int, labelCreate: Int): Unit =
+    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, directTail, labelCreate)
 
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 

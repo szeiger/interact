@@ -75,6 +75,7 @@ case class Config(
   writeOutput: Option[Path] = None, // write generated classes to dir or jar file (stc*)
   writeJava: Option[Path] = None, // write decompiled classes to dir (stc*)
   skipCodeGen: Boolean = false, // do not generate classfiles (stc*)
+  tailCallDepth: Int = 32, // stc2
 ) {
   def withSpec(spec: String): Config = spec match {
     case s"sti" => copy(backend = STIBackend)
