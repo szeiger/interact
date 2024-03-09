@@ -38,7 +38,6 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   private[this] val freeWires = mutable.HashSet.empty[Cell]
   private[this] val freeWireLookup = mutable.HashMap.empty[Int, Symbol]
   private[this] var metrics: ExecutionMetrics = _
-  private[this] var active0, active1: Cell = _
   private[this] var allocator: Allocator = _
   private[this] val singletons: Array[Cell] = new Array(symIds.size)
   private[this] var nextLabel = Long.MinValue
@@ -106,21 +105,14 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   }
 
   def reduce(): Unit =
-    while(true) {
-      while(active0 != 0) {
-        val a0 = active0
-        active0 = 0
-        dispatch.reduce(a0, active1, tailCallDepth, this)
-      }
-      if(cutBuffer.isEmpty) return
+    while(!cutBuffer.isEmpty) {
       val (a0, a1) = cutBuffer.pop()
       dispatch.reduce(a0, a1, tailCallDepth, this)
     }
 
   // ptw methods:
 
-  def addActive(a0: Cell, a1: Cell): Unit =
-    if(active0 == 0L) { active0 = a0; active1 = a1 } else cutBuffer.addOne(a0, a1)
+  def addActive(a0: Cell, a1: Cell): Unit = cutBuffer.addOne(a0, a1)
 
   def addIrreducible(a0: Cell, a1: Cell): Unit = irreducible.addOne(a0, a1)
 
