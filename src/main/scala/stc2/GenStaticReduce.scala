@@ -70,7 +70,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     private[this] val cell = new Array[CellIdx](ac.arity)
     def set(port: Int, ct2: Idx): Unit = ct2 match {
       case ct2: CellIdx => cell(port) = ct2
-      case _ => free(port) = ldTaggedCP(ct2).storeLocal(cellT, s"writeBuffer${ac.id}_${port}")
+      case _ =>
+        ldTaggedCP(ct2)
+        free(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}")
     }
     def flush(): Unit =
       for(p <- 0 until free.length if free(p) != VarIdx.none || cell(p) != null) {
@@ -91,36 +93,40 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     m.invokestatic(allocator_getLong)
   }
 
-  private def ldTaggedCP(idx: Idx): m.type = {
+  private def ldTaggedCP(idx: Idx): Option[VarIdx] = {
     idx match {
       case idx: FreeIdx =>
         idxCPCache.get(idx) match {
-          case Some(v) => m.lload(v)
-          case None => ldTaggedCPFRaw(idx)
+          case Some(v) => m.lload(v); Some(v)
+          case None => ldTaggedCPFRaw(idx); None
         }
       case idx: CellIdx =>
         m.lload(cells(idx.idx))
         var l = Allocator.auxCPOffset(idx.port)
         if(idx.port >= 0) l += 2
-        if(l != 0) m.lconst(l).ladd
+        if(l != 0) {
+          m.lconst(l).ladd
+          None
+        } else Some(cells(idx.idx))
     }
-    m
   }
 
-  private def ldUntaggedCP(idx: Idx): m.type = {
+  private def ldUntaggedCP(idx: Idx): Option[VarIdx] = {
     idx match {
-      case idx: FreeIdx => ldTaggedCP(idx).lconst(-3L).land
+      case idx: FreeIdx =>
+        ldTaggedCP(idx)
+        m.lconst(-3L).land
+        None
       case idx: CellIdx =>
         m.lload(cells(idx.idx))
         Allocator.auxCPOffset(idx.port) match {
-          case 0 =>
-          case off => m.lconst(off).ladd
+          case 0 => Some(cells(idx.idx))
+          case off => m.lconst(off).ladd; None
         }
     }
-    m
   }
 
-  private def ldFastCP(idx: Idx): m.type = idx match {
+  private def ldFastCP(idx: Idx): Option[VarIdx] = idx match {
     case idx: FreeIdx => ldTaggedCP(idx)
     case idx: CellIdx => ldUntaggedCP(idx)
   }
@@ -132,7 +138,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case None =>
         m.lload(cells(idx.idx))
         m.lconst(Allocator.auxCPOffset(idx.port)).ladd
-        ldTaggedCP(ct2).invokestatic(allocator_putLong)
+        ldTaggedCP(ct2)
+        m.invokestatic(allocator_putLong)
     }
 
   private[this] def ldModSymIdRaw(idx: FreeIdx): m.type = {
@@ -148,8 +155,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   private[this] def isCellInstance(idx: FreeIdx, sym: Symbol): m.type = // stack: () -> mSymId1, mSymId2 for if_icmpeq
     ldModSymId(idx).iconst((symIds(sym) << 1) | 1)
 
-  private[this] def ifAux(idx: FreeIdx) =
-    ldTaggedCP(idx).lconst(2).land.lconst(0).lcmp.if_!=
+  private[this] def ifAux(idx: FreeIdx) = {
+    ldTaggedCP(idx)
+    m.lconst(2).land.lconst(0).lcmp.if_!=
+  }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
     //println("***** entering "+bp.show)
@@ -167,15 +176,20 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       val l = bp.loopOn0 || bp.loopOn1
       (cont0, cont1, l, !l && bp.branches.isEmpty)
     }
+    var cont0Options, cont1Options = mutable.HashSet.empty[VarIdx]
     var firstContCheck = true // skip null check on first attempt
     var tailContUsed = false // set to true on first createCut attempt
-    def setCont0(ct1: Idx, ct2: Idx): Unit = {
-      ldFastCP(ct1).lstore(cont0)
-      ldFastCP(ct2).lstore(cont1)
-    }
-    def setCont1(ct1: Idx, ct2: Idx): Unit = {
-      ldFastCP(ct1).lstore(cont1)
-      ldFastCP(ct2).lstore(cont0)
+    def setCont(ct1: Idx, ct2: Idx): Unit = {
+      ldFastCP(ct1) match {
+        case Some(v) => cont0Options += v
+        case None => cont0Options += VarIdx.none
+      }
+      m.lstore(cont0)
+      ldFastCP(ct2) match {
+        case Some(v) => cont1Options += v
+        case None => cont1Options += VarIdx.none
+      }
+      m.lstore(cont1)
     }
     val tail0Syms = mutable.Set.empty[Symbol]
 
@@ -205,8 +219,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
         if(!tailContUsed) {
           tailContUsed = true
-          setCont0(ct1, ct2)
-        } else m.lload(cont0).lconst(0).lcmp.if_==.thnElse { setCont0(ct1, ct2) } { addActive(ct1, ct2) }
+          setCont(ct1, ct2)
+        } else m.lload(cont0).lconst(0).lcmp.if_==.thnElse { setCont(ct1, ct2) } { addActive(ct1, ct2) }
       }
     }
 
@@ -223,21 +237,21 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
               if(firstContCheck) {
                 firstContCheck = false
                 isCellInstance(ct2, active(1).sym)
-                m.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+                m.ifI_==.thnElse { setCont(ct1, ct2) } { createCut(ct1, ct2) }
               } else {
                 m.lload(cont0).lconst(0).lcmp.if_==.and {
                   isCellInstance(ct2, active(1).sym)
-                }.ifI_==.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+                }.ifI_==.thnElse { setCont(ct1, ct2) } { createCut(ct1, ct2) }
               }
             } else if(mayLoopOn1) {
               if(firstContCheck) {
                 firstContCheck = false
                 isCellInstance(ct2, active(0).sym)
-                m.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+                m.ifI_==.thnElse { setCont(ct2, ct1) } { createCut(ct1, ct2) }
               } else {
                 m.lload(cont0).lconst(0).lcmp.if_==.and {
                   isCellInstance(ct2, active(0).sym)
-                }.ifI_==.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+                }.ifI_==.thnElse { setCont(ct2, ct1) } { createCut(ct1, ct2) }
               }
             } else {
               createCut(ct1, ct2)
@@ -290,7 +304,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
       if(loopCont) {
         m.lload(cont0).lconst(0).lcmp.if_!=.thn {
-          m.lload(cont0).lstore(active(0).vidx).lload(cont1).lstore(active(1).vidx)
+          if(cont0Options != mutable.Set(active(0).vidx)) m.lload(cont0).lstore(active(0).vidx)
+          if(cont1Options != mutable.Set(active(1).vidx)) m.lload(cont1).lstore(active(1).vidx)
           m.goto(methodStart) //TODO jump directly to the right branch if it can be determined statically
         }
       } else if(tailContUsed) {
@@ -377,7 +392,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           case (_: FreeIdx, _) => // done later when connecting opposite direction
           case (idx, p1) =>
             m.dup2.lconst(Allocator.auxCPOffset(p1)).ladd
-            ldTaggedCP(idx).invokestatic(allocator_putLong)
+            ldTaggedCP(idx)
+            m.invokestatic(allocator_putLong)
         }
         if(config.collectStats) m.iinc(statCellAllocations)
         cells(idx) = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")

@@ -72,7 +72,6 @@ case class Config(
   compilerParallelism: Int = 1,
   allCommon: Boolean = false, // compile all methods into CommonCell, not just shared ones (stc1)
   reuseCells: Boolean = true, // stc*
-  reuseForeignSymbols: Boolean = true, // stc2
   writeOutput: Option[Path] = None, // write generated classes to dir or jar file (stc*)
   writeJava: Option[Path] = None, // write decompiled classes to dir (stc*)
   skipCodeGen: Boolean = false, // do not generate classfiles (stc*)
