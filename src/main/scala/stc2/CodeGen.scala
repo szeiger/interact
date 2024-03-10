@@ -142,24 +142,16 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
 
-      m.lload(c1).invokestatic(allocator_getInt).iconst(1).ishr.iconst(symBits).ishl
-      m.lload(c2).invokestatic(allocator_getInt).iconst(1).ishr.ior
-
-      def mkRuleKey(s1: Int, s2: Int): Int = (s1 << symBits) | s2
-      val keys = rules.flatMap { case (rk, rp) if !rp.initial =>
-        Iterator(
-          (mkRuleKey(symIds(rk.sym1), symIds(rk.sym2)), (rk, m.newLabel, false)),
-          (mkRuleKey(symIds(rk.sym2), symIds(rk.sym1)), (rk, m.newLabel, true))
-        )
-      }.toVector.sortBy(_._1)
+      val syms = rules.iterator.flatMap { case (rk, rp) if !rp.initial => Iterator(rk.sym1, rk.sym2) }.toSet
+      val keys = syms.iterator.map { sym => ((symIds(sym) << 1) | 1, sym, m.newLabel) }.toVector.sortBy(_._1)
       val dflt = m.newLabel
-      m.tableswitchOpt(keys.iterator.map(_._1).toArray, dflt, keys.map(_._2._2))
-      keys.foreach { case (_, (rk, l, rev)) =>
+
+      m.lload(c1).lload(c2).iload(level).aload(ptw)
+      m.lload(c1).invokestatic(allocator_getInt)
+      m.tableswitchOpt(keys.iterator.map(_._1).toArray, dflt, keys.map(_._3))
+      keys.foreach { case (_, sym, l) =>
         m.setLabel(l)
-        val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
-        if(rev) m.lload(c2).lload(c1)
-        else m.lload(c1).lload(c2)
-        m.iload(level).aload(ptw).invokestatic(staticMR)
+        m.invokestatic(metaClass_reduce(sym))
         m.return_
       }
       m.setLabel(dflt)
