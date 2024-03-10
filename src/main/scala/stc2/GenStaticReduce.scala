@@ -66,15 +66,17 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   // Local vars to buffer writes to a reused cell
   class WriteBuffer(ac: ActiveCell) {
     val cellIdx: Int = ac.reuse
-    private[this] val cps = new VarIdxArray(ac.arity)
-    def set(port: Int, ct2: Idx): Unit = {
-      ldTaggedCP(ct2)
-      cps(port) = m.storeLocal(cellT, s"writeBuffer${ac.id}_${port}")
+    private[this] val free = new VarIdxArray(ac.arity)
+    private[this] val cell = new Array[CellIdx](ac.arity)
+    def set(port: Int, ct2: Idx): Unit = ct2 match {
+      case ct2: CellIdx => cell(port) = ct2
+      case _ => free(port) = ldTaggedCP(ct2).storeLocal(cellT, s"writeBuffer${ac.id}_${port}")
     }
     def flush(): Unit =
-      for(p <- 0 until cps.length if cps(p) != VarIdx.none) {
+      for(p <- 0 until free.length if free(p) != VarIdx.none || cell(p) != null) {
         m.lload(cells(cellIdx)).lconst(Allocator.auxCPOffset(p)).ladd
-        m.lload(cps(p)).invokestatic(allocator_putLong)
+        if(free(p) != VarIdx.none) m.lload(free(p)) else ldTaggedCP(cell(p))
+        m.invokestatic(allocator_putLong)
       }
   }
 
