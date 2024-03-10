@@ -297,6 +297,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       bp.branches.zipWithIndex.foreach { case (b, i) => emitBranch(b, bp :: parents, s"$branchMetricName.$i") }
     else {
       for(w <- reuseBuffers if w != null) w.flush()
+      for(a <- active if a != null && a.reuse == -1 && !a.sym.isSingleton)
+        m.aload(ptw).lload(a.vidx).iconst(Allocator.cellSize(a.arity, a.sym.payloadType)).invoke(ptw_freeCell)
 
       def singleDispatchTail = tail0Syms.size == 1 && tail0Syms.head.isDefined
       recordStats(cont0, bp, parents, loopCont, tailCont, singleDispatchTail, level)
