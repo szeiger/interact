@@ -42,16 +42,6 @@ object Symbol {
   val NoSymbol = new Symbol("<NoSymbol>")
 }
 
-final case class SymbolKind(arity: Int, boxType: String)
-
-object SymbolKind {
-  def apply(sym: Symbol): SymbolKind = SymbolKind(sym.arity, sym.payloadType match {
-    case PayloadType.INT => "I"
-    case PayloadType.VOID => "V"
-    case _ => "R"
-  })
-}
-
 class SymbolGen(prefix2: String, isEmbedded: Boolean = false, payloadType: PayloadType = PayloadType.VOID) {
   private[this] var last = 0
   def apply(isEmbedded: Boolean = isEmbedded, payloadType: PayloadType = payloadType, prefix: String = ""): Symbol = {

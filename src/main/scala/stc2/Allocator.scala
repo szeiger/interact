@@ -11,12 +11,12 @@ object Allocator {
   val allocLength = 1024L * 1024L * 1024L
 
   def auxCPOffset(p: Int): Int = 8 + (p * 8)
-  def payloadOffset(arity: Int): Int = 8 + (arity * 8)
+  def payloadOffset(arity: Int, pt: PayloadType): Int =
+    if(pt == PayloadType.INT) 4 else 8 + (arity * 8)
 
   def cellSize(arity: Int, pt: PayloadType) = {
     val psize = pt match {
-      case PayloadType.VOID => 0
-      case PayloadType.INT => 8 // with padding
+      case PayloadType.VOID | PayloadType.INT => 0
       case PayloadType.LABEL | PayloadType.REF => 8
     }
     arity*8 + 8 + psize

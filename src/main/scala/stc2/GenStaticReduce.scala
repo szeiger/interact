@@ -32,7 +32,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   private def cachePayload(ac: ActiveCell): Unit = {
     if(ac.needsCachedPayload) {
       val name = s"cachedPayload${ac.id}"
-      m.lload(ac.vidx).lconst(Allocator.payloadOffset(ac.arity)).ladd
+      m.lload(ac.vidx).lconst(Allocator.payloadOffset(ac.arity, ac.sym.payloadType)).ladd
       ac.cachedPayload = ac.sym.payloadType match {
         case PayloadType.REF => ???
         case PayloadType.INT => m.invokestatic(allocator_getInt).storeLocal(tp.I, name)
@@ -426,7 +426,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   private def writeToArg(ea: EmbArg, boxCls: Class[_])(loadSource: => Unit): Unit = ea match {
     case EmbArg.Cell(idx) =>
-      m.lload(cells(idx)).lconst(Allocator.payloadOffset(cellSyms(idx).arity)).ladd
+      m.lload(cells(idx)).lconst(Allocator.payloadOffset(cellSyms(idx).arity, cellSyms(idx).payloadType)).ladd
       loadSource
       if(boxCls == classOf[LongBox]) m.invokestatic(allocator_putLong)
       else if(boxCls == classOf[IntBox]) m.invokestatic(allocator_putInt)

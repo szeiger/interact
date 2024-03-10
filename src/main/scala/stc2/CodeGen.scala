@@ -2,7 +2,7 @@ package de.szeiger.interact.stc2
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
 import de.szeiger.interact.{Config, IntBox, IntBoxImpl, LongBox, RefBox, RefBoxImpl, RulePlan}
-import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, SymbolKind, Symbols}
+import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
@@ -254,7 +254,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   def compile(): (Vector[String], String) = {
     val constrs = globals.symbols.filter(_.isCons).toVector.sortBy(_.id)
     compileDispatch()
-    val symKinds = constrs.iterator.map(SymbolKind(_)).toSet
     ParSupport.foreach(constrs, config.compilerParallelism)(compileMetaClass)
     ParSupport.foreach(rules.values.toVector.sortBy(_.key.toString), config.compilerParallelism)(compileRule)
     val irs = (compilationUnit.statements.iterator.collect { case i: RulePlan if i.initial => i }).zipWithIndex.map { case (ip, i) =>

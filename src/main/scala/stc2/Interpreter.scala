@@ -59,9 +59,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
     override def getPayload(c: Cell): Any = {
       val sym = getSymbol(c)
+      val address = c + Allocator.payloadOffset(sym.arity, sym.payloadType)
       sym.payloadType match {
-        case PayloadType.INT => Allocator.getInt(c + Allocator.payloadOffset(sym.arity))
-        case PayloadType.LABEL => "label@" + Allocator.getLong(c + Allocator.payloadOffset(sym.arity))
+        case PayloadType.INT => Allocator.getInt(address)
+        case PayloadType.LABEL => "label@" + Allocator.getLong(address)
         case _ => "???"
       }
     }

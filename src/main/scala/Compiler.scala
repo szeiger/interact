@@ -1,6 +1,7 @@
 package de.szeiger.interact
 
 import de.szeiger.interact.ast._
+import de.szeiger.interact.stc2.Allocator
 
 import java.nio.file.Path
 import scala.collection.mutable
@@ -92,7 +93,7 @@ abstract class Backend(val name: String) {
   def inlineBranching: Boolean
   def inlineUniqueContinuations: Boolean
   def allowPayloadTemp: Boolean
-  def reuseForeignSymbols: Boolean
+  def storageClass(sym: Symbol): Any
 }
 
 object STIBackend extends Backend("sti") {
@@ -102,7 +103,7 @@ object STIBackend extends Backend("sti") {
   def inlineBranching: Boolean = false
   def inlineUniqueContinuations: Boolean = false
   def allowPayloadTemp: Boolean = false
-  def reuseForeignSymbols: Boolean = false
+  def storageClass(sym: Symbol) = sym
 }
 
 object STC1Backend extends Backend("stc1") {
@@ -112,7 +113,7 @@ object STC1Backend extends Backend("stc1") {
   def inlineBranching: Boolean = true
   def inlineUniqueContinuations: Boolean = true
   def allowPayloadTemp: Boolean = true
-  def reuseForeignSymbols: Boolean = false
+  def storageClass(sym: Symbol) = sym
 }
 
 object STC2Backend extends Backend("stc2") {
@@ -122,7 +123,7 @@ object STC2Backend extends Backend("stc2") {
   def inlineBranching: Boolean = true
   def inlineUniqueContinuations: Boolean = true
   def allowPayloadTemp: Boolean = true
-  def reuseForeignSymbols: Boolean = true
+  def storageClass(sym: Symbol) = Allocator.cellSize(sym.arity, sym.payloadType)
 }
 
 class MTBackend(name: String, compile: Boolean) extends Backend(name) {
@@ -140,7 +141,7 @@ class MTBackend(name: String, compile: Boolean) extends Backend(name) {
   def inlineBranching: Boolean = compile
   def inlineUniqueContinuations: Boolean = compile
   def allowPayloadTemp: Boolean = compile
-  def reuseForeignSymbols: Boolean = false
+  def storageClass(sym: Symbol) = sym
 }
 
 object MTIBackend extends MTBackend("mti", false)
