@@ -11,7 +11,6 @@ import scala.collection.mutable
 class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: VarIdx, ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
   import codeGen._
 
-  val methodEnd = if(rule.branches.length > 1 || rule.branches.head.branches.nonEmpty) m.newLabel else null
   val methodStart = m.setLabel()
   val (statCellAllocations, statCachedCellReuse) =
     if(config.collectStats) (m.iconst(0).storeLocal(tp.I, "statCellAllocations"), m.iconst(0).storeLocal(tp.I, "statCachedCellReuse"))
@@ -324,7 +323,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
       }
 
-      if(methodEnd != null) m.goto(methodEnd)
+      m.return_
     }
 
     if(bp.cond.isDefined) m.setLabel(branchEnd)
@@ -363,8 +362,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
       emitBranch(bp, Nil, s"$baseMetricName#$branchIdx")
     }
-    if(methodEnd != null) m.setLabel(methodEnd)
-    m.return_
   }
 
   private def createCells(instrs: Vector[CreateInstruction]): Unit = {
