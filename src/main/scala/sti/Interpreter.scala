@@ -6,7 +6,6 @@ import de.szeiger.interact.ast.{CompilationUnit, Label, PayloadType, Symbol, Sym
 import de.szeiger.interact.BitOps._
 
 import java.util.Arrays
-import scala.annotation.tailrec
 import scala.collection.mutable
 
 class Cell(val symId: Int, val arity: Int) {
@@ -15,7 +14,6 @@ class Cell(val symId: Int, val arity: Int) {
   final def auxCell(p: Int): Cell = auxCells(p)
   final def auxPort(p: Int): Int = auxPorts(p)
   final def setAux(p: Int, c2: Cell, p2: Int): Unit = { auxCells(p) = c2; auxPorts(p) = p2 }
-  final def reduce(c: Cell, ptw: PerThreadWorker): Unit = ptw.reduceInterpreted(this, c)
   final def getGenericPayload: Any = this match {
     case b: IntBox => b.getValue
     case b: RefBox => b.getValue
@@ -48,15 +46,10 @@ final class WireCell(final val sym: Symbol) extends Cell(0, 1) {
   override def toString = s"WireCell($sym)"
 }
 
-abstract class RuleImpl {
-  def reduce(c1: Cell, c2: Cell, ptw: PerThreadWorker): Unit
-  def freeWires: Array[Symbol] // returns null if not an initial rule
-}
+final class RuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
+    embeddedComps: Array[PayloadComputation], condComp: PayloadComputation, next: RuleImpl, sym1: Symbol, sym2: Symbol, val freeWires: Array[Symbol]) {
 
-final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
-    embeddedComps: Array[PayloadComputation], condComp: PayloadComputation, next: RuleImpl, sym1: Symbol, sym2: Symbol, val freeWires: Array[Symbol]) extends RuleImpl {
-
-  override def toString = s"InterpretedRuleImpl($sym1 <-> $sym2)"
+  override def toString = s"RuleImpl($sym1 <-> $sym2)"
 
   private[this] def payloadComp(pc: PayloadComputation, args: Array[Any]): Any = pc match {
     case pc: PayloadMethodApplication => pc.adaptedmh.invokeWithArguments(args: _*)
@@ -77,10 +70,8 @@ final class InterpretedRuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPort
       label
   }
 
-  def reduce(_c1: Cell, _c2: Cell, ptw: PerThreadWorker): Unit = try {
-    val (c1, c2) = {
-      if(_c1.symId == s1id) (_c1, _c2) else (_c2, _c1)
-    }
+  def reduce(_c1: Cell, _c2: Cell, ptw: Interpreter): Unit = try {
+    val (c1, c2) = if(_c1.symId == s1id) (_c1, _c2) else (_c2, _c1)
 
     if(condComp != null) {
       val condArgs = condComp.embArgs
@@ -190,7 +181,9 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   final val (ruleImpls, maxRuleCells, initialRuleImpls) = createRuleImpls()
   final val cutBuffer, irreducible = new CutBuffer(16)
   final val freeWires = mutable.HashSet.empty[Cell]
-  private[this] var metrics: ExecutionMetrics = _
+  var metrics: ExecutionMetrics = _
+  final val tempCells = createTempCells()
+  private[this] var nextCut1, nextCut2: Cell = _
 
   def getMetrics: ExecutionMetrics = metrics
 
@@ -218,15 +211,16 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     cutBuffer.clear()
     irreducible.clear()
     freeWires.clear()
-    val w = new PerThreadWorker(this, if(config.collectStats) new ExecutionMetrics else null)
+    metrics = null
     initialRuleImpls.foreach { rule =>
       val free = rule.freeWires.map(new WireCell(_))
       freeWires.addAll(free)
       val lhs = Cell(0, freeWires.size, PayloadType.VOID)
       free.zipWithIndex.foreach { case (c, p) => lhs.setAux(p, c, 0) }
-      rule.reduce(lhs, Cell(0, 0, PayloadType.VOID), w)
+      rule.reduce(lhs, Cell(0, 0, PayloadType.VOID), this)
     }
-    w.flushNext()
+    flushNext()
+    metrics = if(config.collectStats) new ExecutionMetrics else null
   }
 
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
@@ -235,7 +229,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   def createInterpretedRuleImpl(sym1Id: Int, r: GenericRuleWiring, b: BranchWiring, next: Option[RuleImpl]): RuleImpl = {
     val bp = new PackedBranchWiring(b, r)
     val pcs = b.cells.iterator.map(s => intOfShortByteByte(getSymbolId(s), s.arity, s.payloadType.value)).toArray
-    new InterpretedRuleImpl(sym1Id, pcs, bp.freeWiresPacked, bp.connectionsPackedLong,
+    new RuleImpl(sym1Id, pcs, bp.freeWiresPacked, bp.connectionsPackedLong,
       if(b.payloadComps.isEmpty) null else b.payloadComps.toArray, b.cond.orNull, next.orNull, r.sym1, r.sym2,
       r match {
         case r: InitialRuleWiring => r.free.toArray
@@ -268,20 +262,39 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   // Used by the debugger
   def getRuleImpl(c1: Cell, c2: Cell): RuleImpl = ruleImpls(mkRuleKey(c1, c2))
   def reduce1(c1: Cell, c2: Cell): Unit = {
-    val w = new PerThreadWorker(this, null)
-    w.setNext(c1, c2)
-    w.processNext()
-    w.flushNext()
+    setNext(c1, c2)
+    processNext()
+    flushNext()
   }
 
-  def reduce(): Unit = {
-    this.metrics = if(config.collectStats) new ExecutionMetrics else null
-    val w = new PerThreadWorker(this, metrics)
+  def reduce(): Unit =
     while(cutBuffer.nonEmpty) {
       val (c1, c2) = cutBuffer.pop()
-      w.setNext(c1, c2)
-      w.processAll()
+      setNext(c1, c2)
+      while(nextCut1 != null) processNext()
     }
+
+  def addActive(c1: Cell, c2: Cell): Unit =
+    if(nextCut1 == null) setNext(c1, c2) else cutBuffer.addOne(c1, c2)
+
+  def setNext(c1: Cell, c2: Cell): Unit = {
+    nextCut1 = c1
+    nextCut2 = c2
+  }
+
+  def flushNext(): Unit =
+    if(nextCut1 != null) {
+      cutBuffer.addOne(nextCut1, nextCut2)
+      setNext(null, null)
+    }
+
+  def processNext(): Unit = {
+    val c1 = nextCut1
+    val c2 = nextCut2
+    setNext(null, null)
+    val ri = ruleImpls(mkRuleKey(c1, c2))
+    if(ri != null) ri.reduce(c1, c2, this)
+    else irreducible.addOne(c1, c2)
   }
 }
 
@@ -310,48 +323,4 @@ final class CutBuffer(initialSize: Int) {
       len = 0
     }
   def iterator: Iterator[(Cell, Cell)] = pairs.iterator.take(len).grouped(2).map { case Seq(c1, c2) => (c1, c2) }
-}
-
-final class PerThreadWorker(val inter: Interpreter, val metrics: ExecutionMetrics) {
-  final val tempCells = inter.createTempCells()
-  private[this] var nextCut1, nextCut2: Cell = _
-
-  def addActive(c1: Cell, c2: Cell): Unit =
-    if(nextCut1 == null) { nextCut1 = c1; nextCut2 = c2 } else inter.cutBuffer.addOne(c1, c2)
-
-  def setNext(c1: Cell, c2: Cell): Unit = {
-    this.nextCut1 = c1
-    this.nextCut2 = c2
-  }
-
-  def flushNext(): Unit =
-    if(nextCut1 != null) {
-      inter.cutBuffer.addOne(nextCut1, nextCut2)
-      nextCut1 = null
-      nextCut2 = null
-    }
-
-  def reduceInterpreted(c1: Cell, c2: Cell): Unit = {
-    val ri = inter.ruleImpls(inter.mkRuleKey(c1, c2))
-    if(ri != null) ri.reduce(c1, c2, this)
-    else inter.irreducible.addOne(c1, c2)
-  }
-
-  def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit =
-    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, 0, 0, labelCreate)
-  def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
-
-  def processNext(): Unit = {
-    val c1 = nextCut1
-    val c2 = nextCut2
-    nextCut1 = null
-    nextCut2 = null
-    c1.reduce(c2, this)
-  }
-
-  @tailrec
-  def processAll(): Unit = {
-    processNext()
-    if(nextCut1 != null) processAll()
-  }
 }
