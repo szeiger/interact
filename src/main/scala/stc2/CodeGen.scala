@@ -5,6 +5,7 @@ import de.szeiger.interact.{Config, IntBox, IntBoxImpl, LongBox, RefBox, RefBoxI
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
+import de.szeiger.interact.offheap.Allocator
 
 import scala.collection.mutable
 
@@ -75,8 +76,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     new GenStaticReduce(m, active, level, ptw, rule, this, metricName).emitRule()
   }
 
-  def incMetric(metric: String, m: MethodDSL, ptw: VarIdx): Unit =
-    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(1).invoke(ptw_recordMetric)
+  def incMetric(metric: String, m: MethodDSL, ptw: VarIdx, count: Int = 1): Unit =
+    if(config.collectStats) m.aload(ptw).ldc(metric).iconst(count).invoke(ptw_recordMetric)
 
   private def compileMetaClass(sym: Symbol): Unit = {
     val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteMetaClassTFor(sym).className, metaClassT)

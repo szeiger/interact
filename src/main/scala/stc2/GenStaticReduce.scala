@@ -4,6 +4,7 @@ import de.szeiger.interact._
 import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
 import de.szeiger.interact.codegen.AbstractCodeGen
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
+import de.szeiger.interact.offheap.Allocator
 import org.objectweb.asm.Label
 
 import scala.collection.mutable
@@ -368,6 +369,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   private def createCells(instrs: Vector[CreateInstruction]): Unit = {
     val singletonCache = mutable.HashMap.empty[Symbol, VarIdx]
+    val allocMetrics = mutable.HashMap.empty[Int, Int]
     instrs.foreach {
       case GetSingletonCell(idx, sym) =>
         cells(idx) = active.find(_.sym == sym) match {
@@ -383,7 +385,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         if(sym != active(act).sym)
           m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
       case NewCell(idx, sym, args) =>
-        m.aload(ptw).iconst(Allocator.cellSize(sym.arity, sym.payloadType)).invoke(ptw_allocCell)
+        val size = Allocator.cellSize(sym.arity, sym.payloadType)
+        m.aload(ptw).iconst(size).invoke(ptw_allocCell)
+        allocMetrics.updateWith(size) { case None => Some(1); case Some(n) => Some(n+1) }
         assert(symIds(sym) >= 0)
         m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
         args.zipWithIndex.foreach {
@@ -397,6 +401,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         if(config.collectStats) m.iinc(statCellAllocations)
         cells(idx) = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")
     }
+    allocMetrics.foreach { case (size, count) => incMetric(s"allocCell($size)", m, ptw, count) }
   }
 
   // load cached payload value (which is always unboxed) and adapt to class

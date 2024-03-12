@@ -1,7 +1,7 @@
 package de.szeiger.interact
 
 import de.szeiger.interact.ast._
-import de.szeiger.interact.stc2.Allocator
+import de.szeiger.interact.offheap.{Allocator, ArenaAllocator}
 
 import java.nio.file.Path
 import scala.collection.mutable
@@ -76,6 +76,7 @@ case class Config(
   writeJava: Option[Path] = None, // write decompiled classes to dir (stc*)
   skipCodeGen: Boolean = false, // do not generate classfiles (stc*)
   tailCallDepth: Int = 32, // stc2
+  newAllocator: () => Allocator = () => new ArenaAllocator(), // stc2
 ) {
   def withSpec(spec: String): Config = spec match {
     case s"sti" => copy(backend = STIBackend)

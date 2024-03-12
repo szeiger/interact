@@ -3,6 +3,7 @@ package de.szeiger.interact.stc2
 import de.szeiger.interact.codegen.{ClassWriter, LocalClassLoader}
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.offheap.Allocator
 
 import java.util.Arrays
 import scala.collection.mutable
@@ -83,7 +84,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     freeWireLookup.clear()
     dispose()
     nextLabel = Long.MinValue
-    allocator = new Allocator
+    allocator = config.newAllocator()
     singletons.indices.foreach { i =>
       val s = reverseSymIds(i)
       if(s.isSingleton) singletons(i) = allocator.newCell(i, s.arity)
