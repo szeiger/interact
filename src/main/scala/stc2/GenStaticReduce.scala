@@ -174,9 +174,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       val cont0 = m.lconst(0).storeLocal(cellT, "cont0")
       val cont1 = m.lconst(0).storeLocal(cellT, "cont1")
       val l = bp.loopOn0 || bp.loopOn1
-      (cont0, cont1, l, !l && bp.branches.isEmpty)
+      (cont0, cont1, l, !l && bp.branches.isEmpty && !rule.initial)
     }
-    var cont0Options, cont1Options = mutable.HashSet.empty[VarIdx]
+    val cont0Options, cont1Options = mutable.HashSet.empty[VarIdx]
     var firstContCheck = true // skip null check on first attempt
     var tailContUsed = false // set to true on first createCut attempt
     def setCont(ct1: Idx, ct2: Idx): Unit = {
