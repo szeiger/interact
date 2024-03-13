@@ -223,6 +223,8 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     metrics = if(config.collectStats) new ExecutionMetrics else null
   }
 
+  def dispose(): Unit = ()
+
   def getSymbolId(sym: Symbol): Int = symIds.getOrElse(sym, 0)
   def createTempCells(): Array[Cell] = new Array[Cell](maxRuleCells)
 

@@ -141,5 +141,6 @@ trait BaseInterpreter {
   def getAnalyzer: Analyzer[_]
   def initData(): Unit
   def reduce(): Unit
+  def dispose(): Unit
   def getMetrics: ExecutionMetrics
 }

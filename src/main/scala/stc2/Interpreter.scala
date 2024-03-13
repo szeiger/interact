@@ -71,7 +71,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def dispose(): Unit = {
     if(allocator != null) {
-      Arrays.fill(singletons, 0L)
+      //Arrays.fill(singletons, 0L)
       allocator.dispose()
       allocator = null
     }
@@ -82,12 +82,14 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     irreducible.clear()
     freeWires.clear()
     freeWireLookup.clear()
-    dispose()
+    //dispose()
     nextLabel = Long.MinValue
-    allocator = config.newAllocator()
-    singletons.indices.foreach { i =>
-      val s = reverseSymIds(i)
-      if(s.isSingleton) singletons(i) = allocator.newCell(i, s.arity)
+    if(allocator == null) {
+      allocator = config.newAllocator()
+      singletons.indices.foreach { i =>
+        val s = reverseSymIds(i)
+        if(s.isSingleton) singletons(i) = allocator.newCell(i, s.arity)
+      }
     }
     if(config.collectStats) metrics = new ExecutionMetrics
     initialRuleImpls.foreach { rule =>
@@ -127,8 +129,12 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   def getSingleton(symId: Int): Cell = singletons(symId)
 
   def allocCell(length: Int): Cell = allocator.alloc(length)
-
   def freeCell(address: Cell, length: Int): Unit = allocator.free(address, length)
+
+  def allocProxied(length: Int): Cell = allocator.alloc(length)
+  def freeProxied(address: Cell, length: Int): Unit = allocator.free(address, length)
+  def getProxy(cell: Cell, length: Int): AnyRef = ???
+  def setProxy(cell: Cell, length: Int, o: AnyRef): Unit = ???
 
   def newLabel: Long = {
     val r = nextLabel

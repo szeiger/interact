@@ -223,6 +223,7 @@ final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: C
     //scope.clear()
     //compData.foreach(scope.addData(_))
   }
+  def dispose(): Unit = ()
   def getMetrics: ExecutionMetrics = null
   private[this] final val allSymbols = globals.symbols
   private[this] final val symIds = mutable.HashMap.from[Symbol, Int](allSymbols.zipWithIndex.map { case (s, i) => (s, i+1) })

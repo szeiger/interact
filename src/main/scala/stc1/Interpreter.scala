@@ -71,6 +71,8 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     if(config.collectStats) metrics = new ExecutionMetrics
   }
 
+  def dispose(): Unit = ()
+
   def reduce(): Unit =
     while(true) {
       while(active0 != null) {

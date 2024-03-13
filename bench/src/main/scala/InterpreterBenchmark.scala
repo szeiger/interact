@@ -2,9 +2,15 @@ package de.szeiger.interact
 
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra._
+import org.openjdk.jmh.runner.{Defaults, Runner}
+import org.openjdk.jmh.runner.format.OutputFormatFactory
+import org.openjdk.jmh.runner.options.CommandLineOptions
+import org.openjdk.jmh.util.Optional
 
-import java.nio.file.Path
+import scala.jdk.CollectionConverters._
 import java.util.concurrent.TimeUnit
+
+// bench/jmh:runMain de.szeiger.interact.InterpreterBenchmark
 
 @BenchmarkMode(Array(Mode.Throughput))
 @Fork(value = 1, jvmArgsAppend = Array("-Xmx12g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
@@ -13,11 +19,11 @@ import java.util.concurrent.TimeUnit
 @Measurement(iterations = 11, time = 1)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Benchmark)
-class InterpreterBenchmark {
+class InterpreterBenchmark { self =>
 
   @Param(Array(
     //"sti",
-    "stc1",
+    //"stc1",
     "stc2",
     //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
@@ -26,6 +32,50 @@ class InterpreterBenchmark {
   ))
   var spec: String = _
 
+  @Param(Array(
+    "ack38",
+    "ack38b",
+    "fib22",
+    "mult1",
+    "mult2",
+    "mult3",
+    //"fib29",
+  ))
+  var benchmark: String = _
+
+  private[this] var inter: BaseInterpreter = _
+
+  @Setup(Level.Trial)
+  def setup(): Unit = {
+    val config = Config(spec).copy(showAfter = Set(""))
+    val prepareConfig = config.copy(collectStats = true, logCodeGenSummary = true)
+    val benchConfig = config
+    //val benchConfig = config.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")), logGeneratedClasses = None, showAfter = Set(""))
+    //val benchConfig = config.copy(skipCodeGen = true)
+    val (source, expectedSteps) = InterpreterBenchmark.testCases(benchmark)
+    val i = new Compiler(Parser.parse(source), prepareConfig).createInterpreter()
+    i.initData()
+    println()
+    i.reduce()
+    val m = i.getMetrics
+    m.log()
+    assert(m.getSteps == expectedSteps)
+    i.dispose()
+    println()
+    inter = new Compiler(Parser.parse(source), benchConfig).createInterpreter()
+  }
+
+  @Setup(Level.Invocation)
+  def prepare(): Unit = inter.initData()
+
+  @Benchmark
+  def run(bh: Blackhole): Unit = bh.consume(inter.reduce())
+
+  @TearDown(Level.Invocation)
+  def cleanup(): Unit = inter.dispose()
+}
+
+object InterpreterBenchmark {
   private val prelude =
     """cons Z
       |cons S(n)
@@ -107,70 +157,37 @@ class InterpreterBenchmark {
       |let A(8n, res2) = 3n
       |""".stripMargin
 
-  class PreparedInterpreter(source: String) {
-    val config = Config(spec).copy(showAfter = Set(""))
-    val prepareConfig = config.copy(collectStats = true, logCodeGenSummary = true)
-    val benchConfig = config
-    //val benchConfig = config.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")))
-    //val benchConfig = config.copy(skipCodeGen = true)
+  val testCases = Map(
+    "ack38" -> (prelude + ack38Src, 4182049),
+    "ack38b" -> (prelude + ack38bSrc, 8360028),
+    "fib22" -> (prelude + fib22Src, 450002),
+    "fib29" -> (prelude + fib29Src, 15670976),
+    "mult1" -> (prelude + mult1Src, 505402),
+    "mult2" -> (prelude + mult2Src, 2021608),
+    "mult3" -> (prelude + mult3Src, 2004002),
+  )
 
-    {
-      val i = new Compiler(Parser.parse(source), prepareConfig).createInterpreter()
-      i.initData()
-      println()
-      i.reduce()
-      i.getMetrics.log()
-      println()
+  def main(args: Array[String]): Unit = {
+    val cls = classOf[InterpreterBenchmark]
+
+    def run1(testCase: String, spec: String) = {
+      println(s"-------------------- Running $testCase $spec:")
+      val opts = new CommandLineOptions(cls.getName, s"-pbenchmark=$testCase", s"-pspec=$spec") {
+        override def getOperationsPerInvocation = Optional.of(testCases(testCase)._2)
+      }
+      val runner = new Runner(opts)
+      runner.run()
     }
 
-    val inter = new Compiler(Parser.parse(source), benchConfig).createInterpreter()
+    val res = for {
+      testCase <- cls.getDeclaredField("benchmark").getAnnotation(classOf[Param]).value().toVector
+      spec <- cls.getDeclaredField("spec").getAnnotation(classOf[Param]).value()
+      res <- run1(testCase, spec).asScala
+    } yield res
 
-    def setup(): BaseInterpreter = {
-      inter.initData()
-      inter
-    }
+    println("-------------------- Results")
+    System.out.flush()
+    val out = OutputFormatFactory.createFormatInstance(System.out, Defaults.VERBOSITY)
+    out.endRun(res.asJava)
   }
-
-  private lazy val mult1Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult1Src)
-  private lazy val mult2Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult2Src)
-  private lazy val mult3Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult3Src)
-  private lazy val fib22Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib22Src)
-  private lazy val fib29Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib29Src)
-  private lazy val ack38Inter: PreparedInterpreter = new PreparedInterpreter(prelude + ack38Src)
-  private lazy val ack38bInter: PreparedInterpreter = new PreparedInterpreter(prelude + ack38bSrc)
-
-  @Benchmark
-  @OperationsPerInvocation(505402)
-  def mult1(bh: Blackhole): Unit =
-    bh.consume(mult1Inter.setup().reduce())
-
-  @Benchmark
-  @OperationsPerInvocation(2021608)
-  def mult2(bh: Blackhole): Unit =
-    bh.consume(mult2Inter.setup().reduce())
-
-  @Benchmark
-  @OperationsPerInvocation(2004002)
-  def mult3(bh: Blackhole): Unit =
-    bh.consume(mult3Inter.setup().reduce())
-
-  @Benchmark
-  @OperationsPerInvocation(450002)
-  def fib22(bh: Blackhole): Unit =
-    bh.consume(fib22Inter.setup().reduce())
-
-//  @Benchmark
-//  @OperationsPerInvocation(15670976)
-//  def fib29(bh: Blackhole): Unit =
-//    bh.consume(fib29Inter.setup().reduce())
-
-  @Benchmark
-  @OperationsPerInvocation(4182049)
-  def ack38(bh: Blackhole): Unit =
-    bh.consume(ack38Inter.setup().reduce())
-
-  @Benchmark
-  @OperationsPerInvocation(8360028)
-  def ack38b(bh: Blackhole): Unit =
-    bh.consume(ack38bInter.setup().reduce())
 }
