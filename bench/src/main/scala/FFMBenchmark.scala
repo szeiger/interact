@@ -1,6 +1,6 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.stc2.Allocator
+import de.szeiger.interact.offheap.{Allocator, ArenaAllocator}
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra._
 
@@ -246,7 +246,7 @@ class FFMBenchmark {
 
   def unsafeAllocator0(): Long = {
     val buf = new Array[Long](10000000)
-    val a = new Allocator
+    val a = new ArenaAllocator()
     for(i <- buf.indices) buf(i) = a.alloc(24)
     for(i <- 1 until buf.length-1) {
       Allocator.putLong(buf(i), buf(i-1))

@@ -52,12 +52,11 @@ abstract class Allocator {
   import Allocator._
 
   def dispose(): Unit
-  def alloc(len: Int): Long
-  def free(address: Long, len: Int): Unit
+  def alloc(len: Long): Long
+  def free(address: Long, len: Long): Unit
 
   final def newCell(symId: Int, arity: Int, pt: PayloadType = PayloadType.VOID): Long = {
-    val sz = cellSize(arity, pt)
-    val o = alloc(sz)
+    val o = alloc(cellSize(arity, pt))
     putInt(o, (symId << 1) | 1)
     o
   }
@@ -73,31 +72,30 @@ abstract class Allocator {
   // (0/8) payload (label)
 }
 
-class SliceAllocator(blockSize: Long = 1024*1024*1024, maxSliceSize: Int = 256) extends Allocator {
+final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256, arenaSize: Long = 1024L*1024L*8L) extends Allocator {
   assert(blockSize % 8 == 0)
   assert(maxSliceSize % 8 == 0)
+  assert(blockSize >= maxSliceSize)
 
-  private[this] val slices: Array[Slice] = Array.tabulate(maxSliceSize >> 3)(i => new Slice((i+1) << 3, blockSize))
+  private[this] val blockAllocator = new ArenaAllocator(arenaSize)
+  private[this] val slices: Array[Slice] = Array.tabulate(maxSliceSize >> 3)(i => new Slice((i+1) << 3, blockSize, blockAllocator))
 
-  def dispose(): Unit = slices.foreach(_.releaseAll())
-
-  def alloc(len: Int): Long = slices(len >> 3).alloc()
-
-  def free(o: Long, len: Int): Unit = slices(len >> 3).free(o)
+  def dispose(): Unit = {
+    //slices.foreach(_.releaseAll())
+    blockAllocator.dispose()
+  }
+  def alloc(len: Long): Long = slices((len >> 3).toInt).alloc()
+  def free(o: Long, len: Long): Unit = slices((len >> 3).toInt).free(o)
 }
 
-final class Slice(sliceSize: Int, blockSize: Long) {
+final class Slice(sliceSize: Int, blockSize: Long, parent: Allocator) {
   import Allocator._
 
-  assert(blockSize % 8 == 0)
-  assert(sliceSize % 8 == 0)
-  assert(blockSize >= sliceSize)
-
   private[this] val allocSize = ((blockSize / sliceSize) * sliceSize) + 8
-  private[this] var block, last, next = 0L
+  private[this] var block, last, next, freeSlice = 0L
 
   private[this] def allocBlock(): Unit = {
-    val b = UNSAFE.allocateMemory(allocSize)
+    val b = parent.alloc(allocSize)
     UNSAFE.putLong(b, block)
     block = b
     next = b + 8
@@ -105,21 +103,28 @@ final class Slice(sliceSize: Int, blockSize: Long) {
   }
 
   def alloc(): Long = {
-    if(next >= last) allocBlock()
-    val o = next
-    next += sliceSize
-    o
+    if(freeSlice != 0L) {
+      val o = freeSlice
+      freeSlice = UNSAFE.getLong(o)
+      o
+    } else {
+      if(next >= last) allocBlock()
+      val o = next
+      next += sliceSize
+      o
+    }
   }
 
   def free(o: Long): Unit = {
-    //TODO
+    UNSAFE.putLong(o, freeSlice)
+    freeSlice = o
   }
 
   def releaseAll(): Unit = {
     var b = block
     while(b != 0L) {
       val n = UNSAFE.getLong(b)
-      UNSAFE.freeMemory(b)
+      parent.free(b, allocSize)
       b = n
     }
     block = 0L
@@ -128,7 +133,7 @@ final class Slice(sliceSize: Int, blockSize: Long) {
   }
 }
 
-class ArenaAllocator(blockSize: Long = 1024L*1024L*8L) extends Allocator {
+final class ArenaAllocator(blockSize: Long = 1024L*1024L*8L) extends Allocator {
   import Allocator._
   private[this] var block, end, next = 0L
 
@@ -140,14 +145,17 @@ class ArenaAllocator(blockSize: Long = 1024L*1024L*8L) extends Allocator {
     }
   }
 
-  def alloc(len: Int): Long = {
-    if(next + len >= end) allocBlock()
+  def alloc(len: Long): Long = {
+    if(next + len >= end) {
+      allocBlock()
+      assert(next + len < end)
+    }
     val o = next
     next += len
     o
   }
 
-  def free(address: Long, len: Int): Unit = ()
+  def free(address: Long, len: Long): Unit = ()
 
   private[this] def allocBlock(): Unit = {
     val b = UNSAFE.allocateMemory(blockSize)
@@ -158,12 +166,10 @@ class ArenaAllocator(blockSize: Long = 1024L*1024L*8L) extends Allocator {
   }
 }
 
-class SystemAllocator extends Allocator {
+object SystemAllocator extends Allocator {
   import Allocator._
 
   def dispose(): Unit = ()
-
-  def alloc(len: Int): Long = UNSAFE.allocateMemory(len)
-
-  def free(address: Long, len: Int): Unit = UNSAFE.freeMemory(address)
+  def alloc(len: Long): Long = UNSAFE.allocateMemory(len)
+  def free(address: Long, len: Long): Unit = UNSAFE.freeMemory(address)
 }
