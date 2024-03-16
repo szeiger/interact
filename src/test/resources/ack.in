@@ -35,3 +35,37 @@ match A(a, b) = S(x) => a = A1(S(x), b)
 match A1(a, b) = S(y) => (a1, a2) = dup(a); a1 = Pred(A(r1, b)); a2 = A(y, r1)
 
 let A(8n, res2) = 3n
+
+
+
+# Int-based encoding
+# 2786001 reductions
+
+cons Int[int]
+
+def ackI(a, b) = r
+  | Int[x], Int[y] if [x == 0] => Int[y + 1]
+                   if [y == 0] => ackI(Int[x-1], Int[1])
+                   else        => ackI(Int[x-1], ackI(Int[x], Int[y-1]))
+
+let resI = ackI(Int[3], Int[8])
+
+
+# Boxed Integer version using ref payloads
+# 2786001 reductions
+
+cons BoxedInt[ref]
+
+def ackB(a, b) = r
+  | BoxedInt[x], BoxedInt[y]
+      if [de.szeiger.interact.MainTest.is0(x)] =>
+        BoxedInt[de.szeiger.interact.MainTest.inc(y)]
+        [eraseRef(x)]
+      if [de.szeiger.interact.MainTest.is0(y)] =>
+        ackB(BoxedInt[de.szeiger.interact.MainTest.dec(x)], BoxedInt[de.szeiger.interact.MainTest.box(1)])
+        [eraseRef(y)]
+      else =>
+        [de.szeiger.interact.MainTest.ackHelper(x, x1, x2)]
+        ackB(BoxedInt[x1], ackB(BoxedInt[x2], BoxedInt[de.szeiger.interact.MainTest.dec(y)]))
+
+let resB = ackB(BoxedInt[de.szeiger.interact.MainTest.box(3)], BoxedInt[de.szeiger.interact.MainTest.box(8)])

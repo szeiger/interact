@@ -24,7 +24,7 @@ class MainTest(spec: String) {
   @Test def testInlining = check("inlining", expectedSteps = 7)
   @Test def testFib = check("fib")
   @Test def testEmbedded = check("embedded")
-  @Test def testAck = check("ack", expectedSteps = 12542077)
+  @Test def testAck = check("ack", expectedSteps = if(conf.backend.allowPayloadTemp) 18114079 else 23686073)
   @Test def testDiverging = check("diverging", fail = true)
 }
 
@@ -37,4 +37,14 @@ object MainTest {
     //"mt0.c", "mt1.c", "mt8.c",
     //"mt1000.c", "mt1001.c", "mt1008.c",
   ).map(s => Array[AnyRef](s)).asJava
+
+  // used by ack.in:
+  def is0(i: java.lang.Integer): Boolean = i.intValue() == 0
+  def box(i: Int): java.lang.Integer = Integer.valueOf(i)
+  def inc(i: java.lang.Integer): java.lang.Integer = box(i.intValue() + 1)
+  def dec(i: java.lang.Integer): java.lang.Integer = box(i.intValue() - 1)
+  def ackHelper(i: java.lang.Integer, o1: RefOutput, o2: RefOutput): Unit = {
+    o1.setValue(dec(i))
+    o2.setValue(i)
+  }
 }

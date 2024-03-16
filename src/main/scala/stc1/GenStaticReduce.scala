@@ -287,7 +287,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     if(cls == classOf[Int]) {
       if(temp(idx)._2) m.aload(temp(idx)._1).invoke(intBox_getValue)
       else m.iload(temp(idx)._1)
-    } else if(cls == classOf[IntBox] || cls == classOf[RefBox]) m.aload(temp(idx)._1)
+    } else if(cls == classOf[IntBox] || cls == classOf[IntOutput] || cls == classOf[RefBox] || cls == classOf[RefOutput]) m.aload(temp(idx)._1)
     else {
       if(temp(idx)._2) m.aload(temp(idx)._1).invoke(refBox_getValue)
       else m.aload(temp(idx)._1)

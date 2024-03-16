@@ -1,2 +1,4 @@
   res = 2045n
   res2 = 2045n
+  resB = BoxedInt[2045]
+  resI = Int[2045]

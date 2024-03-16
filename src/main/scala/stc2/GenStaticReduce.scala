@@ -421,7 +421,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   // load temp payload value and adapt to class
   private def loadTempPayload(idx: Int, pt: PayloadType, cls: Class[_]): Unit =
-    if(cls == classOf[IntBox] || cls == classOf[LongBox] || cls == classOf[RefBox]) m.aload(temp(idx)._1)
+    if(cls == classOf[IntBox] || cls == classOf[LongBox] || cls == classOf[RefBox] ||
+      cls == classOf[IntOutput] || cls == classOf[LongOutput] || cls == classOf[RefOutput]) m.aload(temp(idx)._1)
     else {
       val p = PTOps(m, pt)
       if(temp(idx)._2) {
