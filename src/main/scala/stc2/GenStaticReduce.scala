@@ -15,9 +15,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   import CommonDefs._
 
   val methodStart = m.setLabel()
-  val (statCellAllocations, statCachedCellReuse) =
-    if(config.collectStats) (m.iconst(0).storeLocal(tp.I, "statCellAllocations"), m.iconst(0).storeLocal(tp.I, "statCachedCellReuse"))
-    else (VarIdx.none, VarIdx.none)
+  val (statCellAllocations, statProxyAllocations, statCachedCellReuse) =
+    if(config.collectStats) (m.iconst(0).storeLocal(tp.I, "statCellAllocations"), m.iconst(0).storeLocal(tp.I, "statProxyAllocations"), m.iconst(0).storeLocal(tp.I, "statCachedCellReuse"))
+    else (VarIdx.none, VarIdx.none, VarIdx.none)
   // active cells (at least two), updated for the current top-level branch
   val active: Array[ActiveCell] = new Array[ActiveCell](rule.totalActiveCount)
   _initialActive.copyToArray(active)
@@ -338,7 +338,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     loopCont: Boolean, tailCont: Boolean, singleDispatchTail: Boolean, level: VarIdx): Unit = {
     if(config.collectStats) {
       m.aload(ptw).iconst((lastBranch :: parents).map(_.statSteps).sum)
-      m.iload(statCellAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
+      m.iload(statCellAllocations).iload(statProxyAllocations).iload(statCachedCellReuse).iconst(lastBranch.statSingletonUse)
       if(loopCont) m.lload(contMarker).lconst(0).lcmp.if_!=.thnElse(m.iconst(1))(m.iconst(0))
       else m.iconst(0)
       if(tailCont) {
@@ -403,7 +403,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
             ldTaggedCP(idx)
             m.invokestatic(allocator_putLong)
         }
-        if(config.collectStats) m.iinc(statCellAllocations)
+        if(config.collectStats) {
+          m.iinc(statCellAllocations)
+          if(sym.payloadType == PayloadType.REF) m.iinc(statProxyAllocations)
+        }
         cells(idx) = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")
     }
     allocMetrics.foreach { case (size, count) => incMetric(s"allocCell($size)", m, ptw, count) }

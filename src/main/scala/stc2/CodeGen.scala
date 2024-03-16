@@ -27,7 +27,7 @@ object CommonDefs {
   val allocator_putLong = allocatorT.method("putLong", tp.m(tp.J, tp.J).V)
   val allocator_getLong = allocatorT.method("getLong", tp.m(tp.J).J)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
-  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
+  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   val ptw_addIrreducible = ptwT.method("addIrreducible", tp.m(cellT, cellT).V)
   val ptw_getSingleton = ptwT.method("getSingleton", tp.m(tp.I)(cellT))

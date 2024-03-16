@@ -24,7 +24,7 @@ class InterpreterBenchmark {
 
   @Param(Array(
     //"sti",
-    //"stc1",
+    "stc1",
     "stc2",
     //"mt0.i", //"mt1.i", "mt8.i",
     //"mt1000.i", "mt1001.i", "mt1008.i",
@@ -36,6 +36,7 @@ class InterpreterBenchmark {
   @Param(Array(
     "ack38",
     "ack38b",
+    "boxedAck38",
     "fib22",
     "mult1",
     "mult2",
@@ -47,24 +48,7 @@ class InterpreterBenchmark {
   private[this] var inter: BaseInterpreter = _
 
   @Setup(Level.Trial)
-  def setup(): Unit = {
-    val config = Config(spec).copy(showAfter = Set(""))
-    val prepareConfig = config.copy(collectStats = true, logCodeGenSummary = true)
-    val benchConfig = config
-    //val benchConfig = config.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")), logGeneratedClasses = None, showAfter = Set(""))
-    //val benchConfig = config.copy(skipCodeGen = true)
-    val (source, expectedSteps) = InterpreterBenchmark.testCases(benchmark)
-    val i = new Compiler(Parser.parse(source), prepareConfig).createInterpreter()
-    i.initData()
-    println()
-    i.reduce()
-    val m = i.getMetrics
-    m.log()
-    assert(m.getSteps == expectedSteps)
-    i.dispose()
-    println()
-    inter = new Compiler(Parser.parse(source), benchConfig).createInterpreter()
-  }
+  def setup(): Unit = inter = InterpreterBenchmark.setup(spec, benchmark)
 
   @Setup(Level.Invocation)
   def prepare(): Unit = inter.initData()
@@ -85,14 +69,14 @@ object InterpreterBenchmark {
       |  | S(x) => add(x, S(y))
       |""".stripMargin
 
-  private val mult1Src =
+  private val mult1Src = prelude +
     """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
       |let res = mult(100n, 100n)
       |""".stripMargin
 
-  private val mult2Src =
+  private val mult2Src = prelude +
     """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
@@ -102,14 +86,14 @@ object InterpreterBenchmark {
       |    res4 = mult(100n, 100n)
       |""".stripMargin
 
-  private val mult3Src =
+  private val mult3Src = prelude +
     """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (a, b) = dup(y); add(b, mult(x, a))
       |let res = mult(1000n, 1000n)
       |""".stripMargin
 
-  private val fib22Src =
+  private val fib22Src = prelude +
     """def add2(_, y) = r
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
@@ -122,7 +106,7 @@ object InterpreterBenchmark {
       |let res = fib(22n)
       |""".stripMargin
 
-  private val fib29Src =
+  private val fib29Src = prelude +
     """def add2(_, y) = r
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
@@ -135,7 +119,7 @@ object InterpreterBenchmark {
       |let res = fib(29n)
       |""".stripMargin
 
-  private val ack38Src =
+  private val ack38Src = prelude +
     """def ack(_, y) = r
       |  | Z => S(y)
       |  | S(x) => ack_Sx(y, x)
@@ -145,7 +129,7 @@ object InterpreterBenchmark {
       |let res = ack(3n, 8n)
       |""".stripMargin
 
-  private val ack38bSrc =
+  private val ack38bSrc = prelude +
     """cons Pred(x)
       |cons A(r, y) = x
       |cons A1(r, y) = x
@@ -158,23 +142,70 @@ object InterpreterBenchmark {
       |let A(8n, res2) = 3n
       |""".stripMargin
 
+  private val boxedAck38Src =
+    """cons BoxedInt[ref]
+      |
+      |def ackB(a, b) = r
+      |  | BoxedInt[x], BoxedInt[y]
+      |      if [de.szeiger.interact.InterpreterBenchmark.is0(x)] =>
+      |        BoxedInt[de.szeiger.interact.InterpreterBenchmark.inc(y)]
+      |        [eraseRef(x)]
+      |      if [de.szeiger.interact.InterpreterBenchmark.is0(y)] =>
+      |        ackB(BoxedInt[de.szeiger.interact.InterpreterBenchmark.dec(x)], BoxedInt[de.szeiger.interact.InterpreterBenchmark.box(1)])
+      |        [eraseRef(y)]
+      |      else =>
+      |        [de.szeiger.interact.InterpreterBenchmark.ackHelper(x, x1, x2)]
+      |        ackB(BoxedInt[x1], ackB(BoxedInt[x2], BoxedInt[de.szeiger.interact.InterpreterBenchmark.dec(y)]))
+      |
+      |let resB = ackB(BoxedInt[de.szeiger.interact.InterpreterBenchmark.box(3)], BoxedInt[de.szeiger.interact.InterpreterBenchmark.box(8)])
+      |""".stripMargin
+  def is0(i: java.lang.Integer): Boolean = i.intValue() == 0
+  def box(i: Int): java.lang.Integer = Integer.valueOf(i)
+  def inc(i: java.lang.Integer): java.lang.Integer = box(i.intValue() + 1)
+  def dec(i: java.lang.Integer): java.lang.Integer = box(i.intValue() - 1)
+  def ackHelper(i: java.lang.Integer, o1: RefOutput, o2: RefOutput): Unit = {
+    o1.setValue(dec(i))
+    o2.setValue(i)
+  }
+
   val testCases = Map(
-    "ack38" -> (prelude + ack38Src, 4182049),
-    "ack38b" -> (prelude + ack38bSrc, 8360028),
-    "fib22" -> (prelude + fib22Src, 450002),
-    "fib29" -> (prelude + fib29Src, 15670976),
-    "mult1" -> (prelude + mult1Src, 505402),
-    "mult2" -> (prelude + mult2Src, 2021608),
-    "mult3" -> (prelude + mult3Src, 2004002),
+    "ack38" -> ack38Src,
+    "ack38b" -> ack38bSrc,
+    "boxedAck38" -> boxedAck38Src,
+    "fib22" -> fib22Src,
+    "fib29" -> fib29Src,
+    "mult1" -> mult1Src,
+    "mult2" -> mult2Src,
+    "mult3" -> mult3Src,
   )
+
+  val prepareConfig: Config => Config =
+    _.copy(collectStats = true, logCodeGenSummary = true, showAfter = Set(""))
+
+  val benchConfig: Config => Config =
+    identity
+    //_.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")), logGeneratedClasses = None, showAfter = Set(""))
+    //_.copy(skipCodeGen = true)
+
+  def setup(spec: String, benchmark: String): BaseInterpreter =
+    new Compiler(Parser.parse(testCases(benchmark)), benchConfig(Config(spec))).createInterpreter()
 
   def main(args: Array[String]): Unit = {
     val cls = classOf[InterpreterBenchmark]
 
     def run1(testCase: String, spec: String) = {
       println(s"-------------------- Running $testCase $spec:")
+      val i = new Compiler(Parser.parse(testCases(testCase)), prepareConfig(Config(spec))).createInterpreter()
+      i.initData()
+      println()
+      i.reduce()
+      val m = i.getMetrics
+      m.log()
+      val steps = m.getSteps
+      i.dispose()
+      println()
       val opts = new CommandLineOptions(cls.getName, s"-pbenchmark=$testCase", s"-pspec=$spec") {
-        override def getOperationsPerInvocation = Optional.of(testCases(testCase)._2)
+        override def getOperationsPerInvocation = Optional.of(steps)
       }
       val runner = new Runner(opts)
       runner.run()

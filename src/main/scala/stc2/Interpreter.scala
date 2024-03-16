@@ -120,9 +120,9 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def addIrreducible(a0: Cell, a1: Cell): Unit = irreducible.addOne(a0, a1)
 
-  def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
+  def recordStats(steps: Int, cellAllocations: Int, proxyAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
     loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit =
-    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, directTail, singleDispatchTail, labelCreate)
+    metrics.recordStats(steps, cellAllocations, proxyAllocations, cachedCellReuse, singletonUse, loopSave, directTail, singleDispatchTail, labelCreate)
 
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 

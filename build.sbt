@@ -22,3 +22,6 @@ lazy val main = (project in file("."))
 lazy val bench = (project in file("bench"))
   .dependsOn(main)
   .enablePlugins(JmhPlugin)
+  .settings(
+    Jmh / javaOptions ++= Seq("-Xss32M"),
+  )

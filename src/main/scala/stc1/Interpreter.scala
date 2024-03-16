@@ -93,7 +93,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   def addIrreducible(a0: Cell, a1: Cell): Unit = irreducible.addOne(a0, a1)
 
   def recordStats(steps: Int, cellAllocations: Int, cachedCellReuse: Int, singletonUse: Int, loopSave: Int, labelCreate: Int): Unit =
-    metrics.recordStats(steps, cellAllocations, cachedCellReuse, singletonUse, loopSave, 0, 0, labelCreate)
+    metrics.recordStats(steps, cellAllocations, 0, cachedCellReuse, singletonUse, loopSave, 0, 0, labelCreate)
 
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 }
