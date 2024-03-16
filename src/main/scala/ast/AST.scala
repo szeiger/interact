@@ -236,7 +236,9 @@ object PayloadType {
   final val PAYLOAD_TYPES_COUNT = 4
 }
 
-sealed trait EmbeddedType
+sealed trait EmbeddedType {
+  def asPT: PayloadType = this.asInstanceOf[EmbeddedType.Payload].payloadType
+}
 object EmbeddedType {
   final case object Unknown extends EmbeddedType
   final case class Payload(payloadType: PayloadType) extends EmbeddedType

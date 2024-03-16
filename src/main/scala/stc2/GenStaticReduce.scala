@@ -8,9 +8,11 @@ import de.szeiger.interact.offheap.Allocator
 import org.objectweb.asm.Label
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: VarIdx, ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
   import codeGen._
+  import CommonDefs._
 
   val methodStart = m.setLabel()
   val (statCellAllocations, statCachedCellReuse) =
@@ -32,12 +34,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   private def cachePayload(ac: ActiveCell): Unit = {
     if(ac.needsCachedPayload) {
       val name = s"cachedPayload${ac.id}"
-      m.lload(ac.vidx).lconst(Allocator.payloadOffset(ac.arity, ac.sym.payloadType)).ladd
-      ac.cachedPayload = ac.sym.payloadType match {
-        case PayloadType.REF => ???
-        case PayloadType.INT => m.invokestatic(allocator_getInt).storeLocal(tp.I, name)
-        case PayloadType.LABEL => m.invokestatic(allocator_getLong).storeLocal(tp.J, name)
-      }
+      val p = PTOps(m, ac.sym.payloadType)
+      p.getCellPayload(ptw, ac.arity) { m.lload(ac.vidx) }
+      ac.cachedPayload = m.storeLocal(p.unboxedDesc, name)
     }
   }
 
@@ -298,8 +297,11 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       bp.branches.zipWithIndex.foreach { case (b, i) => emitBranch(b, bp :: parents, s"$branchMetricName.$i") }
     else {
       for(w <- reuseBuffers if w != null) w.flush()
-      for(a <- active if a != null && a.reuse == -1 && !a.sym.isSingleton)
-        m.aload(ptw).lload(a.vidx).iconst(Allocator.cellSize(a.arity, a.sym.payloadType)).invoke(ptw_freeCell)
+      for(ac <- active if ac != null && ac.reuse == -1 && !ac.sym.isSingleton)
+        m.aload(ptw).lload(ac.vidx).iconst(Allocator.cellSize(ac.arity, ac.sym.payloadType)).invoke(ac.sym.payloadType match {
+          case PayloadType.REF => ptw_freeProxied
+          case _ => ptw_freeCell
+        })
 
       def singleDispatchTail = tail0Syms.size == 1 && tail0Syms.head.isDefined
       recordStats(cont0, bp, parents, loopCont, tailCont, singleDispatchTail, level)
@@ -318,7 +320,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
             if(singleDispatchTail) {
               m.invokestatic(metaClass_reduce(tail0Syms.head))
             } else {
-              m.invokestatic(dispatch_staticReduce)
+              m.invokestatic(generatedDispatch_staticReduce)
             }
           } {
             m.aload(ptw).lload(cont0).lload(cont1).invoke(ptw_addActive)
@@ -386,7 +388,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
       case NewCell(idx, sym, args) =>
         val size = Allocator.cellSize(sym.arity, sym.payloadType)
-        m.aload(ptw).iconst(size).invoke(ptw_allocCell)
+        m.aload(ptw).iconst(size).invoke(sym.payloadType match {
+          case PayloadType.REF => ptw_allocProxied
+          case _ => ptw_allocCell
+        })
         allocMetrics.updateWith(size) { case None => Some(1); case Some(n) => Some(n+1) }
         assert(symIds(sym) >= 0)
         m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
@@ -415,22 +420,16 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   // load temp payload value and adapt to class
-  private def loadTempPayload(idx: Int, cls: Class[_]): Unit = {
-    if(cls == classOf[Int]) {
-      if(temp(idx)._2) m.aload(temp(idx)._1).invoke(intBox_getValue)
-      else m.iload(temp(idx)._1)
-    }
-    else if(cls == classOf[Long]) {
-      if(temp(idx)._2) m.aload(temp(idx)._1).invoke(longBox_getValue)
-      else m.lload(temp(idx)._1)
-    }
-    else if(cls == classOf[IntBox] || cls == classOf[LongBox] || cls == classOf[RefBox]) m.aload(temp(idx)._1)
+  private def loadTempPayload(idx: Int, pt: PayloadType, cls: Class[_]): Unit =
+    if(cls == classOf[IntBox] || cls == classOf[LongBox] || cls == classOf[RefBox]) m.aload(temp(idx)._1)
     else {
-      if(temp(idx)._2) m.aload(temp(idx)._1).invoke(refBox_getValue)
-      else m.aload(temp(idx)._1)
-      if(cls != classOf[AnyRef]) m.checkcast(tp.o(cls))
+      val p = PTOps(m, pt)
+      if(temp(idx)._2) {
+        m.aload(temp(idx)._1)
+        p.getBoxValue
+      } else p.load(temp(idx)._1)
+      if(cls != p.unboxedClass) m.checkcast(tp.o(cls))
     }
-  }
 
   // return VarIdx of unboxed temp var, or None for boxed temp or non-temp arg
   private def unboxedTemp(ea: EmbArg): Option[VarIdx] = ea match {
@@ -438,41 +437,38 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     case _ => None
   }
 
-  private def loadArg(embArg: EmbArg, cls: Class[_]): Unit = embArg match {
-    case EmbArg.Const(i: Int) => m.iconst(i)
-    case EmbArg.Const(s: String) => m.ldc(s)
-    case EmbArg.Active(i) => loadCachedPayload(active(i).cachedPayload, cls)
-    case EmbArg.Cell(idx) => ??? //m.aload(cells(idx))
-    case EmbArg.Temp(idx, _) => loadTempPayload(idx, cls)
+  private def loadArg(embArg: EmbArg, cls: Class[_]): () => Unit = {
+    val dontFlush = () => ()
+    embArg match {
+      case EmbArg.Const(i: Int) => m.iconst(i); dontFlush
+      case EmbArg.Const(s: String) => m.ldc(s); dontFlush
+      case EmbArg.Active(i) => loadCachedPayload(active(i).cachedPayload, cls); dontFlush
+      case EmbArg.Temp(idx, pt) => loadTempPayload(idx, pt, cls); dontFlush
+      case EmbArg.Cell(idx) =>
+        //TODO use cached boxes
+        val p = PTOps(m, cellSyms(idx).payloadType)
+        val tmp = p.newBoxStoreDup
+        () => writeToArg(embArg) { m.aload(tmp); p.getBoxValue }
+    }
   }
 
-  private def writeToArg(ea: EmbArg, boxCls: Class[_])(loadSource: => Unit): Unit = ea match {
+  private def writeToArg(ea: EmbArg)(loadPayload: => Unit): Unit = ea match {
     case EmbArg.Cell(idx) =>
-      m.lload(cells(idx)).lconst(Allocator.payloadOffset(cellSyms(idx).arity, cellSyms(idx).payloadType)).ladd
-      loadSource
-      if(boxCls == classOf[LongBox]) m.invokestatic(allocator_putLong)
-      else if(boxCls == classOf[IntBox]) m.invokestatic(allocator_putInt)
-      else ???
-    case _ =>
-      loadArg(ea, boxCls)
-      loadSource
-      m.invoke(refBox_setValue)
+      val sym = cellSyms(idx)
+      PTOps(m, sym.payloadType).setCellPayload(ptw, sym.arity) { m.lload(cells(idx)) } { loadPayload }
   }
 
   private def setLabels(eas: Vector[EmbArg]): Unit = {
     val l = m.storeLocal(tp.J)
     eas.foreach { ea =>
       unboxedTemp(ea) match {
-        case Some(vi) =>
-          m.lload(l)
-          m.lstore(vi)
-        case None =>
-          writeToArg(ea, classOf[LongBox])(m.lload(l))
+        case Some(vi) => m.lload(l).lstore(vi)
+        case None => writeToArg(ea)(m.lload(l))
       }
     }
   }
 
-  private def checkCondition(bp: BranchPlan, endTarget: Label) = {
+  private def checkCondition(bp: BranchPlan, endTarget: Label): Unit = {
     bp.cond.foreach {
       case CheckPrincipal(wire, sym, activeIdx) =>
         ifAux(wire).jump(endTarget)
@@ -496,19 +492,15 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     case AllocateTemp(ea, boxed) =>
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"
-      temp(ea.idx) = ((ea.pt, boxed) match { //TODO use cached boxes
-        case (PayloadType.INT, true) => m.newInitDup(new_IntBoxImpl)().storeLocal(intBoxImplT, name)
-        case (PayloadType.INT, false) => m.local(tp.I, name)
-        case (_, true) => m.newInitDup(new_RefBoxImpl)().storeLocal(refBoxImplT, name)
-        case (_, false) => m.local(tp.c[AnyRef], name)
-      }, boxed)
+      val p = PTOps(m, ea.pt)
+      //TODO use cached boxes
+      temp(ea.idx) = (if(boxed) p.newBoxStore(name) else m.local(p.unboxedDesc, name), boxed)
     case CreateLabelsComp(_, ea) =>
       assert(elseTarget == null)
       m.aload(ptw).invoke(ptw_newLabel)
       setLabels(ea)
-    case ReuseLabelsComp(idx, ea) => // can't mix reuse with non-address labels
+    case ReuseLabelsComp(_, ea) => // can't mix reuse with non-address labels
       assert(elseTarget == null)
-      //m.lload(cells(idx))
       m.aload(ptw).invoke(ptw_newLabel)
       setLabels(ea)
     case pc: PayloadMethodApplication =>
@@ -518,51 +510,45 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     case pc: PayloadAssignment =>
       assert(elseTarget == null)
       assert(pc.payloadType.isDefined)
-      if(pc.payloadType == PayloadType.INT) {
-        unboxedTemp(pc.targetIdx) match {
-          case Some(vi) =>
-            loadArg(pc.sourceIdx, classOf[Int])
-            m.istore(vi)
-          case None =>
-            writeToArg(pc.targetIdx, classOf[IntBox])(loadArg(pc.sourceIdx, classOf[Int]))
-        }
-      } else if(pc.payloadType == PayloadType.LABEL) {
-        unboxedTemp(pc.targetIdx) match {
-          case Some(vi) =>
-            loadArg(pc.sourceIdx, classOf[Long])
-            m.lstore(vi)
-          case None =>
-            writeToArg(pc.targetIdx, classOf[LongBox])(loadArg(pc.sourceIdx, classOf[Long]))
-        }
-      } else {
-        ???
+      val p = PTOps(m, pc.payloadType)
+      unboxedTemp(pc.targetIdx) match {
+        case Some(vi) =>
+          loadArg(pc.sourceIdx, p.unboxedClass)
+          p.store(vi)
+        case None =>
+          writeToArg(pc.targetIdx)(loadArg(pc.sourceIdx, p.unboxedClass))
       }
     case PayloadMethodApplicationWithReturn(method, retIdx) =>
       assert(elseTarget == null)
       unboxedTemp(retIdx) match {
         case Some(vi) =>
           callPayloadMethod(m, method, null)
-          if(method.embTp.ret == EmbeddedType.PayloadInt) m.istore(vi)
-          else m.astore(vi)
+          PTOps(m, method.embTp.ret.asPT).store(vi)
         case None =>
-          if(method.embTp.ret == EmbeddedType.PayloadInt)
-            writeToArg(retIdx, classOf[IntBox])(callPayloadMethod(m, method, null))
-          else if(method.embTp.ret == EmbeddedType.PayloadLabel)
-            writeToArg(retIdx, classOf[LongBox])(callPayloadMethod(m, method, null))
-          else ???
+          writeToArg(retIdx)(callPayloadMethod(m, method, null))
       }
   }
 
   private def callPayloadMethod(m: MethodDSL, pc: PayloadMethodApplication, elseTarget: Label): Unit = {
-    def loadArgs = pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, cls) => loadArg(embArg, cls) }
+    val flush = ArrayBuffer.empty[() => Unit]
+    def loadArgs = pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, cls) => flush += loadArg(embArg, cls) }
     val RuntimeCls = classOf[Runtime.type].getName
     (pc.jMethod.getDeclaringClass.getName, pc.jMethod.getName, pc.embTp.args) match {
       case (RuntimeCls, "eq", Vector((EmbeddedType.PayloadInt, false), (EmbeddedType.PayloadInt, false))) if elseTarget != null =>
         loadArgs
         m.ifI_!=.jump(elseTarget)
-      case (RuntimeCls, "eqLabel", Vector((EmbeddedType.PayloadLabel, false), (EmbeddedType.PayloadLabel, false))) if elseTarget != null =>
-        pc.embArgs.zip(pc.jMethod.getParameterTypes).foreach { case (embArg, _) => loadArg(embArg, classOf[Long]) }
+      case (RuntimeCls, "eqLabel", _) if elseTarget != null =>
+        pc.embArgs.foreach(loadArg(_, classOf[Long]))
         m.lcmp.if_!=.jump(elseTarget)
+      case (RuntimeCls, "dupRef", _) =>
+        loadArg(pc.embArgs(0), classOf[AnyRef])
+        val tmp = m.storeLocal(tp.Object)
+        writeToArg(pc.embArgs(1)) { m.aload(tmp) }
+        writeToArg(pc.embArgs(2)) {
+          m.aload(tmp).dup.instanceof(lifecycleManagedT).if_!=.thn {
+            m.checkcast(lifecycleManagedT).invoke(lifecycleManaged_copy)
+          }
+        }
       case _ =>
         val mref = MethodRef(pc.jMethod)
         if(pc.isStatic) {
@@ -573,6 +559,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           loadArgs
           m.invoke(mref)
         }
+        flush.foreach(_())
         if(elseTarget != null) m.ifeq(elseTarget)
     }
   }

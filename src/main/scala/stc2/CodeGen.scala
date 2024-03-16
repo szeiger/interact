@@ -1,7 +1,7 @@
 package de.szeiger.interact.stc2
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
-import de.szeiger.interact.{Config, IntBox, IntBoxImpl, LongBox, RefBox, RefBoxImpl, RulePlan}
+import de.szeiger.interact.{Config, IntBox, IntBoxImpl, LifecycleManaged, LongBox, LongBoxImpl, RefBox, RefBoxImpl, RulePlan}
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
@@ -9,23 +9,16 @@ import de.szeiger.interact.offheap.Allocator
 
 import scala.collection.mutable
 
-class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
-  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], symBits: Int) extends AbstractCodeGen(config) {
-
+object CommonDefs {
   val riT = tp.c[InitialRuleImpl]
   val ptwT = tp.c[Interpreter]
   val cellT = tp.J
   val allocatorT = tp.c[Allocator]
   val metaClassT = tp.c[MetaClass]
   val dispatchT = tp.c[Dispatch]
-  val intBoxT = tp.i[IntBox]
-  val longBoxT = tp.i[LongBox]
-  val refBoxT = tp.i[RefBox]
-  val intBoxImplT = tp.c[IntBoxImpl]
-  val refBoxImplT = tp.c[RefBoxImpl]
-  val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
+  val lifecycleManagedT = tp.i[LifecycleManaged]
+
   val dispatch_reduce = dispatchT.method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
-  val dispatch_staticReduce = generatedDispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
   val ri_freeWires = riT.method("freeWires", tp.m()(symbolT.a))
   val metaClass_symId = metaClassT.field("symId", tp.I)
@@ -41,16 +34,20 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   val ptw_allocCell = ptwT.method("allocCell", tp.m(tp.I)(cellT))
   val ptw_freeCell = ptwT.method("freeCell", tp.m(cellT, tp.I).V)
   val ptw_newLabel = ptwT.method("newLabel", tp.m().J)
-
-  val intBox_getValue = intBoxT.method("getValue", tp.m().I)
-  val intBox_setValue = intBoxT.method("setValue", tp.m(tp.I).V)
-  val longBox_getValue = longBoxT.method("getValue", tp.m().J)
-  val longBox_setValue = longBoxT.method("setValue", tp.m(tp.J).V)
-  val refBox_getValue = refBoxT.method("getValue", tp.m()(tp.c[AnyRef]))
-  val refBox_setValue = refBoxT.method("setValue", tp.m(tp.c[AnyRef]).V)
+  val ptw_allocProxied = ptwT.method("allocProxied", tp.m(tp.I)(cellT))
+  val ptw_freeProxied = ptwT.method("freeProxied", tp.m(cellT, tp.I).V)
+  val ptw_getProxy = ptwT.method("getProxy", tp.m(tp.J, tp.I)(tp.Object))
+  val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.I, tp.Object).V)
+  val lifecycleManaged_copy = lifecycleManagedT.method("copy", tp.m()(lifecycleManagedT))
   val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
-  val new_IntBoxImpl = intBoxImplT.constr(tp.m().V)
-  val new_RefBoxImpl = refBoxImplT.constr(tp.m().V)
+}
+
+class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
+  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], symBits: Int) extends AbstractCodeGen(config) {
+  import CommonDefs._
+
+  val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
+  val generatedDispatch_staticReduce = generatedDispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
 
   def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
     tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
@@ -137,7 +134,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
 
     // staticReduce
     {
-      val m = c.method(Acc.PUBLIC.STATIC.FINAL, dispatch_staticReduce.name, dispatch_staticReduce.desc)
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, generatedDispatch_staticReduce.name, generatedDispatch_staticReduce.desc)
       val c1 = m.param("c1", cellT)
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
@@ -167,7 +164,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
-      m.lload(c1).lload(c2).iload(level).aload(ptw).invokestatic(dispatch_staticReduce).return_
+      m.lload(c1).lload(c2).iload(level).aload(ptw).invokestatic(generatedDispatch_staticReduce).return_
     }
 
     addClass(classWriter, c)

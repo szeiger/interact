@@ -3,7 +3,7 @@ package de.szeiger.interact.stc2
 import de.szeiger.interact.codegen.{ClassWriter, LocalClassLoader}
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
-import de.szeiger.interact.offheap.Allocator
+import de.szeiger.interact.offheap.{Allocator, ProxyAllocator}
 
 import java.util.Arrays
 import scala.collection.mutable
@@ -39,7 +39,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   private[this] val freeWires = mutable.HashSet.empty[Cell]
   private[this] val freeWireLookup = mutable.HashMap.empty[Int, Symbol]
   private[this] var metrics: ExecutionMetrics = _
-  private[this] var allocator: Allocator = _
+  private[this] var allocator: ProxyAllocator = _
   private[this] val singletons: Array[Cell] = new Array(symIds.size)
   private[this] var nextLabel = Long.MinValue
   private[this] val tailCallDepth = config.tailCallDepth
@@ -64,7 +64,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       sym.payloadType match {
         case PayloadType.INT => Allocator.getInt(address)
         case PayloadType.LABEL => "label@" + Allocator.getLong(address)
-        case _ => "???"
+        case PayloadType.REF => getProxy(c, Allocator.cellSize(sym.arity, sym.payloadType))
       }
     }
   }
@@ -131,10 +131,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   def allocCell(length: Int): Cell = allocator.alloc(length)
   def freeCell(address: Cell, length: Int): Unit = allocator.free(address, length)
 
-  def allocProxied(length: Int): Cell = allocator.alloc(length)
-  def freeProxied(address: Cell, length: Int): Unit = allocator.free(address, length)
-  def getProxy(cell: Cell, length: Int): AnyRef = ???
-  def setProxy(cell: Cell, length: Int, o: AnyRef): Unit = ???
+  def allocProxied(length: Int): Cell = allocator.allocProxied(length)
+  def freeProxied(address: Cell, length: Int): Unit = allocator.freeProxied(address, length)
+  def getProxy(o: Long, len: Int): AnyRef = allocator.getProxy(o, len)
+  def setProxy(o: Long, len: Int, v: AnyRef): Unit = allocator.setProxy(o, len, v)
 
   def newLabel: Long = {
     val r = nextLabel

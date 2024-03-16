@@ -13,13 +13,14 @@ import java.util.concurrent.TimeUnit
 // bench/jmh:runMain de.szeiger.interact.InterpreterBenchmark
 
 @BenchmarkMode(Array(Mode.Throughput))
-@Fork(value = 1, jvmArgsAppend = Array("-Xmx12g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC"))
+@Fork(value = 1, jvmArgsAppend = Array("-Xmx12g", "-Xss32M", "-XX:+UnlockExperimentalVMOptions", "-XX:+UseZGC",
+  "-XX:+UnlockDiagnosticVMOptions"))
 @Threads(1)
 @Warmup(iterations = 11, time = 1)
 @Measurement(iterations = 11, time = 1)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @State(Scope.Benchmark)
-class InterpreterBenchmark { self =>
+class InterpreterBenchmark {
 
   @Param(Array(
     //"sti",
