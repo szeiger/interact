@@ -34,9 +34,18 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   private def cachePayload(ac: ActiveCell): Unit = {
     if(ac.needsCachedPayload) {
       val name = s"cachedPayload${ac.id}"
-      val p = PTOps(m, ac.sym.payloadType)
-      p.getCellPayload(ptw, ac.arity) { m.lload(ac.vidx) }
-      ac.cachedPayload = m.storeLocal(p.unboxedDesc, name)
+      ac.sym.payloadType match {
+        case PayloadType.REF =>
+          m.aload(ptw).lload(ac.vidx).invoke(ptw_getProxyPage)
+          ac.cachedPayloadProxyPage = m.dup.storeLocal(tp.Object.a, s"${name}PP")
+          m.lload(ac.vidx).lconst(Allocator.proxyElemOffset).ladd.invokestatic(allocator_getInt)
+          ac.cachedPayloadProxyPageIdx = m.dup.storeLocal(tp.I, s"${name}PPI")
+          ac.cachedPayload = m.aaload.storeLocal(tp.Object, name)
+        case pt =>
+          val p = PTOps(m, pt)
+          p.getCellPayload(ptw, ac.arity) { m.lload(ac.vidx) }
+          ac.cachedPayload = m.storeLocal(p.unboxedDesc, name)
+      }
     }
   }
 
@@ -449,7 +458,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case EmbArg.Active(i) => loadCachedPayload(active(i).cachedPayload, cls); dontFlush
       case EmbArg.Temp(idx, pt) => loadTempPayload(idx, pt, cls); dontFlush
       case EmbArg.Cell(idx) =>
-        //TODO use cached boxes
         val p = PTOps(m, cellSyms(idx).payloadType)
         val tmp = p.newBoxStoreDup
         () => writeToArg(embArg) { m.aload(tmp); p.getBoxValue }
@@ -459,7 +467,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   private def writeToArg(ea: EmbArg)(loadPayload: => Unit): Unit = ea match {
     case EmbArg.Cell(idx) =>
       val sym = cellSyms(idx)
-      PTOps(m, sym.payloadType).setCellPayload(ptw, sym.arity) { m.lload(cells(idx)) } { loadPayload }
+      active.find(a => a != null && a.reuse == idx) match {
+        case Some(ac) if sym.payloadType == PayloadType.REF =>
+          m.aload(ac.cachedPayloadProxyPage).iload(ac.cachedPayloadProxyPageIdx)
+          loadPayload
+          m.aastore
+        case _ =>
+          PTOps(m, sym.payloadType).setCellPayload(ptw, sym.arity) { m.lload(cells(idx)) } { loadPayload }
+      }
   }
 
   private def setLabels(eas: Vector[EmbArg]): Unit = {
@@ -497,7 +512,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"
       val p = PTOps(m, ea.pt)
-      //TODO use cached boxes
       temp(ea.idx) = (if(boxed) p.newBoxStore(name) else m.local(p.unboxedDesc, name), boxed)
     case CreateLabelsComp(_, ea) =>
       assert(elseTarget == null)

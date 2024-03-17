@@ -50,6 +50,8 @@ object Allocator {
     }
   }
 
+  def proxyElemOffset = -4L
+
   // used by code generator:
   def putInt(address: Long, value: Int): Unit = UNSAFE.putInt(address, value)
   def getInt(address: Long): Int = UNSAFE.getInt(address)
@@ -77,6 +79,7 @@ abstract class Allocator {
 abstract class ProxyAllocator extends Allocator {
   def allocProxied(len: Long): Long
   def freeProxied(o: Long, len: Long): Unit
+  def getProxyPage(o: Long): Array[AnyRef]
   def getProxy(o: Long): AnyRef
   def setProxy(o: Long, v: AnyRef): Unit
 }
@@ -140,6 +143,8 @@ final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256,
   def allocProxied(len: Long): Long = proxySlices((len >> 3).toInt).alloc()
   def freeProxied(o: Long, len: Long): Unit = proxySlices((len >> 3).toInt).free(o)
 
+  def getProxyPage(o: Long): Array[AnyRef] = proxyPages(UNSAFE.getInt(o-8))
+
   def getProxy(o: Long): AnyRef = {
     val (p, i) = coordsOf(o)
     proxyPages(p)(i)
@@ -151,10 +156,7 @@ final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256,
   }
 
   @inline private[this] def coordsOf(o: Long) =
-    (UNSAFE.getInt(o-4), UNSAFE.getInt(o-8))
-
-  @inline private[this] def packCoords(page: Int, idx: Int): Long =
-    (page.toLong << 32) | idx
+    (UNSAFE.getInt(o-8), UNSAFE.getInt(o-4))
 
   private[this] final class Slice(sliceSize: Int) {
     private[this] val allocSize = ((blockSize / sliceSize) * sliceSize) + 8
@@ -212,7 +214,8 @@ final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256,
         o
       } else {
         if(next >= last) allocBlock()
-        UNSAFE.putLong(next, packCoords(proxyPagesLen-1, (next-block-8).toInt/sliceAllocSize))
+        UNSAFE.putInt(next, proxyPagesLen-1)
+        UNSAFE.putInt(next + 4, (next-block-8).toInt/sliceAllocSize)
         val o = next + 8
         next += sliceAllocSize
         o

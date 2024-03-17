@@ -40,6 +40,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   val ptw_allocProxied = ptwT.method("allocProxied", tp.m(tp.I)(cellT))
   val ptw_freeProxied = ptwT.method("freeProxied", tp.m(cellT, tp.I).V)
   val ptw_getProxy = ptwT.method("getProxy", tp.m(tp.J)(tp.Object))
+  val ptw_getProxyPage = ptwT.method("getProxyPage", tp.m(tp.J)(tp.Object.a))
   val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.Object).V)
   val lifecycleManaged_copy = lifecycleManagedT.method("copy", tp.m()(lifecycleManagedT))
   val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
@@ -252,4 +253,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
 final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean) {
   var reuse: Int = -1
   var cachedPayload: VarIdx = VarIdx.none
+  var cachedPayloadProxyPage: VarIdx = VarIdx.none
+  var cachedPayloadProxyPageIdx: VarIdx = VarIdx.none
 }

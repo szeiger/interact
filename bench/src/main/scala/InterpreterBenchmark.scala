@@ -7,6 +7,7 @@ import org.openjdk.jmh.runner.format.OutputFormatFactory
 import org.openjdk.jmh.runner.options.CommandLineOptions
 import org.openjdk.jmh.util.Optional
 
+import java.nio.file.Path
 import scala.jdk.CollectionConverters._
 import java.util.concurrent.TimeUnit
 import scala.util.control.NonFatal
