@@ -60,7 +60,7 @@ object MemoryDebugger extends ProxyAllocator {
     objects.remove(address)
   }
 
-  def getProxyPage(address: Long): Array[AnyRef] = {
+  def getProxyPage(address: Long): AnyRef = {
     val obj = find(address, 0)
     if(obj.address != address) throw new AssertionError(s"getProxyPage($address) not called with base address of $obj")
     if(!obj.proxied) throw new AssertionError(s"getProxyPage($address) called on non-proxied object")

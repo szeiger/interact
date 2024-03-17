@@ -37,10 +37,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       ac.sym.payloadType match {
         case PayloadType.REF =>
           m.aload(ptw).lload(ac.vidx).invoke(ptw_getProxyPage)
-          ac.cachedPayloadProxyPage = m.dup.storeLocal(tp.Object.a, s"${name}PP")
+          ac.cachedPayloadProxyPage = m.dup.storeLocal(tp.Object, s"${name}PP")
           m.lload(ac.vidx).lconst(Allocator.proxyElemOffset).ladd.invokestatic(allocator_getInt)
-          ac.cachedPayloadProxyPageIdx = m.dup.storeLocal(tp.I, s"${name}PPI")
-          ac.cachedPayload = m.aaload.storeLocal(tp.Object, name)
+          ac.cachedPayloadProxyPageOffset = m.dup.storeLocal(tp.I, s"${name}PPOff")
+          ac.cachedPayload = m.i2l.invokestatic(allocator_getObject).storeLocal(tp.Object, name)
         case pt =>
           val p = PTOps(m, pt)
           p.getCellPayload(ptw, ac.arity) { m.lload(ac.vidx) }
@@ -469,9 +469,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       val sym = cellSyms(idx)
       active.find(a => a != null && a.reuse == idx) match {
         case Some(ac) if sym.payloadType == PayloadType.REF =>
-          m.aload(ac.cachedPayloadProxyPage).iload(ac.cachedPayloadProxyPageIdx)
+          m.aload(ac.cachedPayloadProxyPage).iload(ac.cachedPayloadProxyPageOffset).i2l
           loadPayload
-          m.aastore
+          m.invokestatic(allocator_putObject)
         case _ =>
           PTOps(m, sym.payloadType).setCellPayload(ptw, sym.arity) { m.lload(cells(idx)) } { loadPayload }
       }

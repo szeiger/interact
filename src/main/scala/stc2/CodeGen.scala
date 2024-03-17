@@ -29,6 +29,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   val allocator_getInt = allocatorT.method("getInt", tp.m(tp.J).I)
   val allocator_putLong = allocatorT.method("putLong", tp.m(tp.J, tp.J).V)
   val allocator_getLong = allocatorT.method("getLong", tp.m(tp.J).J)
+  val allocator_getObject = allocatorT.method("getObject", tp.m(tp.Object, tp.J)(tp.Object))
+  val allocator_putObject = allocatorT.method("putObject", tp.m(tp.Object, tp.J, tp.Object).V)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
   val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
@@ -40,7 +42,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   val ptw_allocProxied = ptwT.method("allocProxied", tp.m(tp.I)(cellT))
   val ptw_freeProxied = ptwT.method("freeProxied", tp.m(cellT, tp.I).V)
   val ptw_getProxy = ptwT.method("getProxy", tp.m(tp.J)(tp.Object))
-  val ptw_getProxyPage = ptwT.method("getProxyPage", tp.m(tp.J)(tp.Object.a))
+  val ptw_getProxyPage = ptwT.method("getProxyPage", tp.m(tp.J)(tp.Object))
   val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.Object).V)
   val lifecycleManaged_copy = lifecycleManagedT.method("copy", tp.m()(lifecycleManagedT))
   val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
@@ -254,5 +256,5 @@ final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity
   var reuse: Int = -1
   var cachedPayload: VarIdx = VarIdx.none
   var cachedPayloadProxyPage: VarIdx = VarIdx.none
-  var cachedPayloadProxyPageIdx: VarIdx = VarIdx.none
+  var cachedPayloadProxyPageOffset: VarIdx = VarIdx.none
 }

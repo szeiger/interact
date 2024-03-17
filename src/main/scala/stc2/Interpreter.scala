@@ -137,7 +137,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def allocProxied(length: Int): Cell = allocator.allocProxied(length)
   def freeProxied(address: Cell, length: Int): Unit = allocator.freeProxied(address, length)
-  def getProxyPage(o: Long): Array[AnyRef] = allocator.getProxyPage(o)
+  def getProxyPage(o: Long): AnyRef = allocator.getProxyPage(o)
   def getProxy(o: Long): AnyRef = allocator.getProxy(o)
   def setProxy(o: Long, v: AnyRef): Unit = allocator.setProxy(o, v)
 
