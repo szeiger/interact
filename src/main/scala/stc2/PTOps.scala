@@ -1,12 +1,12 @@
 package de.szeiger.interact.stc2
 
-import de.szeiger.interact.{IntBox, IntBoxImpl, LifecycleManaged, LongBox, LongBoxImpl, RefBox, RefBoxImpl, RulePlan}
+import de.szeiger.interact.{IntBox, IntBoxImpl, LongBox, LongBoxImpl, RefBox, RefBoxImpl}
 import de.szeiger.interact.ast.PayloadType
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import de.szeiger.interact.offheap.Allocator
 
-class PTOps(m: MethodDSL, pt: PayloadType) {
-  import CommonDefs._
+class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) {
+  import codeGen._
 
   val intBoxT = tp.i[IntBox]
   val longBoxT = tp.i[LongBox]
@@ -113,5 +113,5 @@ class PTOps(m: MethodDSL, pt: PayloadType) {
 }
 
 object PTOps {
-  def apply(m: MethodDSL, pt: PayloadType): PTOps = new PTOps(m, pt)
+  def apply(m: MethodDSL, pt: PayloadType)(implicit codeGen: CodeGen): PTOps = new PTOps(m, pt, codeGen)
 }

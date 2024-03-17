@@ -3,7 +3,7 @@ package de.szeiger.interact.stc2
 import de.szeiger.interact.codegen.{ClassWriter, LocalClassLoader}
 import de.szeiger.interact._
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
-import de.szeiger.interact.offheap.{Allocator, ProxyAllocator}
+import de.szeiger.interact.offheap.{Allocator, MemoryDebugger, ProxyAllocator}
 
 import java.util.Arrays
 import scala.collection.mutable
@@ -25,11 +25,10 @@ abstract class Dispatch {
 final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, config: Config) extends BaseInterpreter { self =>
   private[this] val symIds = globals.symbols.filter(_.isCons).toVector.sortBy(_.id).iterator.zipWithIndex.toMap
   private[this] val reverseSymIds = symIds.map { case (sym, idx) => (idx, sym) }
-  private[this] val symBits = Integer.numberOfTrailingZeros(Integer.highestOneBit(symIds.size))+1
   private[this] val (initialRuleImpls: Vector[InitialRuleImpl], dispatch: Dispatch) = {
     val lcl = new LocalClassLoader
     val cw = ClassWriter(config, lcl)
-    val (initial, dispN) = new CodeGen("generated", cw, config, compilationUnit, globals, symIds, symBits).compile()
+    val (initial, dispN) = new CodeGen("generated", cw, compilationUnit, globals, symIds, config).compile()
     cw.close()
     val irs = initial.map { cln => lcl.loadClass(cln).getDeclaredConstructor().newInstance().asInstanceOf[InitialRuleImpl] }
     val disp = lcl.loadClass(dispN).getDeclaredConstructor().newInstance().asInstanceOf[Dispatch]
@@ -74,6 +73,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       //Arrays.fill(singletons, 0L)
       allocator.dispose()
       allocator = null
+      if(config.debugMemory) MemoryDebugger.setParent(null)
     }
   }
 
@@ -86,6 +86,10 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     nextLabel = Long.MinValue
     if(allocator == null) {
       allocator = config.newAllocator()
+      if(config.debugMemory) {
+        MemoryDebugger.setParent(allocator)
+        allocator = MemoryDebugger
+      }
       singletons.indices.foreach { i =>
         val s = reverseSymIds(i)
         if(s.isSingleton) singletons(i) = allocator.newCell(i, s.arity)

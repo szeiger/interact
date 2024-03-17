@@ -3,7 +3,6 @@ package de.szeiger.interact.offheap
 import de.szeiger.interact.ast.PayloadType
 
 import java.util.Arrays
-import scala.collection.mutable.ArrayBuffer
 
 object Allocator {
   // 4 (symId << 1) | 1

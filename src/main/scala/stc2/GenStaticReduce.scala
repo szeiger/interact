@@ -10,9 +10,9 @@ import org.objectweb.asm.Label
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: VarIdx, ptw: VarIdx, rule: RulePlan, codeGen: CodeGen, baseMetricName: String) {
+class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: VarIdx, ptw: VarIdx, rule: RulePlan,
+  implicit val codeGen: CodeGen, baseMetricName: String) {
   import codeGen._
-  import CommonDefs._
 
   val methodStart = m.setLabel()
   val (statCellAllocations, statProxyAllocations, statCachedCellReuse) =

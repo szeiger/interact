@@ -9,6 +9,7 @@ import org.openjdk.jmh.util.Optional
 
 import scala.jdk.CollectionConverters._
 import java.util.concurrent.TimeUnit
+import scala.util.control.NonFatal
 
 // bench/jmh:runMain de.szeiger.interact.InterpreterBenchmark
 
@@ -194,27 +195,32 @@ object InterpreterBenchmark {
     val cls = classOf[InterpreterBenchmark]
 
     def run1(testCase: String, spec: String) = {
-      println(s"-------------------- Running $testCase $spec:")
-      val i = new Compiler(Parser.parse(testCases(testCase)), prepareConfig(Config(spec))).createInterpreter()
-      i.initData()
-      println()
-      i.reduce()
-      val m = i.getMetrics
-      m.log()
-      val steps = m.getSteps
-      i.dispose()
-      println()
-      val opts = new CommandLineOptions(cls.getName, s"-pbenchmark=$testCase", s"-pspec=$spec") {
-        override def getOperationsPerInvocation = Optional.of(steps)
+      try {
+        println(s"-------------------- Running $testCase $spec:")
+        val i = new Compiler(Parser.parse(testCases(testCase)), prepareConfig(Config(spec))).createInterpreter()
+        i.initData()
+        println()
+        i.reduce()
+        val m = i.getMetrics
+        m.log()
+        val steps = m.getSteps
+        i.dispose()
+        println()
+        val opts = new CommandLineOptions(cls.getName, s"-pbenchmark=$testCase", s"-pspec=$spec") {
+          override def getOperationsPerInvocation = Optional.of(steps)
+        }
+        val runner = new Runner(opts)
+        runner.run().asScala
+      } catch { case NonFatal(ex) =>
+        ex.printStackTrace()
+        Iterable.empty
       }
-      val runner = new Runner(opts)
-      runner.run()
     }
 
     val res = for {
       testCase <- cls.getDeclaredField("benchmark").getAnnotation(classOf[Param]).value().toVector
       spec <- cls.getDeclaredField("spec").getAnnotation(classOf[Param]).value()
-      res <- run1(testCase, spec).asScala
+      res <- run1(testCase, spec)
     } yield res
 
     println("-------------------- Results")

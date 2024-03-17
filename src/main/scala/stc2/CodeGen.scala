@@ -5,18 +5,21 @@ import de.szeiger.interact.{Config, IntBox, IntBoxImpl, LifecycleManaged, LongBo
 import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
-import de.szeiger.interact.offheap.Allocator
+import de.szeiger.interact.offheap.{Allocator, MemoryDebugger}
 
 import scala.collection.mutable
 
-object CommonDefs {
+class CodeGen(genPackage: String, classWriter: ClassWriter,
+  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], val config: Config) extends AbstractCodeGen(config) {
+
   val riT = tp.c[InitialRuleImpl]
   val ptwT = tp.c[Interpreter]
   val cellT = tp.J
-  val allocatorT = tp.c[Allocator]
+  val allocatorT = if(config.debugMemory) tp.c(tp.c[MemoryDebugger.type].className.dropRight(1)) else tp.c[Allocator]
   val metaClassT = tp.c[MetaClass]
   val dispatchT = tp.c[Dispatch]
   val lifecycleManagedT = tp.i[LifecycleManaged]
+  val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
 
   val dispatch_reduce = dispatchT.method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
   val ri_reduce = riT.method("reduce", tp.m(cellT, cellT, ptwT).V)
@@ -40,13 +43,6 @@ object CommonDefs {
   val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.Object).V)
   val lifecycleManaged_copy = lifecycleManagedT.method("copy", tp.m()(lifecycleManagedT))
   val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
-}
-
-class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
-  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], symBits: Int) extends AbstractCodeGen(config) {
-  import CommonDefs._
-
-  val generatedDispatchT = tp.c(s"$genPackage/Dispatch")
   val generatedDispatch_staticReduce = generatedDispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
 
   def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =

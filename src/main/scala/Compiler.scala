@@ -77,6 +77,7 @@ case class Config(
   skipCodeGen: Boolean = false, // do not generate classfiles (stc*)
   tailCallDepth: Int = 32, // stc2
   newAllocator: () => ProxyAllocator = () => new SliceAllocator(), // stc2
+  debugMemory: Boolean = false, // stc2
 ) {
   def withSpec(spec: String): Config = spec match {
     case s"sti" => copy(backend = STIBackend)
