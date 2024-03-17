@@ -306,11 +306,18 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       bp.branches.zipWithIndex.foreach { case (b, i) => emitBranch(b, bp :: parents, s"$branchMetricName.$i") }
     else {
       for(w <- reuseBuffers if w != null) w.flush()
-      for(ac <- active if ac != null && ac.reuse == -1 && !ac.sym.isSingleton)
-        m.aload(ptw).lload(ac.vidx).iconst(Allocator.cellSize(ac.arity, ac.sym.payloadType)).invoke(ac.sym.payloadType match {
-          case PayloadType.REF => ptw_freeProxied
-          case _ => ptw_freeCell
-        })
+      for(ac <- active if ac != null && ac.reuse == -1 && !ac.sym.isSingleton) {
+        m.aload(ptw).lload(ac.vidx)
+        val sz = Allocator.cellSize(ac.arity, ac.sym.payloadType)
+        ac.sym.payloadType match {
+          case PayloadType.REF =>
+            if(specializedCellAllocSizes.contains(sz)) m.invoke(ptw_freeProxiedSpec(sz))
+            else m.iconst(sz).invoke(ptw_freeProxied)
+          case _ =>
+            if(specializedCellAllocSizes.contains(sz)) m.invoke(ptw_freeSpec(sz))
+            else m.iconst(sz).invoke(ptw_freeCell)
+        }
+      }
 
       def singleDispatchTail = tail0Syms.size == 1 && tail0Syms.head.isDefined
       recordStats(cont0, bp, parents, loopCont, tailCont, singleDispatchTail, level)
@@ -397,10 +404,15 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
       case NewCell(idx, sym, args) =>
         val size = Allocator.cellSize(sym.arity, sym.payloadType)
-        m.aload(ptw).iconst(size).invoke(sym.payloadType match {
-          case PayloadType.REF => ptw_allocProxied
-          case _ => ptw_allocCell
-        })
+        m.aload(ptw)
+        sym.payloadType match {
+          case PayloadType.REF =>
+            if(specializedCellAllocSizes.contains(size)) m.invoke(ptw_allocProxiedSpec(size))
+            else m.iconst(size).invoke(ptw_allocProxied)
+          case _ =>
+            if(specializedCellAllocSizes.contains(size)) m.invoke(ptw_allocSpec(size))
+            else m.iconst(size).invoke(ptw_allocCell)
+        }
         allocMetrics.updateWith(size) { case None => Some(1); case Some(n) => Some(n+1) }
         assert(symIds(sym) >= 0)
         m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)

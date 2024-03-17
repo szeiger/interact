@@ -6,7 +6,7 @@ import java.util.Arrays
 
 object Allocator {
   // 4 (symId << 1) | 1
-  // 4 payload (int, ref proxy)
+  // 4 payload (int)
   // 8 cp_0
   // ...
   // 8 cp_n
@@ -86,6 +86,15 @@ abstract class Allocator {
 
   final def freeCell(address: Long, arity: Int, pt: PayloadType = PayloadType.VOID): Unit =
     free(address, cellSize(arity, pt))
+
+  def alloc8(): Long = alloc(8)
+  def alloc16(): Long = alloc(16)
+  def alloc24(): Long = alloc(24)
+  def alloc32(): Long = alloc(32)
+  def free8(o: Long): Unit = free(o, 8)
+  def free16(o: Long): Unit = free(o, 16)
+  def free24(o: Long): Unit = free(o, 24)
+  def free32(o: Long): Unit = free(o, 32)
 }
 
 abstract class ProxyAllocator extends Allocator {
@@ -94,6 +103,15 @@ abstract class ProxyAllocator extends Allocator {
   def getProxyPage(o: Long): AnyRef
   def getProxy(o: Long): AnyRef
   def setProxy(o: Long, v: AnyRef): Unit
+
+  def alloc8p(): Long = allocProxied(8)
+  def alloc16p(): Long = allocProxied(16)
+  def alloc24p(): Long = allocProxied(24)
+  def alloc32p(): Long = allocProxied(32)
+  def free8p(o: Long): Unit = freeProxied(o, 8)
+  def free16p(o: Long): Unit = freeProxied(o, 16)
+  def free24p(o: Long): Unit = freeProxied(o, 24)
+  def free32p(o: Long): Unit = freeProxied(o, 32)
 }
 
 object SystemAllocator extends Allocator {
@@ -148,6 +166,33 @@ final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256,
   private[this] val proxySlices: Array[ProxySlice] = Array.tabulate(maxSliceSize >> 3)(i => new ProxySlice((i+1) << 3))
   private[this] var proxyPages: Array[Array[AnyRef]] = new Array[Array[AnyRef]](64)
   private[this] var proxyPagesLen: Int= 0
+
+  private[this] val slice8: Slice = slices(8 >> 3)
+  private[this] val slice16: Slice = slices(16 >> 3)
+  private[this] val slice24: Slice = slices(24 >> 3)
+  private[this] val slice32: Slice = slices(32 >> 3)
+  private[this] val slice8p: ProxySlice = proxySlices(8 >> 3)
+  private[this] val slice16p: ProxySlice = proxySlices(16 >> 3)
+  private[this] val slice24p: ProxySlice = proxySlices(24 >> 3)
+  private[this] val slice32p: ProxySlice = proxySlices(32 >> 3)
+
+  override def alloc8(): Long = slice8.alloc()
+  override def alloc16(): Long = slice16.alloc()
+  override def alloc24(): Long = slice24.alloc()
+  override def alloc32(): Long = slice32.alloc()
+  override def free8(o: Long): Unit = slice8.free(o)
+  override def free16(o: Long): Unit = slice16.free(o)
+  override def free24(o: Long): Unit = slice24.free(o)
+  override def free32(o: Long): Unit = slice32.free(o)
+
+  override def alloc8p(): Long = slice8p.alloc()
+  override def alloc16p(): Long = slice16p.alloc()
+  override def alloc24p(): Long = slice24p.alloc()
+  override def alloc32p(): Long = slice32p.alloc()
+  override def free8p(o: Long): Unit = slice8p.free(o)
+  override def free16p(o: Long): Unit = slice16p.free(o)
+  override def free24p(o: Long): Unit = slice24p.free(o)
+  override def free32p(o: Long): Unit = slice32p.free(o)
 
   def dispose(): Unit = blockAllocator.dispose()
   def alloc(len: Long): Long = slices((len >> 3).toInt).alloc()

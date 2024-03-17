@@ -134,9 +134,27 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def allocCell(length: Int): Cell = allocator.alloc(length)
   def freeCell(address: Cell, length: Int): Unit = allocator.free(address, length)
-
   def allocProxied(length: Int): Cell = allocator.allocProxied(length)
   def freeProxied(address: Cell, length: Int): Unit = allocator.freeProxied(address, length)
+
+  def alloc8(): Long = allocator.alloc8()
+  def alloc16(): Long = allocator.alloc16()
+  def alloc24(): Long = allocator.alloc24()
+  def alloc32(): Long = allocator.alloc32()
+  def free8(o: Long): Unit = allocator.free8(o)
+  def free16(o: Long): Unit = allocator.free16(o)
+  def free24(o: Long): Unit = allocator.free24(o)
+  def free32(o: Long): Unit = allocator.free32(o)
+
+  def alloc8p(): Long = allocator.alloc8p()
+  def alloc16p(): Long = allocator.alloc16p()
+  def alloc24p(): Long = allocator.alloc24p()
+  def alloc32p(): Long = allocator.alloc32p()
+  def free8p(o: Long): Unit = allocator.free8p(o)
+  def free16p(o: Long): Unit = allocator.free16p(o)
+  def free24p(o: Long): Unit = allocator.free24p(o)
+  def free32p(o: Long): Unit = allocator.free32p(o)
+
   def getProxyPage(o: Long): AnyRef = allocator.getProxyPage(o)
   def getProxy(o: Long): AnyRef = allocator.getProxy(o)
   def setProxy(o: Long, v: AnyRef): Unit = allocator.setProxy(o, v)
