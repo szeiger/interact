@@ -75,7 +75,6 @@ class PTOps(m: MethodDSL, pt: PayloadType) {
       case PayloadType.REF =>
         m.aload(ptw)
         loadCell
-        m.iconst(Allocator.cellSize(arity, pt))
         loadUnboxedPayload
         m.invoke(ptw_setProxy)
     }
@@ -87,7 +86,6 @@ class PTOps(m: MethodDSL, pt: PayloadType) {
       case PayloadType.REF =>
         m.aload(ptw)
         loadCell
-        m.iconst(Allocator.cellSize(arity, pt))
         m.invoke(ptw_getProxy)
       case PayloadType.INT =>
         loadCell

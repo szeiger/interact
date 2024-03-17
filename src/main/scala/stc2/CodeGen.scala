@@ -36,8 +36,8 @@ object CommonDefs {
   val ptw_newLabel = ptwT.method("newLabel", tp.m().J)
   val ptw_allocProxied = ptwT.method("allocProxied", tp.m(tp.I)(cellT))
   val ptw_freeProxied = ptwT.method("freeProxied", tp.m(cellT, tp.I).V)
-  val ptw_getProxy = ptwT.method("getProxy", tp.m(tp.J, tp.I)(tp.Object))
-  val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.I, tp.Object).V)
+  val ptw_getProxy = ptwT.method("getProxy", tp.m(tp.J)(tp.Object))
+  val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.Object).V)
   val lifecycleManaged_copy = lifecycleManagedT.method("copy", tp.m()(lifecycleManagedT))
   val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
 }

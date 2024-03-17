@@ -64,7 +64,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       sym.payloadType match {
         case PayloadType.INT => Allocator.getInt(address)
         case PayloadType.LABEL => "label@" + Allocator.getLong(address)
-        case PayloadType.REF => getProxy(c, Allocator.cellSize(sym.arity, sym.payloadType))
+        case PayloadType.REF => getProxy(c)
       }
     }
   }
@@ -133,8 +133,8 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def allocProxied(length: Int): Cell = allocator.allocProxied(length)
   def freeProxied(address: Cell, length: Int): Unit = allocator.freeProxied(address, length)
-  def getProxy(o: Long, len: Int): AnyRef = allocator.getProxy(o, len)
-  def setProxy(o: Long, len: Int, v: AnyRef): Unit = allocator.setProxy(o, len, v)
+  def getProxy(o: Long): AnyRef = allocator.getProxy(o)
+  def setProxy(o: Long, v: AnyRef): Unit = allocator.setProxy(o, v)
 
   def newLabel: Long = {
     val r = nextLabel

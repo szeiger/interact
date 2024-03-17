@@ -2,6 +2,7 @@ package de.szeiger.interact.offheap
 
 import de.szeiger.interact.ast.PayloadType
 
+import java.util.Arrays
 import scala.collection.mutable.ArrayBuffer
 
 object Allocator {
@@ -77,8 +78,8 @@ abstract class Allocator {
 abstract class ProxyAllocator extends Allocator {
   def allocProxied(len: Long): Long
   def freeProxied(o: Long, len: Long): Unit
-  def getProxy(o: Long, len: Int): AnyRef
-  def setProxy(o: Long, len: Int, v: AnyRef): Unit
+  def getProxy(o: Long): AnyRef
+  def setProxy(o: Long, v: AnyRef): Unit
 }
 
 object SystemAllocator extends Allocator {
@@ -123,13 +124,16 @@ final class ArenaAllocator(blockSize: Long = 1024L*1024L*8L) extends Allocator {
 }
 
 final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256, arenaSize: Long = 1024L*1024L*8L) extends ProxyAllocator {
+  import Allocator._
   assert(blockSize % 8 == 0)
   assert(maxSliceSize % 8 == 0)
   assert(blockSize >= maxSliceSize)
 
   private[this] val blockAllocator = new ArenaAllocator(arenaSize)
-  private[this] val slices: Array[Slice] = Array.tabulate(maxSliceSize >> 3)(i => new Slice((i+1) << 3, blockSize, blockAllocator))
-  private[this] val proxySlices: Array[ProxySlice] = Array.tabulate(maxSliceSize >> 3)(i => new ProxySlice((i+1) << 3, blockSize, blockAllocator))
+  private[this] val slices: Array[Slice] = Array.tabulate(maxSliceSize >> 3)(i => new Slice((i+1) << 3))
+  private[this] val proxySlices: Array[ProxySlice] = Array.tabulate(maxSliceSize >> 3)(i => new ProxySlice((i+1) << 3))
+  private[this] var proxyPages: Array[Array[AnyRef]] = new Array[Array[AnyRef]](64)
+  private[this] var proxyPagesLen: Int= 0
 
   def dispose(): Unit = blockAllocator.dispose()
   def alloc(len: Long): Long = slices((len >> 3).toInt).alloc()
@@ -137,97 +141,89 @@ final class SliceAllocator(blockSize: Long = 1024L*64L, maxSliceSize: Int = 256,
   def allocProxied(len: Long): Long = proxySlices((len >> 3).toInt).alloc()
   def freeProxied(o: Long, len: Long): Unit = proxySlices((len >> 3).toInt).free(o)
 
-  def getProxy(o: Long, len: Int): AnyRef = proxySlices(len >> 3).getProxy(o)
-  def setProxy(o: Long, len: Int, v: AnyRef): Unit = proxySlices(len >> 3).setProxy(o, v)
-}
-
-final class Slice(sliceSize: Int, blockSize: Long, parent: Allocator) {
-  import Allocator._
-
-  private[this] val allocSize = ((blockSize / sliceSize) * sliceSize) + 8
-  private[this] var block, last, next, freeSlice = 0L
-
-  private[this] def allocBlock(): Unit = {
-    val b = parent.alloc(allocSize)
-    UNSAFE.putLong(b, block)
-    block = b
-    next = b + 8
-    last = b + allocSize - sliceSize
-  }
-
-  def alloc(): Long = {
-    if(freeSlice != 0L) {
-      val o = freeSlice
-      freeSlice = UNSAFE.getLong(o)
-      o
-    } else {
-      if(next >= last) allocBlock()
-      val o = next
-      next += sliceSize
-      o
-    }
-  }
-
-  def free(o: Long): Unit = {
-    UNSAFE.putLong(o, freeSlice)
-    freeSlice = o
-  }
-}
-
-final class ProxySlice(_sliceSize: Int, _blockSize: Long, parent: Allocator) {
-  import Allocator._
-
-  private[this] val sliceAllocSize = _sliceSize + 8
-  private[this] val numBlocks = (_blockSize / sliceAllocSize).toInt
-  private[this] val allocSize = (numBlocks * sliceAllocSize) + 8
-  private[this] var block, last, next, freeSlice = 0L
-  private[this] val proxies: ArrayBuffer[Array[AnyRef]] = ArrayBuffer.empty
-
-  @inline private[this] def coordsOf(o: Long) = {
-    val l = UNSAFE.getLong(o-8)
-    (((l >> 32) & 0xFFFFFFFFL).toInt, (l & 0xFFFFFFFFL).toInt)
-  }
-
-  @inline private[this] def packCoords(page: Int, idx: Int): Long =
-    (page.toLong << 32) | idx
-
-  private[this] def allocBlock(): Unit = {
-    val b = parent.alloc(allocSize)
-    UNSAFE.putLong(b, block)
-    block = b
-    next = b + 8
-    last = b + allocSize - sliceAllocSize
-    proxies += new Array[AnyRef](numBlocks)
-  }
-
-  def alloc(): Long = {
-    if(freeSlice != 0L) {
-      val o = freeSlice
-      freeSlice = UNSAFE.getLong(o)
-      o
-    } else {
-      if(next >= last) allocBlock()
-      UNSAFE.putLong(next, packCoords(proxies.length-1, (next-block-8).toInt/sliceAllocSize))
-      val o = next + 8
-      next += sliceAllocSize
-      o
-    }
-  }
-
-  def free(o: Long): Unit = {
-    val (p, i) = coordsOf(o)
-    proxies(p)(i) = null
-    UNSAFE.putLong(o, freeSlice)
-    freeSlice = o
-  }
-
   def getProxy(o: Long): AnyRef = {
     val (p, i) = coordsOf(o)
-    proxies(p)(i)
+    proxyPages(p)(i)
   }
 
   def setProxy(o: Long, v: AnyRef): Unit = {
     val (p, i) = coordsOf(o)
-    proxies(p)(i) = v
+    proxyPages(p)(i) = v
+  }
+
+  @inline private[this] def coordsOf(o: Long) =
+    (UNSAFE.getInt(o-4), UNSAFE.getInt(o-8))
+
+  @inline private[this] def packCoords(page: Int, idx: Int): Long =
+    (page.toLong << 32) | idx
+
+  private[this] final class Slice(sliceSize: Int) {
+    private[this] val allocSize = ((blockSize / sliceSize) * sliceSize) + 8
+    private[this] var block, last, next, freeSlice = 0L
+
+    private[this] def allocBlock(): Unit = {
+      val b = blockAllocator.alloc(allocSize)
+      UNSAFE.putLong(b, block)
+      block = b
+      next = b + 8
+      last = b + allocSize - sliceSize
+    }
+
+    def alloc(): Long = {
+      if(freeSlice != 0L) {
+        val o = freeSlice
+        freeSlice = UNSAFE.getLong(o)
+        o
+      } else {
+        if(next >= last) allocBlock()
+        val o = next
+        next += sliceSize
+        o
+      }
+    }
+
+    def free(o: Long): Unit = {
+      UNSAFE.putLong(o, freeSlice)
+      freeSlice = o
+    }
+  }
+
+  private[this] final class ProxySlice(_sliceSize: Int) {
+    private[this] val sliceAllocSize = _sliceSize + 8
+    private[this] val numBlocks = (blockSize / sliceAllocSize).toInt
+    private[this] val allocSize = (numBlocks * sliceAllocSize) + 8
+    private[this] var block, last, next, freeSlice = 0L
+
+    private[this] def allocBlock(): Unit = {
+      val b = blockAllocator.alloc(allocSize)
+      UNSAFE.putLong(b, block)
+      block = b
+      next = b + 8
+      last = b + allocSize - sliceAllocSize
+      proxyPagesLen += 1
+      if(proxyPagesLen == proxyPages.length)
+        proxyPages = Arrays.copyOf(proxyPages, proxyPages.length * 2)
+      proxyPages(proxyPagesLen-1) = new Array[AnyRef](numBlocks)
+    }
+
+    def alloc(): Long = {
+      if(freeSlice != 0L) {
+        val o = freeSlice
+        freeSlice = UNSAFE.getLong(o)
+        o
+      } else {
+        if(next >= last) allocBlock()
+        UNSAFE.putLong(next, packCoords(proxyPagesLen-1, (next-block-8).toInt/sliceAllocSize))
+        val o = next + 8
+        next += sliceAllocSize
+        o
+      }
+    }
+
+    def free(o: Long): Unit = {
+      setProxy(o, null)
+      UNSAFE.putLong(o, freeSlice)
+      freeSlice = o
+    }
   }
 }
