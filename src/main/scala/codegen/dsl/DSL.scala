@@ -36,7 +36,7 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
   private[this] val fields = ArrayBuffer.empty[Field]
   private[this] val methods = ArrayBuffer.empty[MethodDSL]
 
-  val thisTp: Owner = if(access.has(Acc.INTERFACE)) new InterfaceOwner(name) else new ClassOwner(name)
+  val thisTp: Owner = if(access.has(Acc.INTERFACE)) new InterfaceOwner(name, None) else new ClassOwner(name, None)
   def thisClassTp: ClassOwner = thisTp.asInstanceOf[ClassOwner]
   def thisInterfaceTp: InterfaceOwner = thisTp.asInstanceOf[InterfaceOwner]
 

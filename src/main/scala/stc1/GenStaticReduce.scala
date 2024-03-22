@@ -1,7 +1,7 @@
 package de.szeiger.interact.stc1
 
 import de.szeiger.interact._
-import de.szeiger.interact.ast.{EmbeddedType, PayloadType, Symbol}
+import de.szeiger.interact.ast.{EmbeddedType, Symbol}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import org.objectweb.asm.Label
 
@@ -29,9 +29,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   private def cachePayload(ac: ActiveCell): Unit = {
     if(ac.needsCachedPayload) {
       val name = s"cachedPayload${ac.id}"
-      ac.cachedPayload =
-        if(ac.sym.payloadType == PayloadType.INT) m.aload(ac.vidx).invoke(intBox_getValue).storeLocal(tp.I, name)
-        else m.aload(ac.vidx).invoke(refBox_getValue).storeLocal(tp.c[AnyRef], name)
+      val p = PTOps(m, ac.sym.payloadType)
+      m.aload(ac.vidx)
+      ac.cachedPayload = p.getBoxValue.storeLocal(p.desc.unboxedT, name)
     }
   }
 
@@ -343,12 +343,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     case AllocateTemp(ea, boxed) =>
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"
-      temp(ea.idx) = ((ea.pt, boxed) match { //TODO use cached boxes
-        case (PayloadType.INT, true) => m.newInitDup(new_IntBoxImpl)().storeLocal(intBoxImplT, name)
-        case (PayloadType.INT, false) => m.local(tp.I, name)
-        case (_, true) => m.newInitDup(new_RefBoxImpl)().storeLocal(refBoxImplT, name)
-        case (_, false) => m.local(tp.c[AnyRef], name)
-      }, boxed)
+      val p = PTOps(m, ea.pt)
+      temp(ea.idx) = (if(boxed) p.newBoxStore(name) else m.local(p.desc.unboxedT, name), boxed)
     case CreateLabelsComp(_, ea) =>
       assert(elseTarget == null)
       m.newInitDup(tp.c[AnyRef].constr(tp.m().V))()
@@ -363,27 +359,15 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
       callPayloadMethod(m, pc, elseTarget)
     case pc: PayloadAssignment =>
       assert(elseTarget == null)
-      assert(pc.payloadType.isDefined)
-      if(pc.payloadType == PayloadType.INT) {
-        unboxedTemp(pc.targetIdx) match {
-          case Some(vi) =>
-            loadArg(pc.sourceIdx, classOf[Int])
-            m.istore(vi)
-          case None =>
-            loadArg(pc.targetIdx, classOf[IntBox])
-            loadArg(pc.sourceIdx, classOf[Int])
-            m.invoke(intBox_setValue)
-        }
-      } else {
-        unboxedTemp(pc.targetIdx) match {
-          case Some(vi) =>
-            loadArg(pc.sourceIdx, classOf[AnyRef])
-            m.astore(vi)
-          case None =>
-            loadArg(pc.targetIdx, classOf[RefBox])
-            loadArg(pc.sourceIdx, classOf[AnyRef])
-            m.invoke(refBox_setValue)
-        }
+      val p = PTOps(m, pc.payloadType)
+      unboxedTemp(pc.targetIdx) match {
+        case Some(vi) =>
+          loadArg(pc.sourceIdx, p.unboxedClass)
+          p.store(vi)
+        case None =>
+          loadArg(pc.targetIdx, p.boxedClass)
+          loadArg(pc.sourceIdx, p.unboxedClass)
+          p.setBoxValue
       }
     case PayloadMethodApplicationWithReturn(method, retIdx) =>
       assert(elseTarget == null)

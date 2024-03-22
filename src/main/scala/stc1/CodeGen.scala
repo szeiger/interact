@@ -1,8 +1,8 @@
 package de.szeiger.interact.stc1
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
-import de.szeiger.interact.{Config, IntBox, IntBoxImpl, PlanRules, RefBox, RefBoxImpl, RulePlan}
-import de.szeiger.interact.ast.{CompilationUnit, PayloadType, Symbol, Symbols}
+import de.szeiger.interact.{Config, IntBox, IntBoxImpl, RefBox, RefBoxImpl, RulePlan}
+import de.szeiger.interact.ast.{CompilationUnit, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
 import scala.collection.mutable
@@ -50,10 +50,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
   def concreteCellTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/C_${encodeName(sym)}") else cellT
   def concreteConstrFor(sym: Symbol) = concreteCellTFor(sym).constr(tp.m((0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
   def concreteReinitFor(sym: Symbol) = concreteCellTFor(sym).method("reinit", tp.m((0 until sym.arity).flatMap(_ => Seq(cellT, tp.I)): _*).V)
-  def concretePayloadFieldFor(sym: Symbol) = concreteCellTFor(sym).field("value", sym.payloadType match {
-    case PayloadType.INT => tp.I
-    case _ => tp.c[AnyRef]
-  })
   def cell_acell(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"acell$p", cellT)
   def cell_aport(sym: Symbol, p: Int) = concreteCellTFor(sym).field(s"aport$p", tp.I)
   def cell_singleton(sym: Symbol) = { val tp = concreteCellTFor(sym); tp.field("singleton", tp) }
@@ -93,11 +89,9 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       case rk if rk.sym2 == sym => (rk.sym1, rk)
     }.toMap
     val interfaces = (rulePairs.keySet -- common).iterator.map(s => interfaceT(s).className).toArray.sorted
-    val payloadInterfaces = sym.payloadType match {
-      case PayloadType.INT => Vector(intBoxT.className)
-      case PayloadType.REF | PayloadType.LABEL => Vector(refBoxT.className)
-      case _ => Vector.empty
-    }
+    val payloadInterfaces =
+      if(sym.payloadType.isDefined) Vector(PTOps.boxDesc(sym.payloadType).boxT.className)
+      else Vector.empty
     val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteCellTFor(sym).className, commonCellT, interfaces ++ payloadInterfaces)
 
     val (cfields, pfields) = (0 until sym.arity).map(i => (c.field(Acc.PUBLIC, s"acell$i", cellT), c.field(Acc.PUBLIC, s"aport$i", tp.I))).unzip
@@ -175,12 +169,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     }
 
     // payload implementation
-    if(sym.payloadType.isDefined) {
-      val field = concretePayloadFieldFor(sym)
-      c.field(Acc.PUBLIC, field)
-      c.setter(field)
-      c.getter(field)
-    }
+    if(sym.payloadType.isDefined)
+      PTOps.boxDesc(sym.payloadType).implementInterface(c, concreteCellTFor(sym))
 
     // generic reduce
     {

@@ -44,7 +44,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         case pt =>
           val p = PTOps(m, pt)
           p.getCellPayload(ptw, ac.arity) { m.lload(ac.vidx) }
-          ac.cachedPayload = m.storeLocal(p.unboxedDesc, name)
+          ac.cachedPayload = m.storeLocal(p.desc.unboxedT, name)
       }
     }
   }
@@ -524,7 +524,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"
       val p = PTOps(m, ea.pt)
-      temp(ea.idx) = (if(boxed) p.newBoxStore(name) else m.local(p.unboxedDesc, name), boxed)
+      temp(ea.idx) = (if(boxed) p.newBoxStore(name) else m.local(p.desc.unboxedT, name), boxed)
     case CreateLabelsComp(_, ea) =>
       assert(elseTarget == null)
       m.aload(ptw).invoke(ptw_newLabel)

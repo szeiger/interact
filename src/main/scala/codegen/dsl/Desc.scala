@@ -17,18 +17,21 @@ abstract class Desc {
 }
 abstract class MethodDesc extends Desc
 abstract class ValDesc extends Desc {
-  def a: ValDesc = new Desc.ValDescImpl("["+desc)
+  def a: ValDesc = new Desc.ValDescImpl("["+desc, jvmClass.map(c => c.arrayType()))
   def width: Int = {
     val d = desc
     if(d == "J" || d == "D") 2
     else 1
   }
+  def jvmClass: Option[Class[_]]
 }
-final class PrimitiveValDesc(val desc: String, val jvmType: Class[_]) extends ValDesc
+final class PrimitiveValDesc(val desc: String, val jvmType: Class[_]) extends ValDesc {
+  def jvmClass = Some(jvmType)
+}
 
 object Desc {
   import java.lang.{String => JString}
-  private[dsl] class ValDescImpl(val desc: JString) extends ValDesc
+  private[dsl] class ValDescImpl(val desc: JString, val jvmClass: Option[Class[_]]) extends ValDesc
   private[this] class MethodDescImpl(val desc: JString) extends MethodDesc
   class MethodArgs private[Desc] (params: Seq[ValDesc]) {
     private[this] def d = params.iterator.map(_.desc).mkString("(", "", ")")
@@ -52,15 +55,15 @@ object Desc {
   val F: PrimitiveValDesc = new PrimitiveValDesc("F", java.lang.Float.TYPE)
   val J: PrimitiveValDesc = new PrimitiveValDesc("J", java.lang.Long.TYPE)
   val V: PrimitiveValDesc = new PrimitiveValDesc("V", java.lang.Void.TYPE)
-  val Object: ClassOwner = c("java/lang/Object")
-  val String: ClassOwner = c("java/lang/String")
+  val Object: ClassOwner = c[AnyRef]
+  val String: ClassOwner = c[String]
   def m(desc: JString): MethodDesc = new MethodDescImpl(desc)
   def m(jMethod: java.lang.reflect.Method): MethodDesc = m(Type.getMethodDescriptor(jMethod))
   def m(params: ValDesc*): MethodArgs = new MethodArgs(params)
-  def c(className: JString): ClassOwner = new ClassOwner(className)
+  def c(className: JString): ClassOwner = new ClassOwner(className, None)
   def c(cls: Class[_]): ClassOwner = ClassOwner(cls)
   def c[T : ClassTag]: ClassOwner = ClassOwner.apply[T]
-  def i(className: JString): InterfaceOwner = new InterfaceOwner(className)
+  def i(className: JString): InterfaceOwner = new InterfaceOwner(className, None)
   def i(cls: Class[_]): InterfaceOwner = InterfaceOwner(cls)
   def i[T : ClassTag]: InterfaceOwner = InterfaceOwner.apply[T]
   def o(cls: Class[_]): Owner = Owner(cls)
@@ -81,7 +84,7 @@ object Owner {
   def apply(cls: Class[_]): Owner =
     if(cls.isInterface) InterfaceOwner(cls) else ClassOwner(cls)
 }
-class ClassOwner(val className: String) extends Owner {
+class ClassOwner(val className: String, val jvmClass: Option[Class[_]]) extends Owner {
   def javaName = className.replace('/', '.')
   def isInterface = false
   def constr(desc: MethodDesc): ConstructorRef = new ConstructorRef(this, desc)
@@ -90,17 +93,17 @@ object ClassOwner {
   def apply[T](implicit ct: ClassTag[T]): ClassOwner = apply(ct.runtimeClass)
   def apply(cls: Class[_]): ClassOwner = {
     assert(!cls.isInterface)
-    new ClassOwner(cls.getName.replace('.', '/'))
+    new ClassOwner(cls.getName.replace('.', '/'), Some(cls))
   }
 }
-class InterfaceOwner(val className: String) extends Owner {
+class InterfaceOwner(val className: String, val jvmClass: Option[Class[_]]) extends Owner {
   def isInterface = true
 }
 object InterfaceOwner {
   def apply[T](implicit ct: ClassTag[T]): InterfaceOwner = apply(ct.runtimeClass)
   def apply(cls: Class[_]): InterfaceOwner = {
     assert(cls.isInterface)
-    new InterfaceOwner(cls.getName.replace('.', '/'))
+    new InterfaceOwner(cls.getName.replace('.', '/'), Some(cls))
   }
 }
 

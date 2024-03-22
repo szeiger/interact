@@ -1,8 +1,8 @@
 package de.szeiger.interact.stc2
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
-import de.szeiger.interact.{Config, IntBox, IntBoxImpl, LifecycleManaged, LongBox, LongBoxImpl, RefBox, RefBoxImpl, RulePlan}
-import de.szeiger.interact.ast.{CompilationUnit, PayloadType, RuleKey, Symbol, Symbols}
+import de.szeiger.interact.{Config, LifecycleManaged, RulePlan}
+import de.szeiger.interact.ast.{CompilationUnit, Symbol, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import de.szeiger.interact.offheap.{Allocator, MemoryDebugger}
