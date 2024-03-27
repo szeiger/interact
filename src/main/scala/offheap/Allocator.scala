@@ -1,53 +1,12 @@
 package de.szeiger.interact.offheap
 
-import de.szeiger.interact.ast.PayloadType
-
 import java.util.Arrays
 
 object Allocator {
-  // 4 (symId << 1) | 1
-  // 4 payload (int)
-  // 8 cp_0
-  // ...
-  // 8 cp_n
-  // (0/8) payload (label)
-
   val UNSAFE = {
     val f = classOf[sun.misc.Unsafe].getDeclaredField("theUnsafe")
     f.setAccessible(true)
     f.get(null).asInstanceOf[sun.misc.Unsafe]
-  }
-
-  def auxCPOffset(p: Int): Int = 8 + (p * 8)
-  def payloadOffset(arity: Int, pt: PayloadType): Int =
-    if(pt == PayloadType.LABEL) 8 + (arity * 8) else 4
-
-  def cellSize(arity: Int, pt: PayloadType) = {
-    val psize = if(pt == PayloadType.LABEL) 8 else 0
-    arity*8 + 8 + psize
-  }
-
-  def symId(c: Long): Int = getInt(c) >> 1
-  def auxCP(c: Long, p: Int): Long = getLong(c + auxCPOffset(p)) & -3L
-  private[this] def setAuxCP(c: Long, p: Int, cp2: Long): Unit = putLong(c + auxCPOffset(p), cp2)
-  def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, encodeAux(c2, p2))
-
-  private[this] def encodeAux(c: Long, p: Int) = {
-    val l = c + auxCPOffset(p)
-    if(p >= 0) l | 2L else l
-  }
-
-  def findCellAndPort(_cp: Long): (Long, Int) = {
-    var cp = _cp
-    if((cp & 1L) == 1L) {
-      (cp, -1)
-    } else {
-      cp = cp & -3L
-      var p = -1
-      while((getInt(cp - auxCPOffset(p)) & 1) == 0)
-        p += 1
-      (cp - auxCPOffset(p), p)
-    }
   }
 
   def proxyElemOffset = -4L
@@ -72,25 +31,15 @@ object Allocator {
 }
 
 abstract class Allocator {
-  import Allocator._
-
   def dispose(): Unit
+
   def alloc(len: Long): Long
-  def free(address: Long, len: Long): Unit
-
-  final def newCell(symId: Int, arity: Int, pt: PayloadType = PayloadType.VOID): Long = {
-    val o = alloc(cellSize(arity, pt))
-    putInt(o, (symId << 1) | 1)
-    o
-  }
-
-  final def freeCell(address: Long, arity: Int, pt: PayloadType = PayloadType.VOID): Unit =
-    free(address, cellSize(arity, pt))
-
   def alloc8(): Long = alloc(8)
   def alloc16(): Long = alloc(16)
   def alloc24(): Long = alloc(24)
   def alloc32(): Long = alloc(32)
+
+  def free(address: Long, len: Long): Unit
   def free8(o: Long): Unit = free(o, 8)
   def free16(o: Long): Unit = free(o, 16)
   def free24(o: Long): Unit = free(o, 24)
@@ -98,16 +47,17 @@ abstract class Allocator {
 }
 
 abstract class ProxyAllocator extends Allocator {
-  def allocProxied(len: Long): Long
-  def freeProxied(o: Long, len: Long): Unit
   def getProxyPage(o: Long): AnyRef
   def getProxy(o: Long): AnyRef
   def setProxy(o: Long, v: AnyRef): Unit
 
+  def allocProxied(len: Long): Long
   def alloc8p(): Long = allocProxied(8)
   def alloc16p(): Long = allocProxied(16)
   def alloc24p(): Long = allocProxied(24)
   def alloc32p(): Long = allocProxied(32)
+
+  def freeProxied(o: Long, len: Long): Unit
   def free8p(o: Long): Unit = freeProxied(o, 8)
   def free16p(o: Long): Unit = freeProxied(o, 16)
   def free24p(o: Long): Unit = freeProxied(o, 24)

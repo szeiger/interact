@@ -84,7 +84,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
     def flush(): Unit =
       for(p <- 0 until free.length if free(p) != VarIdx.none || cell(p) != null) {
-        m.lload(cells(cellIdx)).lconst(Allocator.auxCPOffset(p)).ladd
+        m.lload(cells(cellIdx)).lconst(Interpreter.auxCPOffset(p)).ladd
         if(free(p) != VarIdx.none) m.lload(free(p)) else ldTaggedCP(cell(p))
         m.invokestatic(allocator_putLong)
       }
@@ -94,7 +94,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   private def ldTaggedCPFRaw(idx: FreeIdx): m.type = {
     m.lload(active(idx.active).vidx)
-    Allocator.auxCPOffset(idx.port) match {
+    Interpreter.auxCPOffset(idx.port) match {
       case 0 =>
       case off => m.lconst(off).ladd
     }
@@ -110,7 +110,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
       case idx: CellIdx =>
         m.lload(cells(idx.idx))
-        var l = Allocator.auxCPOffset(idx.port)
+        var l = Interpreter.auxCPOffset(idx.port)
         if(idx.port >= 0) l += 2
         if(l != 0) {
           m.lconst(l).ladd
@@ -127,7 +127,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         None
       case idx: CellIdx =>
         m.lload(cells(idx.idx))
-        Allocator.auxCPOffset(idx.port) match {
+        Interpreter.auxCPOffset(idx.port) match {
           case 0 => Some(cells(idx.idx))
           case off => m.lconst(off).ladd; None
         }
@@ -145,7 +145,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case Some(b) => b.set(idx.port, ct2)
       case None =>
         m.lload(cells(idx.idx))
-        m.lconst(Allocator.auxCPOffset(idx.port)).ladd
+        m.lconst(Interpreter.auxCPOffset(idx.port)).ladd
         ldTaggedCP(ct2)
         m.invokestatic(allocator_putLong)
     }
@@ -308,7 +308,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       for(w <- reuseBuffers if w != null) w.flush()
       for(ac <- active if ac != null && ac.reuse == -1 && !ac.sym.isSingleton) {
         m.aload(ptw).lload(ac.vidx)
-        val sz = Allocator.cellSize(ac.arity, ac.sym.payloadType)
+        val sz = Interpreter.cellSize(ac.arity, ac.sym.payloadType)
         ac.sym.payloadType match {
           case PayloadType.REF =>
             if(specializedCellAllocSizes.contains(sz)) m.invoke(ptw_freeProxiedSpec(sz))
@@ -403,7 +403,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         if(sym != active(act).sym)
           m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
       case NewCell(idx, sym, args) =>
-        val size = Allocator.cellSize(sym.arity, sym.payloadType)
+        val size = Interpreter.cellSize(sym.arity, sym.payloadType)
         m.aload(ptw)
         sym.payloadType match {
           case PayloadType.REF =>
@@ -420,7 +420,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           case (CellIdx(-1, _), _) => // principal, nothing to connect
           case (_: FreeIdx, _) => // done later when connecting opposite direction
           case (idx, p1) =>
-            m.dup2.lconst(Allocator.auxCPOffset(p1)).ladd
+            m.dup2.lconst(Interpreter.auxCPOffset(p1)).ladd
             ldTaggedCP(idx)
             m.invokestatic(allocator_putLong)
         }

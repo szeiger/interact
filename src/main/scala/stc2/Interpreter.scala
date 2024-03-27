@@ -23,6 +23,8 @@ abstract class Dispatch {
 }
 
 final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, config: Config) extends BaseInterpreter { self =>
+  import Interpreter._
+
   private[this] val symIds = globals.symbols.filter(_.isCons).toVector.sortBy(_.id).iterator.zipWithIndex.toMap
   private[this] val reverseSymIds = symIds.map { case (sym, idx) => (idx, sym) }
   private[this] val (initialRuleImpls: Vector[InitialRuleImpl], dispatch: Dispatch) = {
@@ -50,16 +52,16 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     def rootCells = (self.freeWires.iterator ++ principals.keysIterator).toSet
     def getSymbol(c: Cell): Symbol = {
-      val sid = Allocator.symId(c)
-      reverseSymIds.getOrElse(sid, freeWireLookup.getOrElse(Allocator.symId(c), new Symbol(s"<NoSymbol $sid>")))
+      val sid = symId(c)
+      reverseSymIds.getOrElse(sid, freeWireLookup.getOrElse(symId(c), new Symbol(s"<NoSymbol $sid>")))
     }
     def getConnected(c: Cell, port: Int): (Cell, Int) =
-      if(port == -1) principals.get(c).map((_, -1)).orNull else Allocator.findCellAndPort(Allocator.auxCP(c, port))
-    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(Allocator.symId(c))
+      if(port == -1) principals.get(c).map((_, -1)).orNull else findCellAndPort(auxCP(c, port))
+    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(symId(c))
     def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
     override def getPayload(c: Cell): Any = {
       val sym = getSymbol(c)
-      val address = c + Allocator.payloadOffset(sym.arity, sym.payloadType)
+      val address = c + payloadOffset(sym.arity, sym.payloadType)
       sym.payloadType match {
         case PayloadType.INT => Allocator.getInt(address)
         case PayloadType.LABEL => "label@" + Allocator.getLong(address)
@@ -92,21 +94,21 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       }
       singletons.indices.foreach { i =>
         val s = reverseSymIds(i)
-        if(s.isSingleton) singletons(i) = allocator.newCell(i, s.arity)
+        if(s.isSingleton) singletons(i) = newCell(i, s.arity)
       }
     }
     if(config.collectStats) metrics = new ExecutionMetrics
     initialRuleImpls.foreach { rule =>
       val fws = rule.freeWires
       val off = reverseSymIds.size + freeWireLookup.size
-      val lhs = allocator.newCell(-1, fws.length)
+      val lhs = newCell(-1, fws.length)
       fws.iterator.zipWithIndex.foreach { case (s, i) =>
         freeWireLookup += ((i+off, s))
-        val c = allocator.newCell(i+off, 1)
+        val c = newCell(i+off, 1)
         freeWires += c
-        Allocator.setAux(lhs, i, c, 0)
+        setAux(lhs, i, c, 0)
       }
-      val rhs = allocator.newCell(-1, 0)
+      val rhs = newCell(-1, 0)
       rule.reduce(lhs, rhs, this)
     }
     if(config.collectStats) metrics = new ExecutionMetrics
@@ -117,6 +119,12 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
       val (a0, a1) = cutBuffer.pop()
       dispatch.reduce(a0, a1, tailCallDepth, this)
     }
+
+  private final def newCell(symId: Int, arity: Int, pt: PayloadType = PayloadType.VOID): Long = {
+    val o = allocator.alloc(cellSize(arity, pt))
+    Allocator.putInt(o, (symId << 1) | 1)
+    o
+  }
 
   // ptw methods:
 
@@ -166,6 +174,48 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   }
 }
 
+object Interpreter {
+  // 4 (symId << 1) | 1
+  // 4 payload (int)
+  // 8 cp_0
+  // ...
+  // 8 cp_n
+  // (0/8) payload (label)
+
+  def auxCPOffset(p: Int): Int = 8 + (p * 8)
+
+  def payloadOffset(arity: Int, pt: PayloadType): Int =
+    if(pt == PayloadType.LABEL) 8 + (arity * 8) else 4
+
+  private[this] def setAuxCP(c: Long, p: Int, cp2: Long): Unit = Allocator.putLong(c + auxCPOffset(p), cp2)
+  private def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, encodeAux(c2, p2))
+
+  def auxCP(c: Long, p: Int): Long = Allocator.getLong(c + auxCPOffset(p)) & -3L
+
+  private[this] def encodeAux(c: Long, p: Int) = {
+    val l = c + auxCPOffset(p)
+    if(p >= 0) l | 2L else l
+  }
+
+  private def symId(address: Long) = Allocator.getInt(address) >> 1
+  private def findCellAndPort(_cp: Long): (Long, Int) = {
+    var cp = _cp
+    if((cp & 1L) == 1L) {
+      (cp, -1)
+    } else {
+      cp = cp & -3L
+      var p = -1
+      while((Allocator.getInt(cp - auxCPOffset(p)) & 1) == 0)
+        p += 1
+      (cp - auxCPOffset(p), p)
+    }
+  }
+
+  def cellSize(arity: Int, pt: PayloadType) = {
+    val psize = if(pt == PayloadType.LABEL) 8 else 0
+    arity*8 + 8 + psize
+  }
+}
 
 final class CutBuffer(initialSize: Int) {
   private[this] var pairs = new Array[Cell](initialSize*2)

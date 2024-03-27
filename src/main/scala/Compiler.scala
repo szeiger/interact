@@ -124,7 +124,7 @@ object STC2Backend extends Backend("stc2") {
   def inlineBranching: Boolean = true
   def inlineUniqueContinuations: Boolean = true
   def allowPayloadTemp: Boolean = true
-  def storageClass(sym: Symbol) = (Allocator.cellSize(sym.arity, sym.payloadType), sym.payloadType == PayloadType.REF)
+  def storageClass(sym: Symbol) = (stc2.Interpreter.cellSize(sym.arity, sym.payloadType), sym.payloadType == PayloadType.REF)
 }
 
 class MTBackend(name: String, compile: Boolean) extends Backend(name) {

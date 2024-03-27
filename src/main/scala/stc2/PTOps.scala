@@ -12,12 +12,12 @@ class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, P
     pt match {
       case PayloadType.LABEL =>
         loadCell
-        m.lconst(Allocator.payloadOffset(arity, pt)).ladd
+        m.lconst(Interpreter.payloadOffset(arity, pt)).ladd
         loadUnboxedPayload
         m.invokestatic(allocator_putLong)
       case PayloadType.INT =>
         loadCell
-        m.lconst(Allocator.payloadOffset(arity, pt)).ladd
+        m.lconst(Interpreter.payloadOffset(arity, pt)).ladd
         loadUnboxedPayload
         m.invokestatic(allocator_putInt)
       case PayloadType.REF =>
@@ -37,11 +37,11 @@ class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, P
         m.invoke(ptw_getProxy)
       case PayloadType.INT =>
         loadCell
-        m.lconst(Allocator.payloadOffset(arity, pt)).ladd
+        m.lconst(Interpreter.payloadOffset(arity, pt)).ladd
         m.invokestatic(allocator_getInt)
       case PayloadType.LABEL =>
         loadCell
-        m.lconst(Allocator.payloadOffset(arity, pt)).ladd
+        m.lconst(Interpreter.payloadOffset(arity, pt)).ladd
         m.invokestatic(allocator_getLong)
     }
     this
