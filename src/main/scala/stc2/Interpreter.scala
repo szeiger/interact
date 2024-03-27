@@ -58,7 +58,6 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).orNull else findCellAndPort(auxCP(c, port))
     def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(symId(c))
-    def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
     override def getPayload(c: Cell): Any = {
       val sym = getSymbol(c)
       val address = c + payloadOffset(sym.arity, sym.payloadType)

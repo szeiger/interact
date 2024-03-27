@@ -53,7 +53,6 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).orNull else (c.auxCell(port), c.auxPort(port))
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[DynamicCell] && c.cellSymbol.isDefined
-    def isSharedSingleton(c: Cell): Boolean = c.getClass.getField("singleton") != null
   }
 
   def initData(): Unit = {

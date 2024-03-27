@@ -215,7 +215,6 @@ final class Interpreter(globals: Symbols, rules: Iterable[RuleWiring], config: C
     }
     def getConnected(c: Cell, port: Int): (Cell, Int) = c.getCell(port)
     def isFreeWire(c: Cell): Boolean = c.isInstanceOf[WireCell]
-    def isSharedSingleton(c: Cell): Boolean = false
     def rootCells: IterableOnce[Cell] = ??? //TODO
   }
   def getAnalyzer: Analyzer[_] = scope
