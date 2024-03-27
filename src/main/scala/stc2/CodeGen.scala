@@ -9,6 +9,8 @@ import de.szeiger.interact.offheap.{Allocator, MemoryDebugger}
 
 import scala.collection.mutable
 
+import Interpreter._
+
 class CodeGen(genPackage: String, classWriter: ClassWriter,
   compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], val config: Config) extends AbstractCodeGen(config) {
 
@@ -110,8 +112,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       m.lload(c2).invokestatic(allocator_getInt)
 
       val keys = rules.iterator.flatMap {
-        case (rk, rp) if rk.sym1 == sym && !rp.initial => Iterator( (rk, (symIds(rk.sym2) << 1) | 1, m.newLabel, false) )
-        case (rk, rp) if rk.sym2 == sym && !rp.initial => Iterator( (rk, (symIds(rk.sym1) << 1) | 1, m.newLabel, true) )
+        case (rk, rp) if rk.sym1 == sym && !rp.initial => Iterator( (rk, mkHeader(symIds(rk.sym2)), m.newLabel, false) )
+        case (rk, rp) if rk.sym2 == sym && !rp.initial => Iterator( (rk, mkHeader(symIds(rk.sym1)), m.newLabel, true) )
         case _ => Iterator.empty
       }.toVector.sortBy(_._2)
       val dflt = m.newLabel
@@ -145,7 +147,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       val ptw = m.param("ptw", ptwT)
 
       val syms = rules.iterator.flatMap { case (rk, rp) if !rp.initial => Iterator(rk.sym1, rk.sym2) }.toSet
-      val keys = syms.iterator.map { sym => ((symIds(sym) << 1) | 1, sym, m.newLabel) }.toVector.sortBy(_._1)
+      val keys = syms.iterator.map { sym => (mkHeader(symIds(sym)), sym, m.newLabel) }.toVector.sortBy(_._1)
       val dflt = m.newLabel
 
       m.lload(c1).lload(c2).iload(level).aload(ptw)

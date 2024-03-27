@@ -10,6 +10,8 @@ import org.objectweb.asm.Label
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+import Interpreter._
+
 class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: VarIdx, ptw: VarIdx, rule: RulePlan,
   implicit val codeGen: CodeGen, baseMetricName: String) {
   import codeGen._
@@ -84,7 +86,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
     def flush(): Unit =
       for(p <- 0 until free.length if free(p) != VarIdx.none || cell(p) != null) {
-        m.lload(cells(cellIdx)).lconst(Interpreter.auxCPOffset(p)).ladd
+        m.lload(cells(cellIdx)).lconst(auxPtrOffset(p)).ladd
         if(free(p) != VarIdx.none) m.lload(free(p)) else ldTaggedCP(cell(p))
         m.invokestatic(allocator_putLong)
       }
@@ -94,7 +96,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   private def ldTaggedCPFRaw(idx: FreeIdx): m.type = {
     m.lload(active(idx.active).vidx)
-    Interpreter.auxCPOffset(idx.port) match {
+    auxPtrOffset(idx.port) match {
       case 0 =>
       case off => m.lconst(off).ladd
     }
@@ -110,8 +112,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
       case idx: CellIdx =>
         m.lload(cells(idx.idx))
-        var l = Interpreter.auxCPOffset(idx.port)
-        if(idx.port >= 0) l += 2
+        var l = auxPtrOffset(idx.port)
+        if(idx.port >= 0) l += TAG_AUX_PTR
         if(l != 0) {
           m.lconst(l).ladd
           None
@@ -123,11 +125,11 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     idx match {
       case idx: FreeIdx =>
         ldTaggedCP(idx)
-        m.lconst(-3L).land
+        m.lconst(ADDRMASK).land
         None
       case idx: CellIdx =>
         m.lload(cells(idx.idx))
-        Interpreter.auxCPOffset(idx.port) match {
+        auxPtrOffset(idx.port) match {
           case 0 => Some(cells(idx.idx))
           case off => m.lconst(off).ladd; None
         }
@@ -145,7 +147,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case Some(b) => b.set(idx.port, ct2)
       case None =>
         m.lload(cells(idx.idx))
-        m.lconst(Interpreter.auxCPOffset(idx.port)).ladd
+        m.lconst(auxPtrOffset(idx.port)).ladd
         ldTaggedCP(ct2)
         m.invokestatic(allocator_putLong)
     }
@@ -161,11 +163,11 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   private[this] def isCellInstance(idx: FreeIdx, sym: Symbol): m.type = // stack: () -> mSymId1, mSymId2 for if_icmpeq
-    ldModSymId(idx).iconst((symIds(sym) << 1) | 1)
+    ldModSymId(idx).iconst(mkHeader(symIds(sym)))
 
   private[this] def ifAux(idx: FreeIdx) = {
     ldTaggedCP(idx)
-    m.lconst(2).land.lconst(0).lcmp.if_!=
+    m.lconst(TAGMASK).land.lconst(TAG_AUX_PTR).lcmp.if_==
   }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
@@ -308,7 +310,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       for(w <- reuseBuffers if w != null) w.flush()
       for(ac <- active if ac != null && ac.reuse == -1 && !ac.sym.isSingleton) {
         m.aload(ptw).lload(ac.vidx)
-        val sz = Interpreter.cellSize(ac.arity, ac.sym.payloadType)
+        val sz = cellSize(ac.arity, ac.sym.payloadType)
         ac.sym.payloadType match {
           case PayloadType.REF =>
             if(specializedCellAllocSizes.contains(sz)) m.invoke(ptw_freeProxiedSpec(sz))
@@ -401,9 +403,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         assert(symIds(sym) >= 0)
         cells(idx) = active(act).vidx
         if(sym != active(act).sym)
-          m.lload(active(act).vidx).iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
+          m.lload(active(act).vidx).iconst(mkHeader(symIds(sym))).invokestatic(allocator_putInt)
       case NewCell(idx, sym, args) =>
-        val size = Interpreter.cellSize(sym.arity, sym.payloadType)
+        val size = cellSize(sym.arity, sym.payloadType)
         m.aload(ptw)
         sym.payloadType match {
           case PayloadType.REF =>
@@ -415,12 +417,12 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
         allocMetrics.updateWith(size) { case None => Some(1); case Some(n) => Some(n+1) }
         assert(symIds(sym) >= 0)
-        m.dup2.iconst((symIds(sym) << 1) | 1).invokestatic(allocator_putInt)
+        m.dup2.iconst(mkHeader(symIds(sym))).invokestatic(allocator_putInt)
         args.zipWithIndex.foreach {
           case (CellIdx(-1, _), _) => // principal, nothing to connect
           case (_: FreeIdx, _) => // done later when connecting opposite direction
           case (idx, p1) =>
-            m.dup2.lconst(Interpreter.auxCPOffset(p1)).ladd
+            m.dup2.lconst(auxPtrOffset(p1)).ladd
             ldTaggedCP(idx)
             m.invokestatic(allocator_putLong)
         }

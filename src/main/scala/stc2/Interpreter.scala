@@ -52,12 +52,12 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def irreduciblePairs: IterableOnce[(Cell, Cell)] = irreducible.iterator
     def rootCells = (self.freeWires.iterator ++ principals.keysIterator).toSet
     def getSymbol(c: Cell): Symbol = {
-      val sid = symId(c)
-      reverseSymIds.getOrElse(sid, freeWireLookup.getOrElse(symId(c), new Symbol(s"<NoSymbol $sid>")))
+      val sid = getSymId(c)
+      reverseSymIds.getOrElse(sid, freeWireLookup.getOrElse(getSymId(c), new Symbol(s"<NoSymbol $sid>")))
     }
     def getConnected(c: Cell, port: Int): (Cell, Int) =
-      if(port == -1) principals.get(c).map((_, -1)).orNull else findCellAndPort(auxCP(c, port))
-    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(symId(c))
+      if(port == -1) principals.get(c).map((_, -1)).orNull else findCellAndPort(c, port)
+    def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(getSymId(c))
     override def getPayload(c: Cell): Any = {
       val sym = getSymbol(c)
       val address = c + payloadOffset(sym.arity, sym.payloadType)
@@ -71,7 +71,6 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   def dispose(): Unit = {
     if(allocator != null) {
-      //Arrays.fill(singletons, 0L)
       allocator.dispose()
       allocator = null
       if(config.debugMemory) MemoryDebugger.setParent(null)
@@ -121,7 +120,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 
   private final def newCell(symId: Int, arity: Int, pt: PayloadType = PayloadType.VOID): Long = {
     val o = allocator.alloc(cellSize(arity, pt))
-    Allocator.putInt(o, (symId << 1) | 1)
+    Allocator.putInt(o, mkHeader(symId))
     o
   }
 
@@ -174,45 +173,54 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
 }
 
 object Interpreter {
-  // 4 (symId << 1) | 1
-  // 4 payload (int)
-  // 8 cp_0
-  // ...
-  // 8 cp_n
-  // (0/8) payload (label)
+  // Cell layout:
+  //   64-bit header
+  //   n * 64-bit pointers for arity n
+  //   optional 64-bit payload depending on PayloadType
+  //
+  // Header layout:
+  //   LSB                              ...                             MSB
+  //   012 3456789abcdef 0123456789abcdef 0123456789abcdef 0123456789abcdef
+  //   --------------------------------------------------------------------
+  //   110 [29-bit symId                ] [ padding or 32-bit payload     ]
+  //
+  // Pointer layouts:
+  //   LSB                              ...                             MSB
+  //   012 3456789abcdef 0123456789abcdef 0123456789abcdef 0123456789abcdef
+  //   --------------------------------------------------------------------
+  //   000 [ 64-bit aligned address >> 3: pointer to cell (principal)     ]
+  //   100 [ 64-bit aligned address >> 3: pointer to aux port             ]
 
-  def auxCPOffset(p: Int): Int = 8 + (p * 8)
+  final val TAGWIDTH = 3
+  final val TAGMASK = 7L
+  final val ADDRMASK = -8L
+  final val TAG_HEADER = 3
+  final val TAG_AUX_PTR = 1
 
-  def payloadOffset(arity: Int, pt: PayloadType): Int =
-    if(pt == PayloadType.LABEL) 8 + (arity * 8) else 4
+  def cellSize(arity: Int, pt: PayloadType) = arity*8 + 8 + (if(pt == PayloadType.LABEL) 8 else 0)
+  def auxPtrOffset(p: Int): Int = 8 + (p * 8)
+  def payloadOffset(arity: Int, pt: PayloadType): Int = if(pt == PayloadType.LABEL) 8 + (arity * 8) else 4
+  def mkHeader(sid: Int): Int = (sid << TAGWIDTH) | TAG_HEADER
 
-  private[this] def setAuxCP(c: Long, p: Int, cp2: Long): Unit = Allocator.putLong(c + auxCPOffset(p), cp2)
-  private def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = setAuxCP(c, p, encodeAux(c2, p2))
-
-  def auxCP(c: Long, p: Int): Long = Allocator.getLong(c + auxCPOffset(p)) & -3L
-
-  private[this] def encodeAux(c: Long, p: Int) = {
-    val l = c + auxCPOffset(p)
-    if(p >= 0) l | 2L else l
+  private def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = {
+    var l = c2 + auxPtrOffset(p2)
+    if(p2 >= 0) l |= TAG_AUX_PTR
+    Allocator.putLong(c + auxPtrOffset(p), l)
   }
 
-  private def symId(address: Long) = Allocator.getInt(address) >> 1
-  private def findCellAndPort(_cp: Long): (Long, Int) = {
-    var cp = _cp
-    if((cp & 1L) == 1L) {
-      (cp, -1)
+  private def getSymId(address: Long) = Allocator.getInt(address) >> TAGWIDTH
+
+  private def findCellAndPort(cellAddress: Long, cellPort: Int): (Long, Int) = {
+    var ptr = Allocator.getLong(cellAddress + auxPtrOffset(cellPort))
+    if((ptr & TAGMASK) != TAG_AUX_PTR) {
+      (ptr, -1)
     } else {
-      cp = cp & -3L
+      ptr = ptr & ADDRMASK
       var p = -1
-      while((Allocator.getInt(cp - auxCPOffset(p)) & 1) == 0)
+      while((Allocator.getInt(ptr - auxPtrOffset(p)) & TAGMASK) != TAG_HEADER)
         p += 1
-      (cp - auxCPOffset(p), p)
+      (ptr - auxPtrOffset(p), p)
     }
-  }
-
-  def cellSize(arity: Int, pt: PayloadType) = {
-    val psize = if(pt == PayloadType.LABEL) 8 else 0
-    arity*8 + 8 + psize
   }
 }
 
