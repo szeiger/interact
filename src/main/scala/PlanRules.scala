@@ -35,8 +35,8 @@ class PlanRules(val global: Global) extends Phase {
       val idxO = idx + branch.cellOffset
       val activeForIdxO = active.indexOf(idx)
       branch.cells(idx) match {
-        case sym if activeForIdxO >= 0 => instr1 += ReuseActiveCell(idxO, activeForIdxO, sym)
-        case sym if sym.isSingleton => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
+        case sym if activeForIdxO >= 0 && (!config.unboxedPrimitives || !config.backend.canUnbox(sym)) => instr1 += ReuseActiveCell(idxO, activeForIdxO, sym)
+        case sym if sym.isSingleton && (!config.unboxedPrimitives || !config.backend.canUnbox(sym)) => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
         case sym => instr2 += NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
           case (CellIdx(ci, p2), p1) if !cellsCreated(ci) && active.indexOf(ci) < 0 => cellPortsNotConnected += 1; CellIdx(-1, p2)
           //case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => cellPortsNotConnected += 1; CellIdx(-1, p2)
@@ -53,7 +53,9 @@ class PlanRules(val global: Global) extends Phase {
       case _ => true
     }
     val (createLabels, otherPayloadComps) = filteredPayloadComps.partition(_.isInstanceOf[CreateLabelsComp])
-    val createLabelComps = findLabels(allCells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], active)
+    val createLabelComps =
+      if(config.backend.canReuseLabels) findLabels(allCells.length, createLabels.asInstanceOf[Vector[CreateLabelsComp]], active)
+      else createLabels
     val statLabelCreate = baseLabelCreate + createLabelComps.count(_.isInstanceOf[CreateLabelsComp])
     val allPayloadComps = branch.cond.toVector ++ filteredPayloadComps
     val needsCachedPayloads = allPayloadComps.iterator.flatMap(_.embArgs).collect { case EmbArg.Active(i) => i }.toSet
@@ -107,7 +109,8 @@ class PlanRules(val global: Global) extends Phase {
   }
 
   private def findReuse(rule: GenericRuleWiring, branch: BranchWiring): (Vector[Int], Set[Connection]) = {
-    if(!config.reuseCells || rule.isInstanceOf[InitialRuleWiring]) return (Vector(-1, -1), Set.empty)
+    if(!config.reuseCells || rule.isInstanceOf[InitialRuleWiring])
+      return (Vector(-1, -1) ++ branch.cond.collect { case pc: CheckPrincipal => -1 }, Set.empty)
 
     val activeSyms = Vector(rule.sym1, rule.sym2) ++ branch.cond.collect { case pc: CheckPrincipal => pc.sym }
 
@@ -123,9 +126,14 @@ class PlanRules(val global: Global) extends Phase {
           case c @ Connection(ci2, FreeIdx(ac2, fi2)) if ci2 == ci && ac2 == ac && fi2 == p => c
         }
       }.toVector
+    def storageClass(sym: Symbol) =
+      if(config.unboxedPrimitives && config.backend.canUnbox(sym)) sym
+      else config.backend.storageClass(sym)
+    def canReuse(sym: Symbol, ac: Int) =
+      !sym.isSingleton && storageClass(sym) == storageClass(activeSyms(ac))
     // Find cellIdxO (i.e. with cellOffset) and quality of cells with same symbol as an active cell
     def reuseCandidates(ac: Int): ArrayBuffer[(Int, Int)] =
-      branch.cells.iterator.zipWithIndex.collect { case (sym, i) if !sym.isSingleton && config.backend.storageClass(sym) == config.backend.storageClass(activeSyms(ac)) =>
+      branch.cells.iterator.zipWithIndex.collect { case (sym, i) if canReuse(sym, ac) =>
         val iO = i + branch.cellOffset
         (iO, countReuseConnections(iO, ac) + (if(sym == activeSyms(ac)) 1 else 0))
       }.to(ArrayBuffer)
@@ -188,7 +196,11 @@ class PlanRules(val global: Global) extends Phase {
         while(cells.nonEmpty && cells.head.weight == 0) take()
       else take()
     }
-    order.result()
+    val res = order.result()
+    if(config.unboxedPrimitives) { // "create" unboxed values last so they get connected later when we have the values
+      val (unboxed, normal) = res.partition(i => config.backend.canUnbox(branch.cells(i)))
+      normal ++ unboxed
+    } else res
   }
 
   private def optimizeConnectionOrder(conns: Set[Connection], cellPortsConnected: mutable.HashSet[CellIdx]): Vector[Connection] =

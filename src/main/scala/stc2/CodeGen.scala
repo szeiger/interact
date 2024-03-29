@@ -34,7 +34,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   val allocator_getObject = allocatorT.method("getObject", tp.m(tp.Object, tp.J)(tp.Object))
   val allocator_putObject = allocatorT.method("putObject", tp.m(tp.Object, tp.J, tp.Object).V)
   val ptw_addActive = ptwT.method("addActive", tp.m(cellT, cellT).V)
-  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
+  val ptw_recordStats = ptwT.method("recordStats", tp.m(tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I, tp.I).V)
   val ptw_recordMetric = ptwT.method("recordMetric", tp.m(tp.c[String], tp.I).V)
   val ptw_addIrreducible = ptwT.method("addIrreducible", tp.m(cellT, cellT).V)
   val ptw_getSingleton = ptwT.method("getSingleton", tp.m(tp.I)(cellT))
@@ -65,12 +65,15 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
 
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
 
+  def shouldUnbox(sym: Symbol, arity: Int = -1) =
+    config.unboxedPrimitives && Interpreter.canUnbox(sym, if(arity == -1) sym.arity else arity)
+
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
     val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc, debugLineNumbers = true)
     val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
     val active = Vector(
-      new ActiveCell(0, m.param("active0", cellT), rule.sym1, rule.arity1, needsCachedPayloads.contains(0)),
-      new ActiveCell(1, m.param("active1", cellT), rule.sym2, rule.arity2, needsCachedPayloads.contains(1)),
+      new ActiveCell(0, m.param("active0", cellT), rule.sym1, rule.arity1, needsCachedPayloads.contains(0), shouldUnbox(rule.sym1, rule.arity1)),
+      new ActiveCell(1, m.param("active1", cellT), rule.sym2, rule.arity2, needsCachedPayloads.contains(1), shouldUnbox(rule.sym2, rule.arity2)),
     )
     val level = m.param("level", tp.I)
     val ptw = m.param("ptw", ptwT)
@@ -103,17 +106,26 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     // static reduce
     {
       val mref = metaClass_reduce(sym)
-      val m = c.method(Acc.PUBLIC.STATIC.FINAL, mref.name, mref.desc)
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, mref.name, mref.desc, debugLineNumbers = true)
       val c1 = m.param("c1", cellT)
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
 
-      m.lload(c2).invokestatic(allocator_getInt)
+      if(config.unboxedPrimitives) {
+        m.lload(c2).dup2.lconst(TAGMASK).land.lconst(TAG_UNBOXED).lcmp.if_==.thnElse {
+          m.lconst(SYMIDMASK).land.l2i
+        } {
+          m.invokestatic(allocator_getInt)
+        }
+      } else {
+        m.lload(c2).invokestatic(allocator_getInt)
+      }
+      m.iconst(TAGWIDTH).iushr
 
       val keys = rules.iterator.flatMap {
-        case (rk, rp) if rk.sym1 == sym && !rp.initial => Iterator( (rk, mkHeader(symIds(rk.sym2)), m.newLabel, false) )
-        case (rk, rp) if rk.sym2 == sym && !rp.initial => Iterator( (rk, mkHeader(symIds(rk.sym1)), m.newLabel, true) )
+        case (rk, rp) if rk.sym1 == sym && !rp.initial => Iterator( (rk, symIds(rk.sym2), m.newLabel, false) )
+        case (rk, rp) if rk.sym2 == sym && !rp.initial => Iterator( (rk, symIds(rk.sym1), m.newLabel, true) )
         case _ => Iterator.empty
       }.toVector.sortBy(_._2)
       val dflt = m.newLabel
@@ -140,18 +152,29 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
 
     // staticReduce
     {
-      val m = c.method(Acc.PUBLIC.STATIC.FINAL, generatedDispatch_staticReduce.name, generatedDispatch_staticReduce.desc)
+      val m = c.method(Acc.PUBLIC.STATIC.FINAL, generatedDispatch_staticReduce.name, generatedDispatch_staticReduce.desc, debugLineNumbers = true)
       val c1 = m.param("c1", cellT)
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
 
       val syms = rules.iterator.flatMap { case (rk, rp) if !rp.initial => Iterator(rk.sym1, rk.sym2) }.toSet
-      val keys = syms.iterator.map { sym => (mkHeader(symIds(sym)), sym, m.newLabel) }.toVector.sortBy(_._1)
+      val keys = syms.iterator.map { sym => (symIds(sym), sym, m.newLabel) }.toVector.sortBy(_._1)
       val dflt = m.newLabel
 
       m.lload(c1).lload(c2).iload(level).aload(ptw)
-      m.lload(c1).invokestatic(allocator_getInt)
+
+      if(config.unboxedPrimitives) {
+        m.lload(c1).dup2.lconst(TAGMASK).land.lconst(TAG_UNBOXED).lcmp.if_==.thnElse {
+          m.lconst(SYMIDMASK).land.l2i
+        } {
+          m.invokestatic(allocator_getInt)
+        }
+      } else {
+        m.lload(c1).invokestatic(allocator_getInt)
+      }
+      m.iconst(TAGWIDTH).iushr
+
       m.tableswitchOpt(keys.iterator.map(_._1).toArray, dflt, keys.map(_._3))
       keys.foreach { case (_, sym, l) =>
         m.setLabel(l)
@@ -174,30 +197,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     }
 
     addClass(classWriter, c)
-  }
-
-  // find symbols that can interact with every symbol (usually dup & erase)
-  private def findCommonPartners(): Set[Symbol] = {
-    val ruleMap = mutable.HashMap.empty[Symbol, mutable.HashSet[Symbol]]
-    rules.foreach { case (k, _) =>
-      ruleMap.getOrElseUpdate(k.sym1, mutable.HashSet.empty) += k.sym2
-      ruleMap.getOrElseUpdate(k.sym2, mutable.HashSet.empty) += k.sym1
-    }
-    if(config.allCommon) ruleMap.keySet.toSet
-    else {
-      val totalSyms = ruleMap.size
-      val counts = mutable.HashMap.empty[Symbol, Int]
-      for {
-        v <- ruleMap.valuesIterator
-        s <- v
-      } {
-        counts.updateWith(s) {
-          case None => Some(1)
-          case Some(x) => Some(x+1)
-        }
-      }
-      counts.iterator.filter(_._2 == totalSyms).map(_._1).toSet
-    }
   }
 
   private def compileInitial(rule: RulePlan, initialIndex: Int): String = {
@@ -259,7 +258,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   }
 }
 
-final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean) {
+final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean, val unboxed: Boolean) {
   var reuse: Int = -1
   var cachedPayload: VarIdx = VarIdx.none
   var cachedPayloadProxyPage: VarIdx = VarIdx.none

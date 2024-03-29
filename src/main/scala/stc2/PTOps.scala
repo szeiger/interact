@@ -3,7 +3,6 @@ package de.szeiger.interact.stc2
 import de.szeiger.interact.ast.PayloadType
 import de.szeiger.interact.codegen.{BoxDesc, BoxOps}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
-import de.szeiger.interact.offheap.Allocator
 
 class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, PTOps.boxDesc(pt)) {
   import codeGen._
@@ -44,6 +43,22 @@ class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, P
         m.lconst(Interpreter.payloadOffset(arity, pt)).ladd
         m.invokestatic(allocator_getLong)
     }
+    this
+  }
+
+  def extractUnboxed(loadValue: => Unit): this.type = {
+    pt match {
+      case PayloadType.INT =>
+        loadValue
+        m.iconst(32).lushr.l2i
+    }
+    this
+  }
+
+  def buildUnboxed(symId: Int)(loadValue: => Unit): this.type = {
+    loadValue
+    m.i2l.iconst(32).lshl
+    m.lconst((symId.toLong << Interpreter.TAGWIDTH) | Interpreter.TAG_UNBOXED).lor
     this
   }
 }

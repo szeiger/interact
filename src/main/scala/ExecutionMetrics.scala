@@ -4,18 +4,19 @@ import scala.collection.mutable
 
 class ExecutionMetrics {
   private[this] final class MutInt(var i: Int)
-  private[this] var steps, cellAlloc, proxyAlloc, cellReuse, singletonUse, loopSave, directTail, singleDispatchTail, labelCreate = 0
+  private[this] var steps, cellAlloc, proxyAlloc, cellReuse, singletonUse, unboxedCells, loopSave, directTail, singleDispatchTail, labelCreate = 0
   private[this] var metrics = mutable.Map.empty[String, MutInt]
 
   def getSteps: Int = steps
 
   @inline def recordStats(steps: Int, cellAllocations: Int, proxyAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
-    loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit = {
+    unboxedCells: Int, loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit = {
     this.steps += steps
     this.cellAlloc += cellAllocations
     this.proxyAlloc += proxyAllocations
     this.cellReuse += cachedCellReuse
     this.singletonUse += singletonUse
+    this.unboxedCells += unboxedCells
     this.loopSave += loopSave
     this.directTail += directTail
     this.singleDispatchTail += singleDispatchTail
@@ -36,7 +37,7 @@ class ExecutionMetrics {
 
   def logStats(): Unit = {
     println(s"Steps: $steps ($loopSave loop, $directTail tail ($singleDispatchTail single-dispatch), ${steps-loopSave-directTail} other)")
-    println(s"  Cells created: $cellAlloc new ($proxyAlloc proxied), $cellReuse cached, $singletonUse singleton; Labels created: $labelCreate")
+    println(s"  Cells created: $cellAlloc new ($proxyAlloc proxied), $cellReuse cached, $singletonUse singleton, $unboxedCells unboxed; Labels created: $labelCreate")
   }
 
   def logMetrics(): Unit = {

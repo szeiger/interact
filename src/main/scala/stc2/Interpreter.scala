@@ -58,13 +58,19 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
     def getConnected(c: Cell, port: Int): (Cell, Int) =
       if(port == -1) principals.get(c).map((_, -1)).orNull else findCellAndPort(c, port)
     def isFreeWire(c: Cell): Boolean = freeWireLookup.contains(getSymId(c))
-    override def getPayload(c: Cell): Any = {
-      val sym = getSymbol(c)
-      val address = c + payloadOffset(sym.arity, sym.payloadType)
-      sym.payloadType match {
-        case PayloadType.INT => Allocator.getInt(address)
-        case PayloadType.LABEL => "label@" + Allocator.getLong(address)
-        case PayloadType.REF => getProxy(c)
+    override def getPayload(ptr: Long): Any = {
+      val sym = getSymbol(ptr)
+      if((ptr & TAGMASK) == TAG_UNBOXED) {
+        sym.payloadType match {
+          case PayloadType.INT => (ptr >>> 32).toInt
+        }
+      } else {
+        val address = ptr + payloadOffset(sym.arity, sym.payloadType)
+        sym.payloadType match {
+          case PayloadType.INT => Allocator.getInt(address)
+          case PayloadType.LABEL => "label@" + Allocator.getLong(address)
+          case PayloadType.REF => getProxy(ptr)
+        }
       }
     }
   }
@@ -131,8 +137,9 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   def addIrreducible(a0: Cell, a1: Cell): Unit = irreducible.addOne(a0, a1)
 
   def recordStats(steps: Int, cellAllocations: Int, proxyAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
-    loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit =
-    metrics.recordStats(steps, cellAllocations, proxyAllocations, cachedCellReuse, singletonUse, loopSave, directTail, singleDispatchTail, labelCreate)
+    unboxedCells: Int, loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit =
+    metrics.recordStats(steps, cellAllocations, proxyAllocations, cachedCellReuse, singletonUse, unboxedCells,
+      loopSave, directTail, singleDispatchTail, labelCreate)
 
   def recordMetric(metric: String, inc: Int): Unit = metrics.recordMetric(metric, inc)
 
@@ -190,17 +197,45 @@ object Interpreter {
   //   --------------------------------------------------------------------
   //   000 [ 64-bit aligned address >> 3: pointer to cell (principal)     ]
   //   100 [ 64-bit aligned address >> 3: pointer to aux port             ]
+  //   010 [ 29-bit symId               ] [ unboxed 32-bit payload        ]
 
   final val TAGWIDTH = 3
   final val TAGMASK = 7L
   final val ADDRMASK = -8L
   final val TAG_HEADER = 3
+  final val TAG_PRINC_PTR = 0
   final val TAG_AUX_PTR = 1
+  final val TAG_UNBOXED = 2
+
+  final val SYMIDMASK = ((1L << 29)-1) << TAGWIDTH
+
+  def showPtr(l: Long, symIds: Map[Int, Symbol] = null): String = {
+    var raw = l.toBinaryString
+    raw = "0"*(64-raw.length) + raw
+    raw = raw.substring(0, 32) + ":" + raw.substring(32, 61) + ":" + raw.substring(61)
+    def symStr(sid: Int) =
+      if(symIds == null) s"$sid"
+      else s"$sid(${symIds.getOrElse(sid, Symbol.NoSymbol).id})"
+    val decoded = (l & TAGMASK) match {
+      case _ if l == 0L => "NULL"
+      case TAG_HEADER =>
+        val sid = ((l & SYMIDMASK) >>> TAGWIDTH).toInt
+        s"HEADER:${symStr(sid)}:${l >>> 32}"
+      case TAG_AUX_PTR => s"AUX_PTR:${l & ADDRMASK}"
+      case TAG_PRINC_PTR => s"PRINC_PTR:${l & ADDRMASK}"
+      case TAG_UNBOXED =>
+        val sid = ((l & SYMIDMASK) >>> TAGWIDTH).toInt
+        s"UNBOXED:${symStr(sid)}:${l >>> 32}"
+      case tag => s"Invalid-Tag-$tag:$l"
+    }
+    s"$raw::$decoded"
+  }
 
   def cellSize(arity: Int, pt: PayloadType) = arity*8 + 8 + (if(pt == PayloadType.LABEL) 8 else 0)
   def auxPtrOffset(p: Int): Int = 8 + (p * 8)
   def payloadOffset(arity: Int, pt: PayloadType): Int = if(pt == PayloadType.LABEL) 8 + (arity * 8) else 4
   def mkHeader(sid: Int): Int = (sid << TAGWIDTH) | TAG_HEADER
+  def mkUnboxed(sid: Int): Int = (sid << TAGWIDTH) | TAG_UNBOXED
 
   private def setAux(c: Long, p: Int, c2: Long, p2: Int): Unit = {
     var l = c2 + auxPtrOffset(p2)
@@ -208,7 +243,9 @@ object Interpreter {
     Allocator.putLong(c + auxPtrOffset(p), l)
   }
 
-  private def getSymId(address: Long) = Allocator.getInt(address) >> TAGWIDTH
+  private def getSymId(ptr: Long) =
+    if((ptr & TAGMASK) == TAG_UNBOXED) ((ptr & SYMIDMASK) >>> TAGWIDTH).toInt
+    else Allocator.getInt(ptr) >> TAGWIDTH
 
   private def findCellAndPort(cellAddress: Long, cellPort: Int): (Long, Int) = {
     var ptr = Allocator.getLong(cellAddress + auxPtrOffset(cellPort))
@@ -222,6 +259,9 @@ object Interpreter {
       (ptr - auxPtrOffset(p), p)
     }
   }
+
+  def canUnbox(sym: Symbol, arity: Int): Boolean =
+    arity == 0 && (sym.payloadType == PayloadType.INT || sym.payloadType == PayloadType.VOID)
 }
 
 final class CutBuffer(initialSize: Int) {

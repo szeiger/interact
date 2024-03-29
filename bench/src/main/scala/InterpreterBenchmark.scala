@@ -38,6 +38,7 @@ class InterpreterBenchmark {
   @Param(Array(
     "ack38",
     "ack38b",
+    "intAck38",
     "boxedAck38",
     "fib22",
     "mult1",
@@ -144,6 +145,18 @@ object InterpreterBenchmark {
       |let A(8n, res2) = 3n
       |""".stripMargin
 
+  private val intAck38Src =
+    """cons Int[int]
+      |
+      |def ackU(a, b) = r
+      |  | Int[x], Int[y]
+      |      if [x == 0] => Int[y + 1]
+      |      if [y == 0] => ackU(Int[x - 1], Int[1])
+      |      else        => ackU(Int[x - 1], ackU(Int[x], Int[y - 1]))
+      |
+      |let resU = ackU(Int[3], Int[8])
+      |""".stripMargin
+
   private val boxedAck38Src =
     """cons BoxedInt[ref]
       |
@@ -174,6 +187,7 @@ object InterpreterBenchmark {
     "ack38" -> ack38Src,
     "ack38b" -> ack38bSrc,
     "boxedAck38" -> boxedAck38Src,
+    "intAck38" -> intAck38Src,
     "fib22" -> fib22Src,
     "fib29" -> fib29Src,
     "mult1" -> mult1Src,

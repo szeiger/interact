@@ -91,7 +91,12 @@ class CreateWiring(val global: Global) extends Transform with Phase {
           Vector(EmbArg.Active(1), EmbArg.Cell(sym.arity), EmbArg.Cell(sym.arity+1)),
           EmbeddedType.PayloadVoid,
           Vector((EmbeddedType.PayloadRef, false), (EmbeddedType.PayloadRef, true), (EmbeddedType.PayloadRef, true))))
-        case _ => Vector.empty
+        case PayloadType.VOID => Vector.empty
+        case pt =>
+          Vector(
+            PayloadAssignment(EmbArg.Active(1), EmbArg.Cell(sym.arity), pt),
+            PayloadAssignment(EmbArg.Active(1), EmbArg.Cell(sym.arity+1), pt)
+          )
       }
       val copyLabel = (for(i <- 0 until sym.arity) yield PayloadAssignment(EmbArg.Active(0), EmbArg.Cell(i), PayloadType.LABEL)).toVector
       RuleWiring(dupSym, sym, Vector(new BranchWiring(0, cells, conns.result(), copyLabel ++ embComp, None, Vector.empty, 0, 1)), true)

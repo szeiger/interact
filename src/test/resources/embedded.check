@@ -1,6 +1,8 @@
   dummy = Dummy[d:0:0]
   dummy2b = Dummy[d2:1:1]
   fib10 = Int[89]
+  i1 = Int[42]
+  i2 = Int[42]
   len = Int[5]
   mult = Int[6]
   r1 = Pair(1n, 1n)

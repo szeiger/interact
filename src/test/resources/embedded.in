@@ -57,3 +57,6 @@ let f = Func(x, Pair(x1, x2))
     (f1, f2) = dup[l2](f)
     r1 = apply(f1, 1n)
     r2 = apply(f2, 2n)
+
+let i0 = Int[42]
+    (i1, i2) = dup(i0)

@@ -63,7 +63,7 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
 
   def method(access: Acc, name: String, desc: MethodDesc,
     debugLineNumbers: Boolean = false, debugLineNumbersClass: String = null): MethodDSL = {
-    val m = new MethodDSL(access, name, desc, debugLineNumbers, debugLineNumbersClass)
+    val m = new MethodDSL(access, name, desc, debugLineNumbers, debugLineNumbersClass, Some(this.name))
     methods.addOne(m)
     m
   }
@@ -95,7 +95,7 @@ final class ClassDSL(access: Acc, val name: String, val superTp: ClassOwner = Cl
 }
 
 final class MethodDSL(access: Acc, val name: String, desc: MethodDesc,
-  debugLineNumbers: Boolean, debugLineNumbersClass: String) extends IfDSL { self =>
+  debugLineNumbers: Boolean, debugLineNumbersClass: String, className: Option[String]) extends IfDSL { self =>
   protected[this] def ifEndLabel: Label = new Label
   protected[this] def method: MethodDSL = this
 
@@ -114,6 +114,17 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc,
   val start, end = new Label
   def receiver: VarIdx =
     if(isStatic) throw new IllegalArgumentException("no receiver in static methods") else new VarIdx(0)
+
+  private[this] def debugName: String = className match {
+    case Some(s) => s"$s#$name"
+    case None => name
+  }
+
+  private[this] def assert(b: Boolean): Unit =
+    if(!b) throw new AssertionError(s"assertion failed in $debugName")
+
+  private[this] def assert(b: Boolean, msg: => Any): Unit =
+    if(!b) throw new AssertionError(s"assertion failed in $debugName: $msg")
 
   def param(name: String, desc: ValDesc, access: Acc = Acc.none): VarIdx = {
     val l = new Local(name, desc, access, params.length + (if(isStatic) 0 else 1), start, end)

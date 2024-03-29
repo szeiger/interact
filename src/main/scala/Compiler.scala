@@ -78,6 +78,7 @@ case class Config(
   tailCallDepth: Int = 32, // stc2
   newAllocator: () => ProxyAllocator = () => new SliceAllocator(), // stc2
   debugMemory: Boolean = false, // stc2
+  unboxedPrimitives: Boolean = true, // Use unboxed 32-bit primitives and singletons instead of pointers (stc2)
 ) {
   def withSpec(spec: String): Config = spec match {
     case s"sti" => copy(backend = STIBackend)
@@ -94,7 +95,10 @@ abstract class Backend(val name: String) {
   def inlineBranching: Boolean
   def inlineUniqueContinuations: Boolean
   def allowPayloadTemp: Boolean
-  def storageClass(sym: Symbol): Any
+  def canReuseLabels: Boolean
+
+  def storageClass(sym: Symbol): Any = sym
+  def canUnbox(sym: Symbol): Boolean = false
 }
 
 object STIBackend extends Backend("sti") {
@@ -104,7 +108,7 @@ object STIBackend extends Backend("sti") {
   def inlineBranching: Boolean = false
   def inlineUniqueContinuations: Boolean = false
   def allowPayloadTemp: Boolean = false
-  def storageClass(sym: Symbol) = sym
+  def canReuseLabels: Boolean = true
 }
 
 object STC1Backend extends Backend("stc1") {
@@ -114,7 +118,7 @@ object STC1Backend extends Backend("stc1") {
   def inlineBranching: Boolean = true
   def inlineUniqueContinuations: Boolean = true
   def allowPayloadTemp: Boolean = true
-  def storageClass(sym: Symbol) = sym
+  def canReuseLabels: Boolean = true
 }
 
 object STC2Backend extends Backend("stc2") {
@@ -124,7 +128,9 @@ object STC2Backend extends Backend("stc2") {
   def inlineBranching: Boolean = true
   def inlineUniqueContinuations: Boolean = true
   def allowPayloadTemp: Boolean = true
-  def storageClass(sym: Symbol) = (stc2.Interpreter.cellSize(sym.arity, sym.payloadType), sym.payloadType == PayloadType.REF)
+  def canReuseLabels: Boolean = false
+  override def storageClass(sym: Symbol) = (stc2.Interpreter.cellSize(sym.arity, sym.payloadType), sym.payloadType == PayloadType.REF)
+  override def canUnbox(sym: Symbol): Boolean = stc2.Interpreter.canUnbox(sym, sym.arity)
 }
 
 class MTBackend(name: String, compile: Boolean) extends Backend(name) {
@@ -142,7 +148,7 @@ class MTBackend(name: String, compile: Boolean) extends Backend(name) {
   def inlineBranching: Boolean = compile
   def inlineUniqueContinuations: Boolean = compile
   def allowPayloadTemp: Boolean = compile
-  def storageClass(sym: Symbol) = sym
+  def canReuseLabels: Boolean = compile
 }
 
 object MTIBackend extends MTBackend("mti", false)
