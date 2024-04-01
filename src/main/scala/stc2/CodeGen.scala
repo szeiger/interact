@@ -71,9 +71,11 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
     val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc, debugLineNumbers = true)
     val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
+    val name0 = if(rule.sym1.isDefined) AbstractCodeGen.encodeName(rule.sym1) else "initial0"
+    val name1 = if(rule.sym2.isDefined) AbstractCodeGen.encodeName(rule.sym2) else "initial1"
     val active = Vector(
-      new ActiveCell(0, m.param("active0", cellT), rule.sym1, rule.arity1, needsCachedPayloads.contains(0), shouldUnbox(rule.sym1, rule.arity1)),
-      new ActiveCell(1, m.param("active1", cellT), rule.sym2, rule.arity2, needsCachedPayloads.contains(1), shouldUnbox(rule.sym2, rule.arity2)),
+      new ActiveCell(0, m.param(s"ac0_$name0", cellT), rule.sym1, rule.arity1, needsCachedPayloads.contains(0), shouldUnbox(rule.sym1, rule.arity1), name0),
+      new ActiveCell(1, m.param(s"ac1_$name1", cellT), rule.sym2, rule.arity2, needsCachedPayloads.contains(1), shouldUnbox(rule.sym2, rule.arity2), name1),
     )
     val level = m.param("level", tp.I)
     val ptw = m.param("ptw", ptwT)
@@ -111,6 +113,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
+
+      incMetric(s"${c.name}.${m.name}", m, ptw)
 
       if(config.unboxedPrimitives) {
         m.lload(c2).dup2.lconst(TAGMASK).land.lconst(TAG_UNBOXED).lcmp.if_==.thnElse {
@@ -161,6 +165,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       val syms = rules.iterator.flatMap { case (rk, rp) if !rp.initial => Iterator(rk.sym1, rk.sym2) }.toSet
       val keys = syms.iterator.map { sym => (symIds(sym), sym, m.newLabel) }.toVector.sortBy(_._1)
       val dflt = m.newLabel
+
+      incMetric(s"${c.name}.${m.name}", m, ptw)
 
       m.lload(c1).lload(c2).iload(level).aload(ptw)
 
@@ -258,7 +264,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   }
 }
 
-final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean, val unboxed: Boolean) {
+final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean,
+  val unboxed: Boolean, val encName: String) {
   var reuse: Int = -1
   var cachedPayload: VarIdx = VarIdx.none
   var cachedPayloadProxyPage: VarIdx = VarIdx.none

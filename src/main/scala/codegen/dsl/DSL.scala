@@ -646,13 +646,10 @@ trait IfDSL {
 }
 
 final class ThenDSL(posOpcode: Int, negOpcode: Int, m: MethodDSL, l1: Label) {
-  def and(load: => Unit): IfDSL = {
+  private def withEndLabel(l1: Label): ThenDSL = new ThenDSL(posOpcode, negOpcode, m, l1)
+  def and(load: => ThenDSL): ThenDSL = {
     m.jumpInsn(negOpcode, l1)
-    load
-    new IfDSL {
-      protected[this] def ifEndLabel: Label = l1
-      protected[this] def method: MethodDSL = m
-    }
+    load.withEndLabel(l1)
   }
   def thnElse(cont: => Unit)(skip: => Unit): MethodDSL = {
     val l2 = new Label
@@ -667,6 +664,7 @@ final class ThenDSL(posOpcode: Int, negOpcode: Int, m: MethodDSL, l1: Label) {
     m.setLabel(l1)
     m
   }
+  def not: ThenDSL = new ThenDSL(negOpcode, posOpcode, m, l1)
   def jump(l: Label): MethodDSL = m.jumpInsn(posOpcode, l)
   def assert(): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m().V)().athrow)
   def assert(msg: String): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m(Desc.Object).V)(m.ldc(msg)).athrow)

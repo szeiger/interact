@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 @State(Scope.Benchmark)
 class ComparisonBenchmark {
 
-  @Param(Array("st.c"))
+  @Param(Array("stc2"))
   var spec: String = _
 
   private val prelude =
@@ -25,14 +25,14 @@ class ComparisonBenchmark {
       |  | S(x) => add(x, S(y))
       |""".stripMargin
 
-  private val mult1Src =
+  private val mult1Src = prelude +
     """def mult(_, y) = r
       |  | Z => erase(y); Z
       |  | S(x) => (y1, y2) = dup(y); add(mult(x, y1), y2)
       |let res = mult(100n, 100n)
       |""".stripMargin
 
-  private val fib22Src =
+  private val fib22Src = prelude +
     """def add2(_, y) = r
       |  | Z    => y
       |  | S(x) => S(add2(x, y))
@@ -45,6 +45,18 @@ class ComparisonBenchmark {
       |let res = fib(22n)
       |""".stripMargin
 
+  private val intAck38Src =
+    """cons Int[int]
+      |
+      |def ackU(a, b) = r
+      |  | Int[x], Int[y]
+      |      if [x == 0] => Int[y + 1]
+      |      if [y == 0] => ackU(Int[x - 1], Int[1])
+      |      else        => ackU(Int[x - 1], ackU(Int[x], Int[y - 1]))
+      |
+      |let resU = ackU(Int[3], Int[9])
+      |""".stripMargin
+
   class PreparedInterpreter(source: String) {
     val model: Compiler = new Compiler(Parser.parse(source), Config(spec))
     val inter = model.createInterpreter()
@@ -54,8 +66,9 @@ class ComparisonBenchmark {
     }
   }
 
-  private lazy val mult1Inter: PreparedInterpreter = new PreparedInterpreter(prelude + mult1Src)
-  private lazy val fib22Inter: PreparedInterpreter = new PreparedInterpreter(prelude + fib22Src)
+  private lazy val mult1Inter: PreparedInterpreter = new PreparedInterpreter(mult1Src)
+  private lazy val fib22Inter: PreparedInterpreter = new PreparedInterpreter(fib22Src)
+  private lazy val intAck38Inter: PreparedInterpreter = new PreparedInterpreter(intAck38Src)
 
   @Benchmark
   def mult1(bh: Blackhole): Unit =
@@ -64,6 +77,10 @@ class ComparisonBenchmark {
   @Benchmark
   def fib22(bh: Blackhole): Unit =
     bh.consume(fib22Inter.setup().reduce())
+
+  @Benchmark
+  def intAck39(bh: Blackhole): Unit =
+    bh.consume(intAck38Inter.setup().reduce())
 
   @Benchmark
   def mult1Scala(bh: Blackhole): Unit = {
@@ -107,5 +124,14 @@ class ComparisonBenchmark {
       case S(n) => add2(fib(S(n)), fib(n))
     }
     bh.consume(fib(nat(22)))
+  }
+
+  @Benchmark
+  def intAck39Scala(bh: Blackhole): Unit = {
+    def ack(x: Int, y: Int): Int =
+      if(x == 0) y + 1
+      else if(y == 0) ack(x-1, 1)
+      else ack(x-1, ack(x, y-1))
+    ack(3, 9)
   }
 }

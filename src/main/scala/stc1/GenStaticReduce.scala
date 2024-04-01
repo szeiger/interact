@@ -140,8 +140,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
               m.if_!=.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.aload(cont0).ifNull.and {
-                ldCell(ct2).instanceof(concreteCellTFor(active(1).sym))
-              }.if_!=.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
+                ldCell(ct2).instanceof(concreteCellTFor(active(1).sym)).if_!=
+              }.thnElse { setCont0(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else if(ct1.idx == bp.active(1) && bp.loopOn1) {
             if(skipCont0NullCheck) {
@@ -150,8 +150,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
               m.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             } else {
               m.aload(cont0).ifNull.and {
-                ldCell(ct2).instanceof(concreteCellTFor(active(0).sym))
-              }.if_!=.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
+                ldCell(ct2).instanceof(concreteCellTFor(active(0).sym)).if_!=
+              }.thnElse { setCont1(ct1, ct2) } { createCut(ct1, ct2) }
             }
           } else createCut(ct1, ct2)
         }
