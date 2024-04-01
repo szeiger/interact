@@ -278,14 +278,15 @@ trait ShowableNode {
 object ShowableNode {
   import MaybeColors._
 
-  def print(n: ShowableNode, out: PrintWriter = new PrintWriter(new OutputStreamWriter(System.out)), name: String = "", prefix: String = "", prefix1: String = null): Unit = {
-    def f(n: NodeInfo, pf1: String, pf2: String, name: String, depth: Int): Unit = {
+  def print(n: ShowableNode, out: PrintWriter = new PrintWriter(new OutputStreamWriter(System.out)), name: String = "", prefix: String = "", prefix1: String = null, highlightTopLevel: Boolean = true): Unit = {
+    def f(n: NodeInfo, pf1: String, pf2: String, name: String, depth: Int, highlight: Boolean): Unit = {
       val b = new StringBuilder()
       val namePrefix = if(name.nonEmpty) s"$name: " else ""
+      val highlitNamePrefix = if(highlight) s"$cCyan$namePrefix" else s"$cNormal$namePrefix"
       val msg = n.msg.split('\n')
       val children = n.children.toIndexedSeq
       val cChild = if(depth % 2 == 0) cBlue else cGreen
-      b.append(s"$pf1$cCyan$namePrefix$cYellow${n.name}$cNormal ${msg(0)}")
+      b.append(s"$pf1$highlitNamePrefix$cYellow${n.name}$cNormal ${msg(0)}")
       for(i <- 1 until msg.length) {
         val p = if(children.isEmpty) " " else s"$cChild\u2502"
         val sp = " " * math.max(4, namePrefix.length + n.name.length)
@@ -295,10 +296,10 @@ object ShowableNode {
       out.println(b.result())
       children.zipWithIndex.foreach { case ((name, n), idx) =>
         val (p1, p2) = if(idx == children.size-1) ("\u2514 ", "  ") else ("\u251c ", "\u2502 ")
-        f(n, pf2 + cChild + p1, pf2 + cChild + p2, name, depth + 1)
+        f(n, pf2 + cChild + p1, pf2 + cChild + p2, name, depth + 1, true)
       }
     }
-    f(NodeInfo(n), if(prefix1 ne null) prefix1 else prefix, prefix, name, 0)
+    f(NodeInfo(n), if(prefix1 ne null) prefix1 else prefix, prefix, name, 0, highlightTopLevel)
     out.flush()
   }
 }

@@ -90,10 +90,7 @@ class Curry(val global: Global) extends Transform with Phase {
   override def apply(n: Statement): Vector[Statement] = n match {
     case n: MatchRule => curry(n)
     case c: Cons => derivedRules(c.der.map(_.map(_.sym)).getOrElse(defaultDeriveSyms), c.name.sym, c.name.pos)
-    case d: Def =>
-      val erase = DerivedRule(globalSymbols("erase"), d.name.sym).setPos(d.name.pos)
-      lazy val dup = DerivedRule(globalSymbols("dup"), d.name.sym).setPos(d.name.pos)
-      if(d.name.s != "dup" && d.name.s != "erase") Vector(erase, dup) else Vector(erase)
+    case d: Def => derivedRules(defaultDeriveSyms, d.name.sym, d.name.pos)
     case n => Vector(n)
   }
 

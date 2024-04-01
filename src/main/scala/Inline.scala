@@ -90,7 +90,8 @@ class Inline(val global: Global) extends Phase {
     uniqueContSyms: Map[RuleKey, Set[Symbol]], allRules: Map[RuleKey, RuleWiring]): RuleWiring = {
     val chain = r.key :: parents
     val prefix = "    " * (parents.length+1)
-    phaseLog(s"$prefix${r.key}")
+    phaseLog(s"${prefix}Inlining into ${r.key}")
+    phaseLog(r, "Inline target", prefix+"  ")
     val ruleAvailable = parentAvailable ++ Vector(r.sym1, r.sym2).filterNot(_.isSingleton)
     val uniqueConts = uniqueContSyms.getOrElse(r.key, Set.empty)
     val branches2 = Transform.flatMapC(r.branches) { branch =>
@@ -115,7 +116,11 @@ class Inline(val global: Global) extends Phase {
         else simple.filter { case (_, _, r2) => r2.sym1.payloadType.isEmpty && r2.sym2.payloadType.isEmpty }
       val direct = simpleFiltered ++
         (if(config.inlineBranching && config.backend.inlineBranching) branching.take(1) else Nil) //TODO inline multiple branching rules?
-      val branch2 = inlineAll(branch, direct)
+      phaseLog(s"$prefix  Direct inlining ${direct.length} RuleWirings")
+      direct.foreach { case (i1, i2, rw) => phaseLog(rw, s"Direct inlining at ($i1, $i2)", prefix+"  ") }
+      val branch2 = inlineAll(branch, direct, prefix + "  ")
+      if(branch2 eq branch) phaseLog(s"$prefix  Direct inlined (no change)")
+      else phaseLog(branch2, "Direct inlined", prefix+"  ")
 
       // speculative
       if(uniqueConts.nonEmpty && branch2.cond.isEmpty && branch2.branches.isEmpty) { //TODO inline into already branching rule? Create nested conditions?
@@ -138,7 +143,8 @@ class Inline(val global: Global) extends Phase {
             (psym, inlineRec(r2, chain, ruleAvailable + psym, branchCreated, uniqueContSyms, allRules))
           }
         }
-        (candidate, candidateRecInlined) match {
+
+        val branches3 = (candidate, candidateRecInlined) match {
           case (Some((usym, idx, wire)), Some(partners)) if partners.nonEmpty =>
             //ShowableNode.print(branch2, name = "Original branch")
             partners.map { case (psym, prule) =>
@@ -148,15 +154,23 @@ class Inline(val global: Global) extends Phase {
               assert(b.branches.isEmpty)
               //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
               //ShowableNode.print(prule, name = "Inlining")
-              val b2 = inline(b, c1, c2, prule)._1
+              val b2 = inline(b, c1, c2, prule, prefix+"  ")._1
               //ShowableNode.print(b2, name = "Activated")
               b2
             } :+ branch2
           case _ => Vector(branch2)
         }
-      } else Vector(branch2)
+        branches3.foreach(b => phaseLog(b, "Speculative inlined", prefix+"  "))
+        branches3
+      } else {
+        phaseLog(s"$prefix  Speculative inlined (no change)")
+        Vector(branch2)
+      }
     }
-    if(branches2 eq r.branches) r else r.copy(branches = branches2)
+    val res = if(branches2 eq r.branches) r else r.copy(branches = branches2)
+    phaseLog(s"${prefix}Inlining into ${r.key} finished")
+    //branches2.foreach(_.validate())
+    res
   }
 
   private[this] def findInlinableActivePairs(n: BranchWiring, rules: Map[RuleKey, RuleWiring]): Set[(Int, Int, RuleWiring)] =
@@ -200,10 +214,10 @@ class Inline(val global: Global) extends Phase {
   }
 
   @tailrec
-  private[this] def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)]): BranchWiring = ps match {
+  private[this] def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)], prefix: String): BranchWiring = ps match {
     case (c1, c2, r) :: ps =>
-      val (n2, mapping) = inline(n, c1, c2, r)
-      inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) })
+      val (n2, mapping) = inline(n, c1, c2, r, prefix)
+      inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) }, prefix)
     case Nil => n
   }
 
@@ -225,7 +239,7 @@ class Inline(val global: Global) extends Phase {
     checkThrow()
   }
 
-  private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring): (BranchWiring, Map[Int, Int]) = {
+  private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring, prefix: String): (BranchWiring, Map[Int, Int]) = {
     //println(s"inline($c1, $c2)")
     assert(outer.cellOffset == 0 && outer.branches.isEmpty)
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
@@ -266,6 +280,7 @@ class Inline(val global: Global) extends Phase {
     }
     val outerConns = outer.conns.flatMap(relabelOuter(_))
     val outerPayloadComps = outer.payloadComps.flatMap(relabelOuter(_))
+    var foundLocalCheckPrincipal = false
     val relabelInner: Transform = new Transform {
       override def apply(n: EmbArg): EmbArg = n match {
         case EmbArg.Active(0) => c1Temp
@@ -274,12 +289,18 @@ class Inline(val global: Global) extends Phase {
         case n @ EmbArg.Temp(i, _) => n.copy(i + innerTempOffset)
         case n => n
       }
-      override def apply(n: Connection): Set[Connection] = {
-        def remap(idx: Idx) = idx match {
-          case f: FreeIdx => innerMapping(f)
-          case CellIdx(i, p) => CellIdx(i + innerCellOffset, p)
+      def remap(idx: Idx) = idx match {
+        case f: FreeIdx => innerMapping(f)
+        case CellIdx(i, p) => CellIdx(i + innerCellOffset, p)
+      }
+      override def apply(n: Connection): Set[Connection] = Set(Connection(remap(n.c1), remap(n.c2)))
+      override def apply(n: CheckPrincipal) = {
+        val w2 = remap(n.wire)
+        if(w2 eq n.wire) n
+        else {
+          if(w2.isInstanceOf[CellIdx]) foundLocalCheckPrincipal = true
+          n.copy(wire = w2)
         }
-        Set(Connection(remap(n.c1), remap(n.c2)))
       }
     }
     def mapInner(b: BranchWiring): BranchWiring =
@@ -292,13 +313,46 @@ class Inline(val global: Global) extends Phase {
         tempOffset = b.tempOffset + innerTempOffset,
       )
     val b2 = outer.copy(cells = outerCells, conns = outerConns, payloadComps = outerPayloadComps, branches = inner.branches.map(mapInner))
-    (if(b2.branches.length == 1) merge(b2) else b2, outerCellsMapping)
+    phaseLog(b2, s"Inlined at ($c1, $c2)", prefix)
+
+    val b3 = if(foundLocalCheckPrincipal) resolveCheckPrincipal(b2) else b2
+
+    (if(b3.branches.length == 1) {
+      val res = merge(b3)
+      phaseLog(res, s"Merged", prefix)
+      res
+    } else {
+      phaseLog(s"${prefix}Merged: No change")
+      b3
+    }, outerCellsMapping)
+  }
+
+  // resolve CheckPrincipal(CellIdx(...)) statically
+  private[this] def resolveCheckPrincipal(b: BranchWiring): BranchWiring = {
+    val tr = new Transform {
+      override def apply(n: BranchWiring) = {
+        val branches2 = n.branches.flatMap { br =>
+          br.cond match {
+            case Some(CheckPrincipal(CellIdx(c1, p1), sym, ac)) =>
+              if(p1 >= 0) {
+                Vector.empty
+              } else {
+                //TODO: Can we end up with a principal connection here?
+                ???
+              }
+            case _ => Vector(apply(br))
+          }
+        }
+        n.copy(branches = branches2)
+      }
+    }
+    tr(b)
   }
 
   private[this] def merge(b: BranchWiring): BranchWiring = {
     assert(b.branches.length == 1 && b.branches.head.cellOffset == b.cells.length)
     val ib = b.branches.head
-    b.copy(cells = b.cells ++ ib.cells, conns = b.conns ++ ib.conns, payloadComps = b.payloadComps ++ ib.payloadComps, branches = Vector.empty)
+    b.copy(cells = b.cells ++ ib.cells, conns = b.conns ++ ib.conns, payloadComps = b.payloadComps ++ ib.payloadComps, branches = ib.branches)
   }
 
   private[this] def tempCount(pcs: Iterable[PayloadComputation]): Int =

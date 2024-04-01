@@ -274,7 +274,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
             if(shouldUnbox(sym))
               ifUnboxed(ct2, sym).not.jump(lCreateCut)
             else {
-              ifPrincipal(ct2).not.jump(lCreateCut)
+              if(config.unboxedPrimitives) ifPrincipal(ct2).not.jump(lCreateCut)
               ifBoxed(ct2, sym).not.jump(lCreateCut)
             }
             setCont(ctA, ctB)
@@ -572,7 +572,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   private def checkCondition(bp: BranchPlan, endTarget: Label): Unit = {
     bp.cond.foreach {
-      case CheckPrincipal(wire, sym, activeIdx) =>
+      case CheckPrincipal(wire: FreeIdx, sym, activeIdx) =>
         if(codeGen.shouldUnbox(sym)) {
           ifUnboxed(wire, sym).not.jump(endTarget)
         } else {

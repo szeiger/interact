@@ -67,7 +67,7 @@ class PlanRules(val global: Global) extends Phase {
       case _ => true
     }
     def isLoop(reuse: Int, otherReuse: Int, sym: => Symbol) =
-      reuse != -1 && sym == branch.cells(reuse) && config.loop && canBeActive(branch.principalConns(reuse)) &&
+      reuse != -1 && rule.isDefined && sym == branch.cells(reuse) && config.loop && canBeActive(branch.principalConns(reuse)) &&
         (sym.isDef || otherReuse == -1 || !config.biasForCommonDispatch)
     val loopOn0 = isLoop(active(0), active(1), rule.get.sym1)
     val loopOn1 = isLoop(active(1), active(0), rule.get.sym2)

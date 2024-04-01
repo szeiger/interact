@@ -1,6 +1,6 @@
 package de.szeiger.interact.ast
 
-import de.szeiger.interact.{AllocateTemp, BranchWiring, Connection, CreateLabelsComp, EmbArg, InitialRuleWiring, PayloadAssignment, PayloadComputation, PayloadComputationPlan, PayloadMethodApplication, PayloadMethodApplicationWithReturn, ReuseLabelsComp, RuleWiring}
+import de.szeiger.interact.{AllocateTemp, BranchWiring, CheckPrincipal, Connection, CreateLabelsComp, EmbArg, InitialRuleWiring, PayloadAssignment, PayloadComputation, PayloadComputationPlan, PayloadMethodApplication, PayloadMethodApplicationWithReturn, ReuseLabelsComp, RuleWiring}
 
 abstract class Transform {
   import Transform._
@@ -216,7 +216,10 @@ abstract class Transform {
     case n: PayloadMethodApplicationWithReturn => apply(n)
     case n: PayloadAssignment => apply(n)
     case n: CreateLabelsComp => apply(n)
+    case n: CheckPrincipal => apply(n)
   })
+
+  def apply(n: CheckPrincipal): CheckPrincipal = n
 
   def apply(n: PayloadMethodApplication): PayloadMethodApplication = {
     val ea2 = mapC(n.embArgs)(apply)

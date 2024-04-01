@@ -46,7 +46,7 @@ trait Phase extends (CompilationUnit => CompilationUnit) {
   override def toString: String = phaseName
 
   @inline final def phaseLog(@inline msg: => String): Unit = if(phaseLogEnabled) global.phaseLog(phaseName, msg)
-  @inline final def phaseLog(n: ShowableNode, name: String): Unit = if(phaseLogEnabled) global.phaseLog(phaseName, n, name)
+  @inline final def phaseLog(n: ShowableNode, name: => String, prefix: String = ""): Unit = if(phaseLogEnabled) global.phaseLog(phaseName, n, name, prefix)
 }
 
 case class Config(

@@ -11,3 +11,13 @@ def _ * y = r
             r = b + x * a
 
 let res = 100n * 100n
+
+
+cons Int[int]
+def add(_, _) = r
+  | Int[x], Int[y] if [x == 0] => Int[y]
+                   else        => add(Int[x-1], Int[y+1])
+def mult(_, _) = r
+  | Int[x], Int[y] if [x == 0] => Int[0]
+                   else        => add(Int[y], mult(Int[x-1], Int[y]))
+let resI = mult(Int[100], Int[100])

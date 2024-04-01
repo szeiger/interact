@@ -56,9 +56,9 @@ final class Global(val config: Config) {
   def phaseLog(phase: String, msg: String): Unit =
     println(s"<$phase> $msg")
 
-  def phaseLog(phase: String, n: ShowableNode, name: String): Unit = {
+  def phaseLog(phase: String, n: ShowableNode, name: String, prefix: String): Unit = {
     val p = s"<$phase> "
-    ShowableNode.print(n, name = name, prefix = p, prefix1 = p)
+    ShowableNode.print(n, name = name, prefix = p+prefix, prefix1 = p+prefix, highlightTopLevel = false)
   }
 }
 

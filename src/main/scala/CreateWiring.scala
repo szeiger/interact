@@ -174,9 +174,9 @@ final case class AllocateTemp(ea: EmbArg.Temp, boxed: Boolean) extends PayloadCo
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$ea, $boxed")
 }
 
-// Check if a FreeIdx is connected to the principal port of a cell with the given Symbol
+// Check if a FreeIdx (or CellIdx during inlining) is connected to the principal port of a cell with the given Symbol
 // and make it a new active cell
-final case class CheckPrincipal(wire: FreeIdx, sym: Symbol, activeIdx: Int) extends PayloadComputation {
+final case class CheckPrincipal(wire: Idx, sym: Symbol, activeIdx: Int) extends PayloadComputation {
   val embArgs: Vector[EmbArg] = Vector.empty
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym at a($activeIdx)")
 }
@@ -244,16 +244,35 @@ final case class BranchWiring(cellOffset: Int, cells: Vector[Symbol], conns: Set
     for(i <- cells.indices) a(i) = new Array[Idx](cells(i).arity)
     val p = new Array[Idx](cells.length)
     def set(c1: Idx, c2: Idx): Unit = c1 match {
-      case CellIdx(i1, p1) => if(p1 >= 0) a(i1-cellOffset)(p1) = c2 else p(i1-cellOffset) = c2
+      case CellIdx(i1, p1) if i1 >= cellOffset =>
+        if(p1 >= 0) a(i1-cellOffset)(p1) = c2 else p(i1-cellOffset) = c2
       case _ =>
     }
     conns.foreach { case Connection(c1, c2) => set(c1, c2); set(c2, c1) }
     (a, p)
   }
 
+  def validate(): Unit = {
+    val a = new Array[Array[Idx]](cells.length)
+    for(i <- cells.indices) a(i) = new Array[Idx](cells(i).arity+1)
+    def setI(c1: Idx, c2: Idx): Unit = c1 match {
+      case CellIdx(i1, p1) if i1 >= cellOffset && i1-cellOffset < a.length => a(i1-cellOffset)(p1+1) = c2
+      case _ =>
+    }
+    def setC(c: Connection): Unit = { setI(c.c1, c.c2); setI(c.c2, c.c1) }
+    def setB(b: BranchWiring): Unit = {
+      b.conns.foreach(setC)
+      b.branches.foreach(setB)
+    }
+    setB(this)
+    for(i <- cells.indices) {
+      a(i).foreach(i => assert(i != null))
+    }
+  }
+
   def allCreatedCells: Set[Symbol] = cells.toSet ++ branches.flatMap(_.allCreatedCells)
 
-  def show: String = cells.zipWithIndex.map { case (s, i) => s"${i+cellOffset}: $s/${s.arity}"}.mkString(s"tempO=$tempOffset, cells = [", ", ", "]")
+  def show: String = cells.zipWithIndex.map { case (s, i) => s"${i+cellOffset}: $s/${s.arity}"}.mkString(s"tempO=$tempOffset, cellO=$cellOffset, cells = [", ", ", "]")
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (intConns, "i") += (extConns, "e") += (payloadComps, "p") += (cond, "cond") += (branches, "b")
