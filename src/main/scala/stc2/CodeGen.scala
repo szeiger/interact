@@ -12,7 +12,7 @@ import scala.collection.mutable
 import Interpreter._
 
 class CodeGen(genPackage: String, classWriter: ClassWriter,
-  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], val config: Config) extends AbstractCodeGen(config) {
+  compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], val config: Config) extends AbstractCodeGen(config) { self =>
 
   val riT = tp.c[InitialRuleImpl]
   val ptwT = tp.c[Interpreter]
@@ -53,12 +53,12 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   val ptw_setProxy = ptwT.method("setProxy", tp.m(tp.J, tp.Object).V)
   val lifecycleManaged_copy = lifecycleManagedT.method("copy", tp.m()(lifecycleManagedT))
   val new_MetaClass = metaClassT.constr(tp.m(symbolT, tp.I).V)
-  val generatedDispatch_staticReduce = generatedDispatchT.method("staticReduce", tp.m(cellT, cellT, tp.I, ptwT).V)
-
-  def ruleT_static_reduce(sym1: Symbol, sym2: Symbol) =
-    tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}").method("static_reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
-  def initialRuleT_static_reduce(idx: Int) =
-    tp.c(s"$genPackage/InitialRule_$idx").method("static_reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
+  val staticReduceName = "static_reduce"
+  val staticReduceDesc = tp.m(cellT, cellT, tp.I, ptwT).V
+  val unboxedStaticReduceName = "unboxed_static_reduce"
+  val generatedDispatch_staticReduce = generatedDispatchT.method(staticReduceName, staticReduceDesc)
+  def ruleT(sym1: Symbol, sym2: Symbol) = tp.c(s"$genPackage/Rule_${encodeName(sym1)}$$_${encodeName(sym2)}")
+  def initialRuleT(idx: Int) = tp.c(s"$genPackage/InitialRule_$idx")
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
   def metaClass_singleton(sym: Symbol) = { val tp = concreteMetaClassTFor(sym); tp.field("singleton", tp) }
   def metaClass_reduce(sym: Symbol) = concreteMetaClassTFor(sym).method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
@@ -68,20 +68,50 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   def shouldUnbox(sym: Symbol, arity: Int = -1) =
     config.unboxedPrimitives && Interpreter.canUnbox(sym, if(arity == -1) sym.arity else arity)
 
-  private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
-    val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc, debugLineNumbers = true)
+  private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan): Unit = {
     val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
-    val name0 = if(rule.sym1.isDefined) AbstractCodeGen.encodeName(rule.sym1) else "initial0"
-    val name1 = if(rule.sym2.isDefined) AbstractCodeGen.encodeName(rule.sym2) else "initial1"
-    val active = Vector(
-      new ActiveCell(0, m.param(s"ac0_$name0", cellT), rule.sym1, rule.arity1, needsCachedPayloads.contains(0), shouldUnbox(rule.sym1, rule.arity1), name0),
-      new ActiveCell(1, m.param(s"ac1_$name1", cellT), rule.sym2, rule.arity2, needsCachedPayloads.contains(1), shouldUnbox(rule.sym2, rule.arity2), name1),
-    )
+    class P(val idx: Int, val sym: Symbol, val arity: Int) {
+      private def unboxedT(s: Symbol) = PTOps(null, s.payloadType)(self).unboxedT
+      val unbox = shouldUnbox(sym, arity)
+      val unboxNonVoid = unbox && sym.payloadType.isDefined
+      val name = if(sym.isDefined) AbstractCodeGen.encodeName(sym) else s"initial$idx"
+      val t = if(unboxNonVoid) unboxedT(sym) else cellT
+      def ac(m: MethodDSL) = {
+        if(unboxNonVoid) {
+          val ac = new ActiveCell(m, self, 0, VarIdx.none, sym, arity, true, unbox, name)
+          ac.cachedPayload = m.param(s"payload${idx}_$name", t)
+          ac
+        } else new ActiveCell(m, self, 0, m.param(s"ac${idx}_$name", t), sym, arity, needsCachedPayloads.contains(idx), unbox, name)
+      }
+    }
+    val p0 = new P(0, rule.sym1, rule.arity1)
+    val p1 = new P(1, rule.sym2, rule.arity2)
+    val (unboxed, name) = if(p0.unboxNonVoid || p1.unboxNonVoid) (true, unboxedStaticReduceName) else (false, staticReduceName)
+    val staticReduceDesc = tp.m(p0.t, p1.t, tp.I, ptwT).V
+    lazy val m = classDSL.method(Acc.PUBLIC.STATIC, name, staticReduceDesc, debugLineNumbers = true)
+    val active = Vector(p0.ac(m), p1.ac(m))
     val level = m.param("level", tp.I)
     val ptw = m.param("ptw", ptwT)
     val metricName = s"${classDSL.name}.${m.name}"
     incMetric(metricName, m, ptw)
     new GenStaticReduce(m, active, level, ptw, rule, this, metricName).emitRule()
+    if(unboxed) implementStaticReduceUnboxingBridge(classDSL, rule, staticReduceDesc)
+  }
+
+  private def implementStaticReduceUnboxingBridge(classDSL: ClassDSL, rule: RulePlan, unboxedDesc: MethodDesc): Unit = {
+    val m = classDSL.method(Acc.PUBLIC.STATIC, staticReduceName, staticReduceDesc)
+    val ac0 = m.param(s"ac0", cellT)
+    val ac1 = m.param(s"ac0", cellT)
+    val level = m.param("level", tp.I)
+    val ptw = m.param("ptw", ptwT)
+    def unbox(sym: Symbol, ac: VarIdx) =
+      if(sym.payloadType.isDefined && shouldUnbox(sym)) {
+        val pt = PTOps(m, sym.payloadType)(this)
+        pt.extractUnboxed(m.lload(ac))
+      } else m.lload(ac)
+    unbox(rule.sym1, ac0)
+    unbox(rule.sym2, ac1)
+    m.iload(level).aload(ptw).invokestatic(classDSL.thisTp, unboxedStaticReduceName, unboxedDesc).return_
   }
 
   def incMetric(metric: String, m: MethodDSL, ptw: VarIdx, count: Int = 1): Unit =
@@ -136,7 +166,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       m.tableswitchOpt(keys.iterator.map(_._2).toArray, dflt, keys.map(_._3))
       keys.foreach { case (rk, _, l, rev) =>
         m.setLabel(l)
-        val staticMR = ruleT_static_reduce(rk.sym1, rk.sym2)
+        val staticMR = ruleT(rk.sym1, rk.sym2).method(staticReduceName, staticReduceDesc)
         if(rev) m.lload(c2).lload(c1)
         else m.lload(c1).lload(c2)
         m.iload(level).aload(ptw).invokestatic(staticMR)
@@ -206,10 +236,10 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   }
 
   private def compileInitial(rule: RulePlan, initialIndex: Int): String = {
-    val staticMR = initialRuleT_static_reduce(initialIndex)
+    val staticMR = initialRuleT(initialIndex).method(staticReduceName, staticReduceDesc)
     val c = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className, riT)
     c.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(c, rule, staticMR)
+    implementStaticReduce(c, rule)
 
     // reduce
     {
@@ -245,10 +275,9 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   }
 
   private def compileRule(rule: RulePlan): Unit = {
-    val staticMR = ruleT_static_reduce(rule.sym1, rule.sym2)
-    val ric = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className)
+    val ric = DSL.newClass(Acc.PUBLIC.FINAL, ruleT(rule.sym1, rule.sym2).className)
     ric.emptyNoArgsConstructor(Acc.PUBLIC)
-    implementStaticReduce(ric, rule, staticMR)
+    implementStaticReduce(ric, rule)
     addClass(classWriter, ric)
   }
 
@@ -264,10 +293,15 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   }
 }
 
-final class ActiveCell(val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean,
+final class ActiveCell(m: MethodDSL, cg: CodeGen, val id: Int, val vidx: VarIdx, val sym: Symbol, val arity: Int, val needsCachedPayload: Boolean,
   val unboxed: Boolean, val encName: String) {
   var reuse: Int = -1
   var cachedPayload: VarIdx = VarIdx.none
   var cachedPayloadProxyPage: VarIdx = VarIdx.none
   var cachedPayloadProxyPageOffset: VarIdx = VarIdx.none
+  val pt: PTOps = if(unboxedParameter) PTOps(m, sym.payloadType)(cg) else null
+
+  def unboxedParameter = vidx.isEmpty
+
+  override def toString = s"ac$id(vidx=$vidx, sym=$sym, arity=$arity, needsCP=$needsCachedPayload, unboxed=$unboxed, reuse=$reuse)"
 }

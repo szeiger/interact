@@ -74,7 +74,7 @@ case class Config(
   reuseCells: Boolean = true, // stc*
   writeOutput: Option[Path] = None, // write generated classes to dir or jar file (stc*)
   writeJava: Option[Path] = None, // write decompiled classes to dir (stc*)
-  skipCodeGen: Boolean = false, // do not generate classfiles (stc*)
+  skipCodeGen: Set[String] = Set.empty, // do not generate classfiles for these Java class names (stc*)
   tailCallDepth: Int = 32, // stc2
   newAllocator: () => ProxyAllocator = () => new SliceAllocator(), // stc2
   debugMemory: Boolean = false, // stc2

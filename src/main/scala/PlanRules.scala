@@ -21,7 +21,9 @@ class PlanRules(val global: Global) extends Phase {
 
   def createBranchPlan(rule: Option[GenericRuleWiring], branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring],
     baseSingletonUse: Int, baseLabelCreate: Int, baseActive: Vector[Int], parentCells: Vector[Symbol]): BranchPlan = {
-    val allCells = branch.cells ++ parentCells
+    lazy val ruleWiring: Option[RuleWiring] = rule.collect { case r: RuleWiring => r }
+    lazy val initialRuleWiring: Option[InitialRuleWiring] = rule.collect { case r: InitialRuleWiring => r }
+    val allCells = parentCells ++ branch.cells
     val (active, skipConns) = rule.map(findReuse(_, branch)).getOrElse((baseActive, Set.empty[Connection]))
     //println(s"${rule.map(r => r.sym1 + ", " + r.sym2)} $active")
     val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
@@ -71,6 +73,21 @@ class PlanRules(val global: Global) extends Phase {
         (sym.isDef || otherReuse == -1 || !config.biasForCommonDispatch)
     val loopOn0 = isLoop(active(0), active(1), rule.get.sym1)
     val loopOn1 = isLoop(active(1), active(0), rule.get.sym2)
+    val utail = ruleWiring match {
+      case Some(r) if !loopOn0 && !loopOn1 =>
+        val cand = sortedConns.iterator.collect { case Connection(CellIdx(i1, -1), CellIdx(i2, -1)) => (allCells(i1), allCells(i2)) }.toVector
+        val pref = cand.find { case (s1, s2) => (s1 == r.sym1 && s2 == r.sym2) || (s1 == r.sym2 && s2 == r.sym1) }.map { _ => (r.sym1, r.sym2) }
+        pref.orElse(cand.headOption)
+      case _ => None
+    }
+    val (tailSyms0, tailSyms1, useTailCont) = if(branch.branches.isEmpty) { //TODO support all branches
+      val pairs = sortedConns.iterator.flatMap {
+        case Connection(CellIdx(i1, -1), CellIdx(i2, -1)) => Vector((allCells(i1), allCells(i2), true))
+        case Connection(CellIdx(i1, -1), FreeIdx(_, _)) => Vector((allCells(i1), Symbol.NoSymbol, true))
+        case _ => Vector.empty
+      }.toVector
+      (pairs.map(_._1).toSet, pairs.map(_._2).toSet, !initialRuleWiring.isDefined && pairs.exists(_._3))
+    } else (Set.empty[Symbol], Set.empty[Symbol], false)
     val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, active, allCells))
     val tempCount = payloadTemp.length + branches.map(_.totalTempCount).maxOption.getOrElse(0)
     branch.cond.foreach {
@@ -78,8 +95,8 @@ class PlanRules(val global: Global) extends Phase {
       case _: CheckPrincipal =>
     }
     new BranchPlan(active, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps, tempCount,
-      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches, loopOn0, loopOn1, branch.tempOffset,
-      needsCachedPayloads)
+      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches,
+      utail, loopOn0, loopOn1, tailSyms0, tailSyms1, useTailCont, branch.tempOffset, needsCachedPayloads)
   }
 
   // Find all temporary payload variables and whether or not they need to be boxed
@@ -212,13 +229,13 @@ class PlanRules(val global: Global) extends Phase {
         else true
       case _ => true
     }.map {
-      case Connection(i1, i2) if i1.port == -1 && i2.port != -1 => Connection(i2, i1)
-      case Connection(i1: CellIdx, i2: FreeIdx) => Connection(i2, i1)
-      case Connection(i1: FreeIdx, i2: FreeIdx) if (i1.active >= i2.active) || (i1.active == i2.active && i2.port < i1.port)  => Connection(i2, i1)
-      case Connection(i1: CellIdx, i2: CellIdx) if i2.idx < i1.idx || (i2.idx == i1.idx && i2.port < i1.port) => Connection(i2, i1)
+      case Connection(i1, i2) if i1.port != -1 && i2.port == -1 => Connection(i2, i1)
+      case Connection(i1: FreeIdx, i2: CellIdx) => Connection(i2, i1)
+      case Connection(i1: FreeIdx, i2: FreeIdx) if (i2.active >= i1.active) || (i2.active == i1.active && i1.port < i2.port)  => Connection(i2, i1)
+      case Connection(i1: CellIdx, i2: CellIdx) if i1.idx < i2.idx || (i1.idx == i2.idx && i1.port < i2.port) => Connection(i2, i1)
       case c => c
     }.toVector.sortBy {
-      case Connection(CellIdx(idx, port),   _) => (0, idx, port)
+      case Connection(CellIdx(idx, port), _) => (0, idx, port)
       case Connection(FreeIdx(a, port), _) => (a+1, 0, port)
     }
 
@@ -276,18 +293,24 @@ class BranchPlan(val active: Vector[Int],
   val statSingletonUse: Int,
   val statLabelCreate: Int,
   val branches: Vector[BranchPlan],
+  val unconditionalTail: Option[(Symbol, Symbol)],
   val loopOn0: Boolean, val loopOn1: Boolean,
+  val tailSyms0: Set[Symbol], val tailSyms1: Set[Symbol],
+  val useTailCont: Boolean,
   val tempOffset: Int,
   val needsCachedPayloads: Set[Int]) extends Node {
 
   def isReuse(cellIdx: CellIdx): Boolean = active.contains(cellIdx.idx)
   def totalCellCount: Int = cellSyms.length + branches.map(_.totalCellCount).maxOption.getOrElse(0)
   def extraActiveCount: Int = cond.count(_.isInstanceOf[CheckPrincipal]) + branches.map(_.extraActiveCount).maxOption.getOrElse(0)
+  def singleDispatchSym0: Symbol = if(tailSyms0.size == 1) tailSyms0.head else Symbol.NoSymbol
+  def singleDispatchSym1: Symbol = if(tailSyms1.size == 1) tailSyms1.head else Symbol.NoSymbol
+  def useLoopCont: Boolean = loopOn0 || loopOn1
 
   def show: String = {
     val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
     val n = needsCachedPayloads.mkString("{", ", ", "}")
-    s"a=${active.mkString("[", ", ", "]")}, loopOn0=$loopOn0, loopOn1=$loopOn1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
+    s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (cond, "cond") += (cellCreateInstructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")

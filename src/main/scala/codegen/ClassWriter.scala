@@ -68,6 +68,12 @@ private final class DecompileAdapter(parent: ClassWriter, classes: Path, out: Pa
   }
 }
 
+private final class SkipClassWriter(parent: ClassWriter, skip: Set[String]) extends ClassWriter {
+  def writeClass(javaName: String, classFile: Array[Byte]): Unit =
+    if(!skip.contains(javaName) && !skip.contains("*")) parent.writeClass(javaName, classFile)
+  override def close(): Unit = parent.close()
+}
+
 object ClassWriter {
   private[codegen] def delete(p: Path): Unit = if(Files.exists(p)) {
     if(Files.isDirectory(p)) Files.list(p).forEach(delete)
@@ -75,7 +81,7 @@ object ClassWriter {
   }
 
   def apply(config: Config, parent: ClassWriter): ClassWriter = {
-    val p = if(config.skipCodeGen) new NullClassWriter else parent
+    val p = if(config.skipCodeGen.nonEmpty) new SkipClassWriter(parent, config.skipCodeGen) else parent
     val cw: ClassWriter = config.writeOutput match {
       case Some(f) if f.getFileName.toString.endsWith(".jar") => p.and(new JarClassWriter(f))
       case Some(f) => p.and(new ClassDirWriter(f))

@@ -44,7 +44,9 @@ class InterpreterBenchmark {
     "mult1",
     "mult2",
     "mult3",
-    //"fib29",
+    "intMult3",
+    "intFib29",
+//    "fib29",
   ))
   var benchmark: String = _
 
@@ -96,6 +98,17 @@ object InterpreterBenchmark {
       |let res = mult(1000n, 1000n)
       |""".stripMargin
 
+  private val intMult3Src =
+    """cons Int[int]
+      |def add(_, _) = r
+      |  | Int[x], Int[y] if [x == 0] => Int[y]
+      |                   else        => add(Int[x-1], Int[y+1])
+      |def mult(_, _) = r
+      |  | Int[x], Int[y] if [x == 0] => Int[0]
+      |                   else        => add(Int[y], mult(Int[x-1], Int[y]))
+      |let res = mult(Int[1000], Int[1000])
+      |""".stripMargin
+
   private val fib22Src = prelude +
     """def add2(_, y) = r
       |  | Z    => y
@@ -120,6 +133,17 @@ object InterpreterBenchmark {
       |  | Z    => 1n
       |  | S(n) => (n1, n2) = dup(n); add2(fib(S(n1)), fib(n2))
       |let res = fib(29n)
+      |""".stripMargin
+
+  private val intFib29Src =
+    """cons Int[int]
+      |def _ + _ = r
+      |  | Int[x], Int[y] => Int[x + y]
+      |def fib(_) = r
+      | | Int[x] if [x == 0] => Int[1]
+      |          if [x == 1] => Int[1]
+      |          else        => fib(Int[x-1]) + fib(Int[x-2])
+      |let res = fib(Int[29])
       |""".stripMargin
 
   private val ack38Src = prelude +
@@ -189,19 +213,21 @@ object InterpreterBenchmark {
     "boxedAck38" -> boxedAck38Src,
     "intAck38" -> intAck38Src,
     "fib22" -> fib22Src,
+    "intFib29" -> intFib29Src,
     "fib29" -> fib29Src,
     "mult1" -> mult1Src,
     "mult2" -> mult2Src,
     "mult3" -> mult3Src,
+    "intMult3" -> intMult3Src,
   )
 
   val prepareConfig: Config => Config =
-    _.copy(collectStats = true, logCodeGenSummary = true, showAfter = Set(""))
+    _.copy(collectStats = true, logCodeGenSummary = true, showAfter = Set("PlanRules"))
 
   val benchConfig: Config => Config =
-    identity
-    //_.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")), logGeneratedClasses = None, showAfter = Set(""))
-    //_.copy(skipCodeGen = true)
+    //identity
+    _.copy(writeOutput = Some(Path.of("gen-classes")), writeJava = Some(Path.of("gen-src")), logGeneratedClasses = None, showAfter = Set(""))
+    //_.copy(skipCodeGen = Set(""))
 
   def setup(spec: String, benchmark: String): BaseInterpreter =
     new Compiler(Parser.parse(testCases(benchmark)), benchConfig(Config(spec))).createInterpreter()

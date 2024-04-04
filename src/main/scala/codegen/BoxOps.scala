@@ -22,8 +22,10 @@ object BoxDesc {
   val refDesc = new BoxDesc(tp.i[RefBox], tp.c[RefBoxImpl], tp.Object)
 }
 
-class BoxOps(m: MethodDSL, val desc: BoxDesc) {
+class BoxOps(m: MethodDSL, desc: BoxDesc) {
   protected[this] val t: TypedDSL = TypedDSL(desc.unboxedT, m)
+
+  def unboxedT: ValDesc = desc.unboxedT
 
   def load(v: VarIdx) = t.xload(v)
   def store(v: VarIdx) = t.xstore(v)

@@ -152,7 +152,8 @@ final class MethodDSL(access: Acc, val name: String, desc: MethodDesc,
   def accept(v: ClassVisitor, cls: ClassDSL): Unit = {
     val mv = v.visitMethod(access.acc, name, desc.desc, null, null)
     if(!access.has(Acc.ABSTRACT)) {
-      assert(params.length == argsCount - 1, s"Method $name ${desc.desc} has ${params.length} parameters, expected ${argsCount-1}")
+      def paramsStr = params.filter(_ != null).map(p => s"${p.name}:${p.desc.desc}").mkString(", ")
+      assert(params.length == argsCount - 1, s"Method $name ${desc.desc} has ${params.length} parameters ($paramsStr), expected ${argsCount-1}")
       params.foreach(p => if(p != null) mv.visitParameter(p.name, p.access.acc))
       mv.visitCode()
       tryCatchBlocks.foreach(_.accept(mv))
