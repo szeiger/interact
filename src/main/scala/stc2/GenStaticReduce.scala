@@ -208,7 +208,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       def ifSet = m.lload(vidx).lconst(0).lcmp.if_!=
       def storeIn(ac: ActiveCell): Unit = {
         if(ac.unboxedParameter) {
-          if(options != mutable.Set(ac.cachedPayload)) {
+          if(options != mutable.Set(ac.cachedPayload) && !ac.unboxedVoid) {
             ac.pt.extractUnboxed { m.lload(vidx) }
             ac.pt.store(ac.cachedPayload)
           }

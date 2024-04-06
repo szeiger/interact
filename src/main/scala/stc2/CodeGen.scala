@@ -7,8 +7,6 @@ import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import de.szeiger.interact.offheap.{Allocator, MemoryDebugger}
 
-import scala.collection.mutable
-
 import Interpreter._
 
 class CodeGen(genPackage: String, classWriter: ClassWriter,
@@ -71,23 +69,22 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan): Unit = {
     val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
     class P(val idx: Int, val sym: Symbol, val arity: Int) {
-      private def unboxedT(s: Symbol) = PTOps(null, s.payloadType)(self).unboxedT
       val unbox = shouldUnbox(sym, arity)
-      val unboxNonVoid = unbox && sym.payloadType.isDefined
+      val unboxedVoid = unbox && sym.payloadType.isEmpty
       val name = if(sym.isDefined) AbstractCodeGen.encodeName(sym) else s"initial$idx"
-      val t = if(unboxNonVoid) unboxedT(sym) else cellT
+      val t = if(!unbox) cellT else if(unboxedVoid) tp.V else PTOps(null, sym.payloadType)(self).unboxedT
       def ac(m: MethodDSL) = {
-        if(unboxNonVoid) {
-          val ac = new ActiveCell(m, self, 0, VarIdx.none, sym, arity, true, unbox, name)
-          ac.cachedPayload = m.param(s"payload${idx}_$name", t)
+        if(unbox) {
+          val ac = new ActiveCell(m, self, 0, VarIdx.none, sym, arity, !unboxedVoid, unbox, name)
+          if(!unboxedVoid) ac.cachedPayload = m.param(s"payload${idx}_$name", t)
           ac
         } else new ActiveCell(m, self, 0, m.param(s"ac${idx}_$name", t), sym, arity, needsCachedPayloads.contains(idx), unbox, name)
       }
     }
     val p0 = new P(0, rule.sym1, rule.arity1)
     val p1 = new P(1, rule.sym2, rule.arity2)
-    val (unboxed, name) = if(p0.unboxNonVoid || p1.unboxNonVoid) (true, unboxedStaticReduceName) else (false, staticReduceName)
-    val staticReduceDesc = tp.m(p0.t, p1.t, tp.I, ptwT).V
+    val (unboxed, name) = if(p0.unbox || p1.unbox) (true, unboxedStaticReduceName) else (false, staticReduceName)
+    val staticReduceDesc = tp.m(Seq(p0.t, p1.t, tp.I, ptwT).filter(_ != tp.V): _*).V
     lazy val m = classDSL.method(Acc.PUBLIC.STATIC, name, staticReduceDesc, debugLineNumbers = true)
     val active = Vector(p0.ac(m), p1.ac(m))
     val level = m.param("level", tp.I)
@@ -104,13 +101,15 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     val ac1 = m.param(s"ac0", cellT)
     val level = m.param("level", tp.I)
     val ptw = m.param("ptw", ptwT)
-    def unbox(sym: Symbol, ac: VarIdx) =
-      if(sym.payloadType.isDefined && shouldUnbox(sym)) {
-        val pt = PTOps(m, sym.payloadType)(this)
-        pt.extractUnboxed(m.lload(ac))
+    def unbox(sym: Symbol, arity: Int, ac: VarIdx) =
+      if(shouldUnbox(sym, arity)) {
+        if(sym.payloadType.isDefined) {
+          val pt = PTOps(m, sym.payloadType)(this)
+          pt.extractUnboxed(m.lload(ac))
+        }
       } else m.lload(ac)
-    unbox(rule.sym1, ac0)
-    unbox(rule.sym2, ac1)
+    unbox(rule.sym1, rule.arity1, ac0)
+    unbox(rule.sym2, rule.arity2, ac1)
     m.iload(level).aload(ptw).invokestatic(classDSL.thisTp, unboxedStaticReduceName, unboxedDesc).return_
   }
 
@@ -299,9 +298,10 @@ final class ActiveCell(m: MethodDSL, cg: CodeGen, val id: Int, val vidx: VarIdx,
   var cachedPayload: VarIdx = VarIdx.none
   var cachedPayloadProxyPage: VarIdx = VarIdx.none
   var cachedPayloadProxyPageOffset: VarIdx = VarIdx.none
-  val pt: PTOps = if(unboxedParameter) PTOps(m, sym.payloadType)(cg) else null
+  val pt: PTOps = if(unboxedParameter && sym.payloadType.isDefined) PTOps(m, sym.payloadType)(cg) else null
 
   def unboxedParameter = vidx.isEmpty
+  def unboxedVoid = unboxedParameter && sym.payloadType.isEmpty
 
   override def toString = s"ac$id(vidx=$vidx, sym=$sym, arity=$arity, needsCP=$needsCachedPayload, unboxed=$unboxed, reuse=$reuse)"
 }
