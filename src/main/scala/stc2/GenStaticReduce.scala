@@ -218,7 +218,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
       }
     }
-    val cont = Vector(new Cont(0), new Cont(1))
+    val cont = if(bp.useLoopCont || bp.useTailCont) Vector(new Cont(0), new Cont(1)) else null
     def setCont(ct1: Idx, ct2: Idx): Unit = { cont(0).set(ct1); cont(1).set(ct2) }
 
     createCells(bp.cellCreateInstructions)
