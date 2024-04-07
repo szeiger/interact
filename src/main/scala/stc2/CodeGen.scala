@@ -72,7 +72,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       val unbox = shouldUnbox(sym, arity)
       val unboxedVoid = unbox && sym.payloadType.isEmpty
       val name = if(sym.isDefined) AbstractCodeGen.encodeName(sym) else s"initial$idx"
-      val t = if(!unbox) cellT else if(unboxedVoid) tp.V else PTOps(null, sym.payloadType)(self).unboxedT
+      val t = if(!unbox) cellT else PTOps(null, sym.payloadType)(self).unboxedT
       def ac(m: MethodDSL) = {
         if(unbox) {
           val ac = new ActiveCell(m, self, 0, VarIdx.none, sym, arity, !unboxedVoid, unbox, name)
@@ -105,7 +105,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       if(shouldUnbox(sym, arity)) {
         if(sym.payloadType.isDefined) {
           val pt = PTOps(m, sym.payloadType)(this)
-          pt.extractUnboxed(m.lload(ac))
+          pt.untag(m.lload(ac))
         }
       } else m.lload(ac)
     unbox(rule.sym1, rule.arity1, ac0)
@@ -298,7 +298,7 @@ final class ActiveCell(m: MethodDSL, cg: CodeGen, val id: Int, val vidx: VarIdx,
   var cachedPayload: VarIdx = VarIdx.none
   var cachedPayloadProxyPage: VarIdx = VarIdx.none
   var cachedPayloadProxyPageOffset: VarIdx = VarIdx.none
-  val pt: PTOps = if(unboxedParameter && sym.payloadType.isDefined) PTOps(m, sym.payloadType)(cg) else null
+  val pt: PTOps = if(unboxedParameter) PTOps(m, sym.payloadType)(cg) else null
 
   def unboxedParameter = vidx.isEmpty
   def unboxedVoid = unboxedParameter && sym.payloadType.isEmpty

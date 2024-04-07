@@ -3,9 +3,20 @@ package de.szeiger.interact.stc2
 import de.szeiger.interact.ast.PayloadType
 import de.szeiger.interact.codegen.{BoxDesc, BoxOps}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
+import de.szeiger.interact.stc2.PTOps.boxDesc
 
 class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, PTOps.boxDesc(pt)) {
   import codeGen._
+
+  def isVoid: Boolean = boxDesc.boxT == null
+
+  def loadConst0: this.type = {
+    pt match {
+      case PayloadType.INT =>
+        m.iconst(0)
+    }
+    this
+  }
 
   def setCellPayload(ptw: VarIdx, arity: Int)(loadCell: => Unit)(loadUnboxedPayload: => Unit): this.type = {
     pt match {
@@ -46,7 +57,7 @@ class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, P
     this
   }
 
-  def extractUnboxed(loadValue: => Unit): this.type = {
+  def untag(loadValue: => Unit): this.type = {
     pt match {
       case PayloadType.INT =>
         loadValue
@@ -55,7 +66,7 @@ class PTOps(m: MethodDSL, pt: PayloadType, codeGen: CodeGen) extends BoxOps(m, P
     this
   }
 
-  def buildUnboxed(symId: Int)(loadValue: => Unit): this.type = {
+  def tag(symId: Int)(loadValue: => Unit): this.type = {
     loadValue
     m.i2l.iconst(32).lshl
     m.lconst((symId.toLong << Interpreter.TAGWIDTH) | Interpreter.TAG_UNBOXED).lor
@@ -68,6 +79,7 @@ object PTOps {
     case PayloadType.INT => BoxDesc.intDesc
     case PayloadType.REF => BoxDesc.refDesc
     case PayloadType.LABEL => BoxDesc.longDesc
+    case PayloadType.VOID => BoxDesc.voidDesc
   }
   def apply(m: MethodDSL, pt: PayloadType)(implicit codeGen: CodeGen): PTOps = new PTOps(m, pt, codeGen)
 }

@@ -24,8 +24,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   val active: Array[ActiveCell] = new Array[ActiveCell](rule.totalActiveCount)
   _initialActive.copyToArray(active)
   // cells and their symbols, updated for the current branches
-  val cells = new VarIdxArray(rule.totalCellCount)
-  val cellSyms = new Array[Symbol](rule.totalCellCount)
+  val cells = new Array[Cell](rule.totalCellCount)
   // cell reuse buffers, updated for the current top-level branch
   val reuseBuffers: Array[WriteBuffer] = new Array(rule.totalActiveCount)
   // payload temp vars and boxed flag, updated for the current branches
@@ -45,15 +44,32 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           ac.cachedPayload = m.i2l.invokestatic(allocator_getObject).storeLocal(tp.Object, name)
         case pt =>
           val p = PTOps(m, pt)
-          if(ac.unboxed) p.extractUnboxed { m.lload(ac.vidx) }
+          if(ac.unboxed) p.untag { m.lload(ac.vidx) }
           else p.getCellPayload(ptw, ac.arity) { m.lload(ac.vidx) }
           ac.cachedPayload = m.storeLocal(p.unboxedT, name)
       }
     }
   }
 
+  class Cell(idx: Int, val sym: Symbol) {
+    private[this] lazy val pt = PTOps(m, sym.payloadType)
+    var tagged, untagged = VarIdx.none
+    def isTagged = tagged.isDefined
+    def hasUntaggedValue = untagged.isDefined
+    def ldTagged: Unit = {
+      if(hasUntaggedValue) pt.tag(symIds(sym))(pt.load(untagged))
+      else m.lload(tagged)
+    }
+    def ldUntagged: Unit = {
+      if(hasUntaggedValue) pt.load(untagged)
+      else pt.untag(m.lload(tagged))
+    }
+    def storeTagged: Unit = tagged = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")
+    def storeUntagged: Unit = untagged = m.storeLocal(pt.unboxedT, s"cell${idx}u_${AbstractCodeGen.encodeName(sym)}")
+  }
+
   private def symbolOf(idx: Idx) = idx match {
-    case CellIdx(i, -1) => cellSyms(i)
+    case CellIdx(i, -1) => cells(i).sym
     case _ => Symbol.NoSymbol
   }
 
@@ -82,7 +98,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
     def flush(): Unit =
       for(p <- 0 until free.length if free(p) != VarIdx.none || cell(p) != null) {
-        m.lload(cells(cellIdx)).lconst(auxPtrOffset(p)).ladd
+        cells(cellIdx).ldTagged
+        m.lconst(auxPtrOffset(p)).ladd
         if(free(p) != VarIdx.none) m.lload(free(p)) else ldTaggedCP(cell(p))
         m.invokestatic(allocator_putLong)
       }
@@ -107,51 +124,57 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           case None => ldTaggedCPFRaw(idx); None
         }
       case idx: CellIdx =>
-        if(cells(idx.idx).isEmpty) {
-          val sym = cellSyms(idx.idx)
-          assert(shouldUnbox(sym) && idx.port == -1)
-          if(sym.payloadType == PayloadType.VOID) {
-            m.lconst(mkUnboxed(symIds(sym)).toLong & 0xffffffffL)
-          } else {
-            val ac = active.find(a => a != null && a.reuse == idx.idx).get
-            if(ac.unboxedParameter) ac.pt.buildUnboxed(symIds(ac.sym)) { ac.pt.load(ac.cachedPayload) }
-            else m.lload(ac.vidx)
-          }
-          None
-        } else {
-          m.lload(cells(idx.idx))
+        val c = cells(idx.idx)
+        if(c.isTagged || c.hasUntaggedValue) {
+          c.ldTagged
           var l = auxPtrOffset(idx.port)
           if(idx.port >= 0) l += TAG_AUX_PTR
           if(l != 0) {
             m.lconst(l).ladd
             None
-          } else Some(cells(idx.idx))
+          } else if(c.hasUntaggedValue) None
+          else Some(c.tagged)
+        } else {
+          assert(shouldUnbox(c.sym) && idx.port == -1)
+          if(c.sym.payloadType == PayloadType.VOID) m.lconst(mkUnboxed(symIds(c.sym)).toLong & 0xffffffffL)
+          else {
+            val ac = active.find(a => a != null && a.reuse == idx.idx).get
+            if(ac.unboxedParameter) ac.pt.tag(symIds(ac.sym)) { ac.pt.load(ac.cachedPayload) }
+            else m.lload(ac.vidx)
+          }
+          None
         }
     }
   }
 
-  private def ldUntaggedCP(idx: Idx): Option[VarIdx] = {
+  private def ldUntaggedPayload(idx: CellIdx): Unit = {
+    val c = cells(idx.idx)
+    assert(idx.port == -1&& shouldUnbox(c.sym), s"idx.port=${idx.port}, isTagged=${c.isTagged}, shouldUnbox=${shouldUnbox(c.sym)}")
+    if(c.isTagged || c.hasUntaggedValue) c.ldUntagged
+    else if(c.sym.payloadType != PayloadType.VOID) {
+      val ac = active.find(a => a != null && a.reuse == idx.idx).get
+      assert(ac.unboxedParameter)
+      ac.pt.load(ac.cachedPayload)
+    }
+  }
+
+  private def ldCPAddress(idx: Idx): Option[VarIdx] = {
     idx match {
       case idx: FreeIdx =>
         ldTaggedCP(idx)
         m.lconst(ADDRMASK).land
         None
       case idx: CellIdx =>
-        if(cells(idx.idx).isEmpty) {
+        if(!cells(idx.idx).isTagged) {
           ldTaggedCP(idx)
         } else {
-          m.lload(cells(idx.idx))
+          cells(idx.idx).ldTagged
           auxPtrOffset(idx.port) match {
-            case 0 => Some(cells(idx.idx))
+            case 0 => Some(cells(idx.idx).tagged)
             case off => m.lconst(off).ladd; None
           }
         }
     }
-  }
-
-  private def ldFastCP(idx: Idx): Option[VarIdx] = idx match {
-    case idx: FreeIdx => ldTaggedCP(idx)
-    case idx: CellIdx => ldUntaggedCP(idx)
   }
 
   // Write to internal cell or reuse buffer for reused cells
@@ -159,7 +182,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     reuseBuffers.find(w => w != null && w.cellIdx == idx.idx) match {
       case Some(b) => b.set(idx.port, ct2)
       case None =>
-        m.lload(cells(idx.idx))
+        cells(idx.idx).ldTagged
         m.lconst(auxPtrOffset(idx.port)).ladd
         ldTaggedCP(ct2)
         m.invokestatic(allocator_putLong)
@@ -187,38 +210,96 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     m.l2i.iconst(TAGMASK.toInt).iand.if_==
   }
 
+  // Boxed, unboxed or untagged continuation half-pair
+  class Cont(idx: Int, knownSym: Option[Symbol], unconditional: Boolean) {
+    private[this] val untaggedPT = knownSym.flatMap(s => if(shouldUnbox(s)) Some(PTOps(m, s.payloadType)) else None)
+    private[this] val options = mutable.HashSet.empty[VarIdx]
+    private[this] var (tagged, untagged, varName) = untaggedPT match {
+      case Some(pt) if pt.isVoid => (VarIdx.none, VarIdx.none, null)
+      case Some(pt) =>
+        val n = s"cont${idx}_${pt.unboxedT.jvmClass.get.getName}"
+        if(unconditional) (VarIdx.none, VarIdx.none, n)
+        else {
+          val v = m.local(pt.unboxedT, n)
+          pt.loadConst0.store(v)
+          (VarIdx.none, v, null)
+        }
+      case None =>
+        val n = s"cont$idx"
+        if(unconditional) (VarIdx.none, VarIdx.none, n)
+        else {
+          val v = m.local(cellT, n)
+          m.lconst(0).lstore(v)
+          (v, VarIdx.none, null)
+        }
+    }
+
+    def set(ct: Idx): Unit = untaggedPT match {
+      case Some(pt) if pt.isVoid =>
+        options += ldTaggedCP(ct).getOrElse(VarIdx.none) //TODO don't load
+        m.pop2
+      case Some(pt) =>
+        if(unconditional) {
+          assert(untagged.isEmpty)
+          untagged = m.local(pt.unboxedT, varName)
+        }
+        ldUntaggedPayload(ct.asInstanceOf[CellIdx])
+        pt.store(untagged)
+      case None =>
+        if(unconditional) {
+          assert(tagged.isEmpty)
+          tagged = m.local(cellT, varName)
+        }
+        options += ldTaggedCP(ct).getOrElse(VarIdx.none)
+        m.lstore(tagged)
+    }
+    def maybeSet = options.nonEmpty
+    def ifSet = {
+      assert(tagged.isDefined)
+      m.lload(tagged).lconst(0).lcmp.if_!=
+    }
+
+    def storeIn(ac: ActiveCell): Unit = untaggedPT match {
+      case Some(pt) if pt.isVoid =>
+      case Some(pt) =>
+        assert(ac.unboxedParameter)
+        assert(knownSym == Some(ac.sym))
+        if(options != mutable.Set(ac.cachedPayload) && !ac.unboxedVoid) {
+          pt.load(untagged)
+          ac.pt.store(ac.cachedPayload)
+        }
+      case None =>
+        if(ac.unboxedParameter) {
+          if(options != mutable.Set(ac.cachedPayload) && !ac.unboxedVoid) {
+            ac.pt.untag { m.lload(tagged) }
+            ac.pt.store(ac.cachedPayload)
+          }
+        } else {
+          if(options != mutable.Set(ac.vidx))
+            m.lload(tagged).lstore(ac.vidx)
+        }
+    }
+
+    def ldTagged: Unit = untaggedPT match {
+      case Some(pt) if pt.isVoid => m.lconst(mkUnboxed(symIds(knownSym.get)).toLong & 0xffffffffL)
+      case Some(pt) => pt.tag(symIds(knownSym.get)) { pt.load(untagged) }
+      case None => m.lload(tagged)
+    }
+  }
+
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
-    //println("***** entering "+bp.show)
-    //ShowableNode.print(bp)
-    cells.clearFrom(bp.cellOffset)
-    bp.cellSyms.copyToArray(cellSyms, bp.cellOffset)
+    for(i <- bp.cellOffset until cells.length)
+      cells(i) = if(i-bp.cellOffset < bp.cellSyms.length) new Cell(i, bp.cellSyms(i-bp.cellOffset)) else null
     val branchEnd = m.newLabel
 
     checkCondition(bp, branchEnd)
     incMetric(s"$branchMetricName", m, ptw)
 
-    class Cont(idx: Int) {
-      val vidx = m.lconst(0).storeLocal(cellT, s"cont$idx")
-      private[this] val options = mutable.HashSet.empty[VarIdx]
-      def set(ct: Idx): Unit = {
-        options += ldFastCP(ct).getOrElse(VarIdx.none)
-        m.lstore(vidx)
-      }
-      def maybeSet = options.nonEmpty
-      def ifSet = m.lload(vidx).lconst(0).lcmp.if_!=
-      def storeIn(ac: ActiveCell): Unit = {
-        if(ac.unboxedParameter) {
-          if(options != mutable.Set(ac.cachedPayload) && !ac.unboxedVoid) {
-            ac.pt.extractUnboxed { m.lload(vidx) }
-            ac.pt.store(ac.cachedPayload)
-          }
-        } else {
-          if(options != mutable.Set(ac.vidx))
-            m.lload(vidx).lstore(ac.vidx)
-        }
-      }
+    val cont = bp.unconditionalTail match {
+      case Some((s1, s2)) => Vector(new Cont(0, Some(s1), true), new Cont(1, Some(s2), true))
+      case _ if bp.useLoopCont || bp.useTailCont => Vector(new Cont(0, None, false), new Cont(1, None, false))
+      case _ => null
     }
-    val cont = if(bp.useLoopCont || bp.useTailCont) Vector(new Cont(0), new Cont(1)) else null
     def setCont(ct1: Idx, ct2: Idx): Unit = { cont(0).set(ct1); cont(1).set(ct2) }
 
     createCells(bp.cellCreateInstructions)
@@ -226,15 +307,15 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     bp.payloadComps.foreach(computePayload(_))
 
     def ldAndSetAux(ct1: FreeIdx, ct2: Idx) = {
-      ldUntaggedCP(ct1)
+      ldCPAddress(ct1)
       ldTaggedCP(ct2)
       m.invokestatic(allocator_putLong)
     }
 
     def addActive(ct1: Idx, ct2: Idx) = {
       m.aload(ptw)
-      ldFastCP(ct1)
-      ldFastCP(ct2)
+      ldTaggedCP(ct1)
+      ldTaggedCP(ct2)
       m.invoke(ptw_addActive)
     }
 
@@ -345,17 +426,24 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
               m.iload(level).if_!=.thnElse {
                 m.iinc(level, -1)
                 recordDispatch(0, 1, 1)
-                m.lload(cont(0).vidx).lload(cont(1).vidx).iload(level).aload(ptw)
-                m.invokestatic(metaClass_reduce(cont0Sym))
+                cont(0).ldTagged
+                cont(1).ldTagged
+                m.iload(level).aload(ptw)
+                m.invokestatic(metaClass_reduce(cont0Sym)) // load untagged and call reduce_unboxed
               } {
-                m.aload(ptw).lload(cont(0).vidx).lload(cont(1).vidx).invoke(ptw_addActive)
+                m.aload(ptw)
+                cont(0).ldTagged
+                cont(1).ldTagged
+                m.invoke(ptw_addActive)
               }
             }
           case None =>
             cont(0).ifSet.thn {
               m.iload(level).if_!=.thnElse {
                 m.iinc(level, -1)
-                m.lload(cont(0).vidx).lload(cont(1).vidx).iload(level).aload(ptw)
+                cont(0).ldTagged
+                cont(1).ldTagged
+                m.iload(level).aload(ptw)
                 if(bp.singleDispatchSym0.isDefined) {
                   recordDispatch(0, 1, 1)
                   m.invokestatic(metaClass_reduce(bp.singleDispatchSym0))
@@ -364,7 +452,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
                   m.invokestatic(generatedDispatch_staticReduce)
                 }
               } {
-                m.aload(ptw).lload(cont(0).vidx).lload(cont(1).vidx).invoke(ptw_addActive)
+                m.aload(ptw)
+                cont(0).ldTagged
+                cont(1).ldTagged
+                m.invoke(ptw_addActive)
               }
             }
         }
@@ -413,7 +504,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     instrs.foreach {
       case GetSingletonCell(idx, sym) =>
         assert(!config.unboxedPrimitives)
-        cells(idx) = active.find(_.sym == sym) match {
+        cells(idx).tagged = active.find(_.sym == sym) match {
           case Some(a) => a.vidx
           case None =>
             singletonCache.getOrElseUpdate(sym, {
@@ -423,7 +514,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case ReuseActiveCell(idx, act, sym) =>
         assert(symIds(sym) >= 0)
         assert(!codeGen.shouldUnbox(sym))
-        cells(idx) = active(act).vidx
+        cells(idx).tagged = active(act).vidx
         if(sym != active(act).sym)
           m.lload(active(act).vidx).iconst(mkHeader(symIds(sym))).invokestatic(allocator_putInt)
       case NewCell(_, sym, args) if codeGen.shouldUnbox(sym) =>
@@ -456,7 +547,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           m.iinc(statCellAllocations)
           if(sym.payloadType == PayloadType.REF) m.iinc(statProxyAllocations)
         }
-        cells(idx) = m.storeLocal(cellT, s"cell${idx}_${AbstractCodeGen.encodeName(sym)}")
+        cells(idx).storeTagged
     }
     allocMetrics.foreach { case (size, count) => incMetric(s"allocCell($size)", m, ptw, count) }
   }
@@ -498,7 +589,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case EmbArg.Active(i) => loadCachedPayload(active(i).cachedPayload, cls); dontFlush
       case EmbArg.Temp(idx, pt) => loadTempPayload(idx, pt, cls); dontFlush
       case EmbArg.Cell(idx) =>
-        val p = PTOps(m, cellSyms(idx).payloadType)
+        val p = PTOps(m, cells(idx).sym.payloadType)
         val tmp = p.newBoxStoreDup
         () => writeToArg(embArg) { m.aload(tmp); p.getBoxValue }
     }
@@ -506,7 +597,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   private def writeToArg(ea: EmbArg)(loadPayload: => Unit): Unit = ea match {
     case EmbArg.Cell(idx) =>
-      val sym = cellSyms(idx)
+      val sym = cells(idx).sym
       active.find(a => a != null && a.reuse == idx) match {
         case Some(ac) if sym.payloadType == PayloadType.REF =>
           m.aload(ac.cachedPayloadProxyPage).iload(ac.cachedPayloadProxyPageOffset).i2l
@@ -515,10 +606,10 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         case _ =>
           val p = PTOps(m, sym.payloadType)
           if(codeGen.shouldUnbox(sym)) {
-            p.buildUnboxed(symIds(sym)) { loadPayload }
-            assert(cells(idx).isEmpty)
-            cells(idx) = m.storeLocal(cellT)
-          } else p.setCellPayload(ptw, sym.arity) { m.lload(cells(idx)) } { loadPayload }
+            assert(!cells(idx).isTagged && !cells(idx).hasUntaggedValue)
+            loadPayload
+            cells(idx).storeUntagged
+          } else p.setCellPayload(ptw, sym.arity) { cells(idx).ldTagged } { loadPayload }
       }
   }
 
@@ -531,7 +622,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
           ifPrincipal(wire).not.jump(endTarget)
           ifBoxed(wire, sym).not.jump(endTarget)
         }
-        ldUntaggedCP(wire)
+        ldTaggedCP(wire)
         val acname = AbstractCodeGen.encodeName(sym)
         val vidx = m.storeLocal(cellT, s"ac${activeIdx}_${acname}")
         val ac = new ActiveCell(m, codeGen, activeIdx, vidx, sym, sym.arity, bp.needsCachedPayloads(activeIdx), codeGen.shouldUnbox(sym), acname)
