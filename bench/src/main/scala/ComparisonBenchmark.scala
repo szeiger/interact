@@ -57,6 +57,17 @@ class ComparisonBenchmark {
       |let resU = ackU(Int[3], Int[9])
       |""".stripMargin
 
+  private val intMult3Src =
+    """cons Int[int]
+      |def add(_, _) = r
+      |  | Int[x], Int[y] if [x == 0] => Int[y]
+      |                   else        => add(Int[x-1], Int[y+1])
+      |def mult(_, _) = r
+      |  | Int[x], Int[y] if [x == 0] => Int[0]
+      |                   else        => add(Int[y], mult(Int[x-1], Int[y]))
+      |let res = mult(Int[1000], Int[1000])
+      |""".stripMargin
+
   class PreparedInterpreter(source: String) {
     val model: Compiler = new Compiler(Parser.parse(source), Config(spec))
     val inter = model.createInterpreter()
@@ -69,6 +80,7 @@ class ComparisonBenchmark {
   private lazy val mult1Inter: PreparedInterpreter = new PreparedInterpreter(mult1Src)
   private lazy val fib22Inter: PreparedInterpreter = new PreparedInterpreter(fib22Src)
   private lazy val intAck38Inter: PreparedInterpreter = new PreparedInterpreter(intAck38Src)
+  private lazy val intMult3Inter: PreparedInterpreter = new PreparedInterpreter(intMult3Src)
 
   @Benchmark
   def mult1(bh: Blackhole): Unit =
@@ -80,6 +92,10 @@ class ComparisonBenchmark {
 
   @Benchmark
   def intAck39(bh: Blackhole): Unit =
+    bh.consume(intAck38Inter.setup().reduce())
+
+  @Benchmark
+  def intMult3(bh: Blackhole): Unit =
     bh.consume(intAck38Inter.setup().reduce())
 
   @Benchmark
@@ -132,6 +148,17 @@ class ComparisonBenchmark {
       if(x == 0) y + 1
       else if(y == 0) ack(x-1, 1)
       else ack(x-1, ack(x, y-1))
-    ack(3, 9)
+    bh.consume(ack(3, 9))
+  }
+
+  @Benchmark
+  def intMult3Scala(bh: Blackhole): Unit = {
+    def add(x: Int, y: Int): Int =
+      if(x == 0) y
+      else add(x-1, y+1)
+    def mult(x: Int, y: Int): Int =
+      if(x == 0) 0
+      else add(y, mult(x-1, y))
+    bh.consume(mult(1000, 1000))
   }
 }

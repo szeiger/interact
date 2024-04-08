@@ -76,7 +76,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       def ac(m: MethodDSL) = {
         if(unbox) {
           val ac = new ActiveCell(m, self, 0, VarIdx.none, sym, arity, !unboxedVoid, unbox, name)
-          if(!unboxedVoid) ac.cachedPayload = m.param(s"payload${idx}_$name", t)
+          if(!unboxedVoid) ac.cachedPayload = m.param(s"ac${idx}u_$name", t)
           ac
         } else new ActiveCell(m, self, 0, m.param(s"ac${idx}_$name", t), sym, arity, needsCachedPayloads.contains(idx), unbox, name)
       }
@@ -275,7 +275,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
 
   private def compileRule(rule: RulePlan): Unit = {
     val ric = DSL.newClass(Acc.PUBLIC.FINAL, ruleT(rule.sym1, rule.sym2).className)
-    ric.emptyNoArgsConstructor(Acc.PUBLIC)
+    ric.emptyNoArgsConstructor(Acc.PRIVATE)
     implementStaticReduce(ric, rule)
     addClass(classWriter, ric)
   }

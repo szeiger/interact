@@ -34,7 +34,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   for(ac <- active if ac != null) cachePayload(ac)
   private def cachePayload(ac: ActiveCell): Unit = {
     if(ac.needsCachedPayload && ac.vidx.isDefined) {
-      val name = s"payload${ac.id}${ac.sym.payloadType}_${ac.encName}"
+      val name = s"ac${ac.id}u_${ac.encName}"
       ac.sym.payloadType match {
         case PayloadType.REF =>
           m.aload(ptw).lload(ac.vidx).invoke(ptw_getProxyPage)
@@ -211,8 +211,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   // Boxed, unboxed or untagged continuation half-pair
-  class Cont(idx: Int, knownSym: Option[Symbol], unconditional: Boolean) {
-    private[this] val untaggedPT = knownSym.flatMap(s => if(shouldUnbox(s)) Some(PTOps(m, s.payloadType)) else None)
+  class Cont(idx: Int, knownSym: Symbol, unconditional: Boolean) {
+    private[this] val untaggedPT = if(knownSym.isDefined && shouldUnbox(knownSym)) Some(PTOps(m, knownSym.payloadType)) else None
     private[this] val options = mutable.HashSet.empty[VarIdx]
     private[this] var (tagged, untagged, varName) = untaggedPT match {
       case Some(pt) if pt.isVoid => (VarIdx.none, VarIdx.none, null)
@@ -234,6 +234,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
     }
 
+    def isTagged = tagged.isDefined
+
     def set(ct: Idx): Unit = untaggedPT match {
       case Some(pt) if pt.isVoid =>
         options += ldTaggedCP(ct).getOrElse(VarIdx.none) //TODO don't load
@@ -254,16 +256,12 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         m.lstore(tagged)
     }
     def maybeSet = options.nonEmpty
-    def ifSet = {
-      assert(tagged.isDefined)
-      m.lload(tagged).lconst(0).lcmp.if_!=
-    }
 
     def storeIn(ac: ActiveCell): Unit = untaggedPT match {
       case Some(pt) if pt.isVoid =>
       case Some(pt) =>
-        assert(ac.unboxedParameter)
-        assert(knownSym == Some(ac.sym))
+        assert(ac.unboxedParameter, s"$baseMetricName, $knownSym, $ac, ${pt.unboxedT.desc}")
+        assert(knownSym == ac.sym)
         if(options != mutable.Set(ac.cachedPayload) && !ac.unboxedVoid) {
           pt.load(untagged)
           ac.pt.store(ac.cachedPayload)
@@ -281,10 +279,23 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
 
     def ldTagged: Unit = untaggedPT match {
-      case Some(pt) if pt.isVoid => m.lconst(mkUnboxed(symIds(knownSym.get)).toLong & 0xffffffffL)
-      case Some(pt) => pt.tag(symIds(knownSym.get)) { pt.load(untagged) }
+      case Some(pt) if pt.isVoid => m.lconst(mkUnboxed(symIds(knownSym)).toLong & 0xffffffffL)
+      case Some(pt) => pt.tag(symIds(knownSym)) { pt.load(untagged) }
       case None => m.lload(tagged)
     }
+  }
+
+  def ldAndSetAux(ct1: FreeIdx, ct2: Idx) = {
+    ldCPAddress(ct1)
+    ldTaggedCP(ct2)
+    m.invokestatic(allocator_putLong)
+  }
+
+  def addActive(ct1: Idx, ct2: Idx) = {
+    m.aload(ptw)
+    ldTaggedCP(ct1)
+    ldTaggedCP(ct2)
+    m.invoke(ptw_addActive)
   }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
@@ -296,28 +307,24 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     incMetric(s"$branchMetricName", m, ptw)
 
     val cont = bp.unconditionalTail match {
-      case Some((s1, s2)) => Vector(new Cont(0, Some(s1), true), new Cont(1, Some(s2), true))
-      case _ if bp.useLoopCont || bp.useTailCont => Vector(new Cont(0, None, false), new Cont(1, None, false))
+      case Some((s1, s2)) => Vector(new Cont(0, s1, true), new Cont(1, s2, true))
+      case _ if bp.useLoopCont => Vector(new Cont(0, rule.sym1, false), new Cont(1, rule.sym2, false))
+      case _ if bp.useTailCont => Vector(new Cont(0, Symbol.NoSymbol, false), new Cont(1, Symbol.NoSymbol, false))
       case _ => null
     }
     def setCont(ct1: Idx, ct2: Idx): Unit = { cont(0).set(ct1); cont(1).set(ct2) }
+    def ifContSet = {
+      if(cont(0).isTagged) cont(0).ldTagged
+      else {
+        assert(cont(1).isTagged)
+        cont(1).ldTagged
+      }
+      m.lconst(0).lcmp.if_!=
+    }
 
     createCells(bp.cellCreateInstructions)
 
     bp.payloadComps.foreach(computePayload(_))
-
-    def ldAndSetAux(ct1: FreeIdx, ct2: Idx) = {
-      ldCPAddress(ct1)
-      ldTaggedCP(ct2)
-      m.invokestatic(allocator_putLong)
-    }
-
-    def addActive(ct1: Idx, ct2: Idx) = {
-      m.aload(ptw)
-      ldTaggedCP(ct1)
-      ldTaggedCP(ct2)
-      m.invoke(ptw_addActive)
-    }
 
     def connectActivePairLoop(ct1: CellIdx, ct2: FreeIdx): Unit = {
       val mayLoopOn0 = ct1.idx == bp.active(0) && bp.loopOn0
@@ -325,7 +332,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       if(mayLoopOn0 || mayLoopOn1) {
         val (sym, ctA, ctB) = if(mayLoopOn0) (active(1).sym, ct1, ct2) else (active(0).sym, ct2, ct1)
         val lCreateCut, lEnd = m.newLabel
-        if(cont(0).maybeSet) cont(0).ifSet.jump(lCreateCut)
+        if(cont(0).maybeSet) ifContSet.jump(lCreateCut)
         if(shouldUnbox(sym))
           ifUnboxed(ct2, sym).not.jump(lCreateCut)
         else {
@@ -352,7 +359,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
             } else addActive(ct1, ct2)
           case None =>
             if(!cont(0).maybeSet) setCont(ct1, ct2)
-            else cont(0).ifSet.thnElse { addActive(ct1, ct2) } { setCont(ct1, ct2) }
+            else ifContSet.thnElse { addActive(ct1, ct2) } { setCont(ct1, ct2) }
         }
       } else addActive(ct1, ct2)
     }
@@ -408,7 +415,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       recordSteps(bp, parents)
 
       if(bp.useLoopCont) {
-        cont(0).ifSet.thn {
+        ifContSet.thn {
           recordDispatch(1, 0, 0)
           cont(0).storeIn(active(0))
           cont(1).storeIn(active(1))
@@ -438,7 +445,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
               }
             }
           case None =>
-            cont(0).ifSet.thn {
+            ifContSet.thn {
               m.iload(level).if_!=.thnElse {
                 m.iinc(level, -1)
                 cont(0).ldTagged
