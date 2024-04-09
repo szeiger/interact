@@ -276,6 +276,15 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         }
     }
 
+    // load tagged or untagged, suitable for a static reduce call
+    def ldAsParam: Unit = untaggedPT match {
+      case Some(pt) if pt.isVoid =>
+      case Some(pt) =>
+        pt.load(untagged)
+      case None =>
+        m.lload(tagged)
+    }
+
     def ldTagged: Unit = untaggedPT match {
       case Some(pt) if pt.isVoid => m.lconst(mkUnboxed(symIds(knownSym)).toLong & 0xffffffffL)
       case Some(pt) => pt.tag(symIds(knownSym)) { pt.load(untagged) }
@@ -428,18 +437,25 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
               cont(1).storeIn(active(1))
               m.goto(methodStart)
             } else {
-              m.iload(level).if_!=.thnElse {
-                m.iinc(level, -1)
-                recordDispatch(0, 1, 1)
-                cont(0).ldTagged
-                cont(1).ldTagged
-                m.iload(level).aload(ptw)
-                m.invokestatic(metaClass_reduce(cont0Sym)) // load untagged and call reduce_unboxed
-              } {
-                m.aload(ptw)
-                cont(0).ldTagged
-                cont(1).ldTagged
-                m.invoke(ptw_addActive)
+              staticReduceFor(cont0Sym, cont1Sym) match {
+                case Some((mref, rev)) =>
+                  m.iload(level).if_!=.thnElse {
+                    m.iinc(level, -1)
+                    recordDispatch(0, 1, 1)
+                    if(rev) { cont(1).ldAsParam; cont(0).ldAsParam } else { cont(0).ldAsParam; cont(1).ldAsParam }
+                    m.iload(level).aload(ptw)
+                    m.invokestatic(mref)
+                  } {
+                    m.aload(ptw)
+                    cont(0).ldTagged
+                    cont(1).ldTagged
+                    m.invoke(ptw_addActive)
+                  }
+                case None =>
+                  m.aload(ptw)
+                  cont(0).ldTagged
+                  cont(1).ldTagged
+                  m.invoke(ptw_addIrreducible)
               }
             }
           case None =>

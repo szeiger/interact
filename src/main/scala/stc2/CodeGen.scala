@@ -2,13 +2,12 @@ package de.szeiger.interact.stc2
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
 import de.szeiger.interact.{Config, LifecycleManaged, RulePlan}
-import de.szeiger.interact.ast.{CompilationUnit, Symbol, Symbols}
+import de.szeiger.interact.ast.{CompilationUnit, RuleKey, Symbol, Symbols}
 import de.szeiger.interact.codegen.AbstractCodeGen.{encodeName, symbolT}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 import de.szeiger.interact.offheap.{Allocator, MemoryDebugger}
 
 import scala.collection.mutable
-
 import Interpreter._
 
 class CodeGen(genPackage: String, classWriter: ClassWriter,
@@ -60,7 +59,11 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
   def metaClass_singleton(sym: Symbol) = { val tp = concreteMetaClassTFor(sym); tp.field("singleton", tp) }
   def metaClass_reduce(sym: Symbol) = concreteMetaClassTFor(sym).method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
-  def unboxedStaticReduceDesc(u0: Unboxing, u1: Unboxing) = tp.m(Seq(u0.paramT, u1.paramT, tp.I, ptwT).filter(_ != tp.V): _*).V
+  def staticReduceDesc(u0: Unboxing, u1: Unboxing) = tp.m(Seq(u0.paramT, u1.paramT, tp.I, ptwT).filter(_ != tp.V): _*).V
+  def staticReduceFor(sym1: Symbol, sym2: Symbol): Option[(MethodRef, Boolean)] =
+    rules.get(new RuleKey(sym1, sym2)).map { rk =>
+      (ruleT(rk.sym1, rk.sym2).method(staticReduceName, staticReduceDesc(Unboxing(rk.sym1), Unboxing(rk.sym2))), rk.sym1 != sym1)
+    }
 
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
 
@@ -87,7 +90,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
     val u0 = Unboxing(rule.sym1, rule.arity1)
     val u1 = Unboxing(rule.sym2, rule.arity2)
-    val desc = unboxedStaticReduceDesc(u0, u1)
+    val desc = staticReduceDesc(u0, u1)
     val m = classDSL.method(Acc.PUBLIC.STATIC, staticReduceName, desc, debugLineNumbers = true)
     def ac(idx: Int, u: Unboxing) = {
       val name = if(u.sym.isDefined) AbstractCodeGen.encodeName(u.sym) else s"initial$idx"
@@ -149,8 +152,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       m.iconst(TAGWIDTH).iushr
 
       val keys = rules.iterator.flatMap {
-        case (rk, rp) if rk.sym1 == sym && !rp.initial => Iterator( (rk, symIds(rk.sym2), m.newLabel) )
-        case (rk, rp) if rk.sym2 == sym && !rp.initial => Iterator( (rk, symIds(rk.sym1), m.newLabel) )
+        case (rk, rp) if rk.sym1 == sym => Iterator( (rk, symIds(rk.sym2), m.newLabel) )
+        case (rk, rp) if rk.sym2 == sym => Iterator( (rk, symIds(rk.sym1), m.newLabel) )
         case _ => Iterator.empty
       }.toVector.sortBy(_._2)
       val dflt = m.newLabel
@@ -162,7 +165,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
         val (ca, cb) = if(rk.sym1 != sym) (c2, c1) else (c1, c2)
         u1.ldTaggedAsUntagged(m, ca)
         u2.ldTaggedAsUntagged(m, cb)
-        m.iload(level).aload(ptw).invokestatic(ruleT(rk.sym1, rk.sym2).method(staticReduceName, unboxedStaticReduceDesc(u1, u2)))
+        m.iload(level).aload(ptw).invokestatic(ruleT(rk.sym1, rk.sym2).method(staticReduceName, staticReduceDesc(u1, u2)))
         m.return_
       }
       m.setLabel(dflt)
@@ -231,7 +234,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   private def compileInitial(rule: RulePlan, initialIndex: Int): String = {
     val u1 = Unboxing(rule.sym1, rule.arity1)
     val u2 = Unboxing(rule.sym2, rule.arity2)
-    val staticMR = initialRuleT(initialIndex).method(staticReduceName, unboxedStaticReduceDesc(u1, u2))
+    val staticMR = initialRuleT(initialIndex).method(staticReduceName, staticReduceDesc(u1, u2))
     val c = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className, riT)
     c.emptyNoArgsConstructor(Acc.PUBLIC)
     implementStaticReduce(c, rule)
