@@ -237,9 +237,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     def isTagged = tagged.isDefined
 
     def set(ct: Idx): Unit = untaggedPT match {
-      case Some(pt) if pt.isVoid =>
-        options += ldTaggedCP(ct).getOrElse(VarIdx.none) //TODO don't load
-        m.pop2
+      case Some(pt) if pt.isVoid => options += VarIdx.none
       case Some(pt) =>
         if(unconditional) {
           assert(untagged.isEmpty)
@@ -309,7 +307,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     val cont = bp.unconditionalTail match {
       case Some((s1, s2)) => Vector(new Cont(0, s1, true), new Cont(1, s2, true))
       case _ if bp.useLoopCont => Vector(new Cont(0, rule.sym1, false), new Cont(1, rule.sym2, false))
-      case _ if bp.useTailCont => Vector(new Cont(0, Symbol.NoSymbol, false), new Cont(1, Symbol.NoSymbol, false))
+      case _ if bp.useTailCont => Vector(new Cont(0, bp.singleDispatchSym0, false), new Cont(1, bp.singleDispatchSym1, false))
       case _ => null
     }
     def setCont(ct1: Idx, ct2: Idx): Unit = { cont(0).set(ct1); cont(1).set(ct2) }
