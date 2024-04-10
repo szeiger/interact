@@ -462,14 +462,17 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
             ifContSet.thn {
               m.iload(level).if_!=.thnElse {
                 m.iinc(level, -1)
-                cont(0).ldTagged
-                cont(1).ldTagged
-                m.iload(level).aload(ptw)
                 if(bp.singleDispatchSym0.isDefined) {
                   recordDispatch(0, 1, 1)
+                  cont(0).ldAsParam
+                  cont(1).ldTagged
+                  m.iload(level).aload(ptw)
                   m.invokestatic(metaClass_reduce(bp.singleDispatchSym0))
                 } else {
                   recordDispatch(0, 1, 0)
+                  cont(0).ldTagged
+                  cont(1).ldTagged
+                  m.iload(level).aload(ptw)
                   m.invokestatic(generatedDispatch_staticReduce)
                 }
               } {

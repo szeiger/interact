@@ -58,7 +58,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   def initialRuleT(idx: Int) = tp.c(s"$genPackage/InitialRule_$idx")
   def concreteMetaClassTFor(sym: Symbol) = if(sym.isDefined) tp.c(s"$genPackage/M_${encodeName(sym)}") else metaClassT
   def metaClass_singleton(sym: Symbol) = { val tp = concreteMetaClassTFor(sym); tp.field("singleton", tp) }
-  def metaClass_reduce(sym: Symbol) = concreteMetaClassTFor(sym).method("reduce", tp.m(cellT, cellT, tp.I, ptwT).V)
+  def metaClass_reduce(sym: Symbol) = concreteMetaClassTFor(sym).method("reduce", tp.m(Seq(Unboxing(sym).paramT, cellT, tp.I, ptwT).filter(_ != tp.V): _*).V)
   def staticReduceDesc(u0: Unboxing, u1: Unboxing) = tp.m(Seq(u0.paramT, u1.paramT, tp.I, ptwT).filter(_ != tp.V): _*).V
   def staticReduceFor(sym1: Symbol, sym2: Symbol): Option[(MethodRef, Boolean)] =
     rules.get(new RuleKey(sym1, sym2)).map { rk =>
@@ -68,14 +68,22 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   val rules = compilationUnit.statements.collect { case g: RulePlan if !g.initial => (g.key, g) }.toMap
 
   class Unboxing private (val sym: Symbol, val arity: Int) {
-    val unbox = shouldUnbox(sym, arity)
-    val unboxedVoid = unbox && sym.payloadType.isEmpty
-    val unboxedParamT = if(unbox) Some(ptOps(null).unboxedT) else None
-    val paramT = unboxedParamT.getOrElse(cellT)
+    val unboxed = shouldUnbox(sym, arity)
+    val unboxedVoid = unboxed && sym.payloadType.isEmpty
+    val paramT = if(unboxed) ptOps(null).unboxedT else cellT
     def ptOps(m: MethodDSL) = PTOps(m, sym.payloadType)(self)
-    def ldTaggedAsUntagged(m: MethodDSL, c: VarIdx): Unit = if(!unboxedVoid) {
-      if(unbox) ptOps(m).untag(m.lload(c)) else m.lload(c)
-    }
+    def ldTaggedAsThis(m: MethodDSL, c: VarIdx): Unit =
+      if(unboxedVoid) ()
+      else if(unboxed) ptOps(m).untag(m.lload(c))
+      else m.lload(c)
+    def ldThisAsThis(m: MethodDSL, c: VarIdx): Unit =
+      if(unboxedVoid) ()
+      else if(unboxed) ptOps(m).load(c)
+      else m.lload(c)
+    def ldThisAsTagged(m: MethodDSL, c: VarIdx): Unit =
+      if(unboxedVoid) m.lconst(mkUnboxed(symIds(sym)).toLong & 0xffffffffL)
+      else if(unboxed) { val pt = ptOps(m); pt.tag(symIds(sym))(pt.load(c)) }
+      else m.lload(c)
   }
   object Unboxing {
     private[this] val cache = mutable.HashMap.empty[(Symbol, Int), Unboxing]
@@ -94,11 +102,11 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     val m = classDSL.method(Acc.PUBLIC.STATIC, staticReduceName, desc, debugLineNumbers = true)
     def ac(idx: Int, u: Unboxing) = {
       val name = if(u.sym.isDefined) AbstractCodeGen.encodeName(u.sym) else s"initial$idx"
-      if(u.unbox) {
-        val ac = new ActiveCell(m, self, 0, VarIdx.none, u.sym, u.arity, !u.unboxedVoid, u.unbox, name)
+      if(u.unboxed) {
+        val ac = new ActiveCell(m, self, 0, VarIdx.none, u.sym, u.arity, !u.unboxedVoid, u.unboxed, name)
         if(!u.unboxedVoid) ac.cachedPayload = m.param(s"ac${idx}u_$name", u.paramT)
         ac
-      } else new ActiveCell(m, self, 0, m.param(s"ac${idx}_$name", u.paramT), u.sym, u.arity, needsCachedPayloads.contains(idx), u.unbox, name)
+      } else new ActiveCell(m, self, 0, m.param(s"ac${idx}_$name", u.paramT), u.sym, u.arity, needsCachedPayloads.contains(idx), u.unboxed, name)
     }
     val active = Vector(ac(0, u0), ac(1, u1))
     val level = m.param("level", tp.I)
@@ -133,7 +141,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     {
       val mref = metaClass_reduce(sym)
       val m = c.method(Acc.PUBLIC.STATIC.FINAL, mref.name, mref.desc, debugLineNumbers = true)
-      val c1 = m.param("c1", cellT)
+      val u1 = Unboxing(sym)
+      val c1 = if(u1.unboxedVoid) VarIdx.none else m.param("c1", u1.paramT)
       val c2 = m.param("c2", cellT)
       val level = m.param("level", tp.I)
       val ptw = m.param("ptw", ptwT)
@@ -160,16 +169,17 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       m.tableswitchOpt(keys.iterator.map(_._2).toArray, dflt, keys.map(_._3))
       keys.foreach { case (rk, _, l) =>
         m.setLabel(l)
-        val u1 = Unboxing(rk.sym1)
-        val u2 = Unboxing(rk.sym2)
-        val (ca, cb) = if(rk.sym1 != sym) (c2, c1) else (c1, c2)
-        u1.ldTaggedAsUntagged(m, ca)
-        u2.ldTaggedAsUntagged(m, cb)
-        m.iload(level).aload(ptw).invokestatic(ruleT(rk.sym1, rk.sym2).method(staticReduceName, staticReduceDesc(u1, u2)))
+        val u2 = if(rk.sym1 == sym) Unboxing(rk.sym2) else Unboxing(rk.sym1)
+        def ld1 = u1.ldThisAsThis(m, c1)
+        def ld2 = u2.ldTaggedAsThis(m, c2)
+        val desc = if(rk.sym1 == sym) { ld1; ld2; staticReduceDesc(u1, u2) } else { ld2; ld1; staticReduceDesc(u2, u1) }
+        m.iload(level).aload(ptw).invokestatic(ruleT(rk.sym1, rk.sym2).method(staticReduceName, desc))
         m.return_
       }
       m.setLabel(dflt)
-      m.aload(ptw).lload(c1).lload(c2).invoke(ptw_addIrreducible)
+      m.aload(ptw)
+      u1.ldThisAsTagged(m, c1)
+      m.lload(c2).invoke(ptw_addIrreducible)
       m.return_
     }
 
@@ -194,8 +204,6 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
 
       incMetric(s"${c.name}.${m.name}", m, ptw)
 
-      m.lload(c1).lload(c2).iload(level).aload(ptw)
-
       if(config.unboxedPrimitives) {
         m.lload(c1).dup2.lconst(TAGMASK).land.lconst(TAG_UNBOXED).lcmp.if_==.thnElse {
           m.lconst(SYMIDMASK).land.l2i
@@ -210,7 +218,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       m.tableswitchOpt(keys.iterator.map(_._1).toArray, dflt, keys.map(_._3))
       keys.foreach { case (_, sym, l) =>
         m.setLabel(l)
-        m.invokestatic(metaClass_reduce(sym))
+        Unboxing(sym).ldTaggedAsThis(m, c1)
+        m.lload(c2).iload(level).aload(ptw).invokestatic(metaClass_reduce(sym))
         m.return_
       }
       m.setLabel(dflt)
@@ -245,8 +254,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
       val c1 = m.param("c1", cellT)
       val c2 = m.param("c2", cellT)
       val ptw = m.param("ptw", ptwT)
-      u1.ldTaggedAsUntagged(m, c1)
-      u2.ldTaggedAsUntagged(m, c2)
+      u1.ldTaggedAsThis(m, c1)
+      u2.ldTaggedAsThis(m, c2)
       m.iconst(0).aload(ptw).invokestatic(staticMR).return_
     }
 
