@@ -312,10 +312,11 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
     checkCondition(bp, branchEnd)
     incMetric(s"$branchMetricName", m, ptw)
+    val useLoopCont = bp.useLoopCont && bp.unconditionalTail.isEmpty
 
     val cont = bp.unconditionalTail match {
       case Some((s1, s2)) => Vector(new Cont(0, s1, true), new Cont(1, s2, true))
-      case _ if bp.useLoopCont => Vector(new Cont(0, rule.sym1, false), new Cont(1, rule.sym2, false))
+      case _ if useLoopCont => Vector(new Cont(0, rule.sym1, false), new Cont(1, rule.sym2, false))
       case _ if bp.useTailCont => Vector(new Cont(0, bp.singleDispatchSym0, false), new Cont(1, bp.singleDispatchSym1, false))
       case _ => null
     }
@@ -357,7 +358,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
 
     def connectActivePair(ct1: CellIdx, ct2: Idx): Unit = {
-      if(bp.useTailCont && !bp.useLoopCont) {
+      if(bp.useTailCont && !useLoopCont) {
         bp.unconditionalTail match {
           case Some((s1, s2)) =>
             val cts = (symbolOf(ct1), symbolOf(ct2))
@@ -421,7 +422,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
       recordSteps(bp, parents)
 
-      if(bp.useLoopCont) {
+      if(useLoopCont) {
         ifContSet.thn {
           recordDispatch(1, 0, 0)
           cont(0).storeIn(active(0))

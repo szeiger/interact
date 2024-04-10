@@ -74,7 +74,7 @@ class PlanRules(val global: Global) extends Phase {
     val loopOn0 = isLoop(active(0), active(1), rule.get.sym1)
     val loopOn1 = isLoop(active(1), active(0), rule.get.sym2)
     val utail = ruleWiring match {
-      case Some(r) if !loopOn0 && !loopOn1 =>
+      case Some(r) =>
         val cand = sortedConns.iterator.collect { case Connection(CellIdx(i1, -1), CellIdx(i2, -1)) => (allCells(i1), allCells(i2)) }.toVector
         val pref = cand.find { case (s1, s2) => (s1 == r.sym1 && s2 == r.sym2) || (s1 == r.sym2 && s2 == r.sym1) }.map { _ => (r.sym1, r.sym2) }
         pref.orElse(cand.headOption)
