@@ -157,16 +157,16 @@ object InterpreterBenchmark {
       |""".stripMargin
 
   private val ack38bSrc = prelude +
-    """cons Pred(x)
-      |cons A(r, y) = x
-      |cons A1(r, y) = x
-      |match Pred(r) = Z => r = Z
-      |match Pred(r) = S(x) => r = x
-      |match A(a, b) = Z => a = r; b = S(r)
-      |match A1(a, b) = Z => a = Pred(A(S(Z), b))
-      |match A(a, b) = S(x) => a = A1(S(x), b)
-      |match A1(a, b) = S(y) => (a1, a2) = dup(a); a1 = Pred(A(r1, b)); a2 = A(y, r1)
-      |let A(8n, res2) = 3n
+    """def pred(_) = r
+      |  | Z => Z
+      |  | S(x) => x
+      |def ack2(_, a) = b
+      |  | Z => S(a)
+      |  | S(x) => ack2b(a, S(x))
+      |def ack2b(_, a) = b
+      |  | Z => ack2(pred(a), S(Z))
+      |  | S(y) => (a1, a2) = dup(a); ack2(pred(a1), ack2(a2, y))
+      |let res2 = ack2(3n, 8n)
       |""".stripMargin
 
   private val intAck38Src =
