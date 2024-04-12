@@ -28,11 +28,15 @@ class PlanRules(val global: Global) extends Phase {
     //println(s"${rule.map(r => r.sym1 + ", " + r.sym2)} $active")
     val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
     val cellCreationOrder = optimizeCellCreationOrder(branch)
-    val instr1, instr2 = Vector.newBuilder[CreateInstruction]
+    val instr1, instr2 = Vector.newBuilder[Instruction]
     var statSingletonUse = baseSingletonUse
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
     var cellPortsNotConnected = 0
     val cellsCreated = new Array[Boolean](branch.cells.length)
+    branch.cond.foreach {
+      case CheckPrincipal(wire, sym, activeIdx) => instr1 += ActivateCell(wire, sym, activeIdx)
+      case _ =>
+    }
     for(idx <- cellCreationOrder) {
       val idxO = idx + branch.cellOffset
       val activeForIdxO = active.indexOf(idx)
@@ -86,15 +90,14 @@ class PlanRules(val global: Global) extends Phase {
         case Connection(CellIdx(i1, -1), FreeIdx(_, _)) => Vector((allCells(i1), Symbol.NoSymbol, true))
         case _ => Vector.empty
       }.toVector
-      (pairs.map(_._1).toSet, pairs.map(_._2).toSet, !initialRuleWiring.isDefined && pairs.exists(_._3))
+      (pairs.map(_._1).toSet, pairs.map(_._2).toSet, initialRuleWiring.isEmpty && pairs.exists(_._3))
     } else (Set.empty[Symbol], Set.empty[Symbol], false)
     val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, active, allCells))
-    val tempCount = payloadTemp.length + branches.map(_.totalTempCount).maxOption.getOrElse(0)
     branch.cond.foreach {
       case pc: PayloadMethodApplication => assert(pc.jMethod.getReturnType == classOf[Boolean])
       case _: CheckPrincipal =>
     }
-    new BranchPlan(active, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps, tempCount,
+    new BranchPlan(active, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps,
       instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches,
       utail, loopOn0, loopOn1, tailSyms0, tailSyms1, useTailCont, branch.tempOffset, needsCachedPayloads)
   }
@@ -275,9 +278,24 @@ final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
   def key: RuleKey = new RuleKey(sym1, sym2)
-  def totalCellCount: Int = branches.map(_.totalCellCount).max
-  def totalTempCount: Int = branches.map(_.totalTempCount).max
-  def totalActiveCount: Int = branches.map(_.extraActiveCount).max + 2
+
+  lazy val (totalCellCount, totalTempCount, totalActiveCount) = {
+    var c, t, a = 0
+    def f(n: Node): Unit = {
+      n match {
+        case n: CheckPrincipal => a = a.max(n.activeIdx)
+        case n: PayloadComputationPlan => n.embArgs.foreach {
+          case n: EmbArg.Temp => t = t.max(n.idx)
+          case _ =>
+        }
+        case n: CellCreateInstruction => c = c.max(n.cellIdx)
+        case _ =>
+      }
+      n.nodeChildren.foreach(f)
+    }
+    f(this)
+    (c+1, t+1, (a+1).max(2))
+  }
 }
 
 class BranchPlan(val active: Vector[Int],
@@ -286,8 +304,7 @@ class BranchPlan(val active: Vector[Int],
   val cond: Option[PayloadComputationPlan],
   val sortedConns: Vector[Connection],
   val payloadComps: Vector[PayloadComputationPlan],
-  val totalTempCount: Int,
-  val cellCreateInstructions: Vector[CreateInstruction],
+  val instructions: Vector[Instruction],
   val cellPortsConnected: mutable.HashSet[CellIdx],
   val statSteps: Int,
   val statSingletonUse: Int,
@@ -301,8 +318,6 @@ class BranchPlan(val active: Vector[Int],
   val needsCachedPayloads: Set[Int]) extends Node {
 
   def isReuse(cellIdx: CellIdx): Boolean = active.contains(cellIdx.idx)
-  def totalCellCount: Int = cellSyms.length + branches.map(_.totalCellCount).maxOption.getOrElse(0)
-  def extraActiveCount: Int = cond.count(_.isInstanceOf[CheckPrincipal]) + branches.map(_.extraActiveCount).maxOption.getOrElse(0)
   def singleDispatchSym0: Symbol = if(tailSyms0.size == 1) tailSyms0.head else Symbol.NoSymbol
   def singleDispatchSym1: Symbol = if(tailSyms1.size == 1) tailSyms1.head else Symbol.NoSymbol
   def useLoopCont: Boolean = loopOn0 || loopOn1
@@ -313,21 +328,26 @@ class BranchPlan(val active: Vector[Int],
     s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, sd0=$singleDispatchSym0, sd1=$singleDispatchSym1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (cond, "cond") += (cellCreateInstructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")
+    n += (cond, "cond") += (instructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 
-sealed trait CreateInstruction extends Node
-case class GetSingletonCell(cellIdx: Int, sym: Symbol) extends CreateInstruction {
+sealed trait Instruction extends Node
+
+sealed trait CellCreateInstruction extends Instruction {
+  def cellIdx: Int
+}
+case class GetSingletonCell(cellIdx: Int, sym: Symbol) extends CellCreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym")
 }
-case class ReuseActiveCell(cellIdx: Int, activeIdx: Int, sym: Symbol) extends CreateInstruction {
+case class ReuseActiveCell(cellIdx: Int, activeIdx: Int, sym: Symbol) extends CellCreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, active($activeIdx), $sym")
 }
-case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CreateInstruction {
+case class NewCell(cellIdx: Int, sym: Symbol, args: Vector[Idx]) extends CellCreateInstruction {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$cellIdx, $sym, [${args.map(_.show).mkString(", ")}]")
 }
-//final case class CheckPrincipal(wire: FreeIdx, sym: Symbol) extends CreateInstruction {
-//  val embArgs: Vector[EmbArg] = Vector.empty
-//  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym")
-//}
+
+final case class ActivateCell(wire: Idx, sym: Symbol, activeIdx: Int) extends Instruction {
+  val embArgs: Vector[EmbArg] = Vector.empty
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, $sym at a($activeIdx)")
+}

@@ -148,11 +148,11 @@ object EmbArg {
   final case class Temp(idx: Int, pt: PayloadType) extends EmbArg
 }
 
-sealed abstract class PayloadComputationPlan extends Node
-
-sealed abstract class PayloadComputation extends PayloadComputationPlan {
+sealed abstract class PayloadComputationPlan extends Node {
   def embArgs: Vector[EmbArg]
 }
+
+sealed abstract class PayloadComputation extends PayloadComputationPlan
 
 final case class PayloadAssignment(sourceIdx: EmbArg, targetIdx: EmbArg, payloadType: PayloadType) extends PayloadComputation {
   val embArgs: Vector[EmbArg] = Vector(sourceIdx, targetIdx)
@@ -172,6 +172,7 @@ final case class ReuseLabelsComp(cellIdx: Int, embArgs: Vector[EmbArg]) extends 
 
 final case class AllocateTemp(ea: EmbArg.Temp, boxed: Boolean) extends PayloadComputationPlan {
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$ea, $boxed")
+  def embArgs = Vector(ea)
 }
 
 // Check if a FreeIdx (or CellIdx during inlining) is connected to the principal port of a cell with the given Symbol

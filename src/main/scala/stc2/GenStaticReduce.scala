@@ -305,12 +305,27 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     m.invoke(ptw_addActive)
   }
 
+  def emitBranches(bps: Vector[BranchPlan], parents: List[BranchPlan], branchMetricName: String): Unit = {
+    bps.zipWithIndex.foreach { case (bp, branchIdx) =>
+      val branchEnd = m.newLabel
+      bp.cond.foreach(computePayload(_, branchEnd))
+      emitBranch(bp, parents, s"$branchMetricName#$branchIdx")
+      if(bp.cond.isDefined) m.setLabel(branchEnd)
+    }
+  }
+
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
+    if(parents.isEmpty) {
+      active(0).reuse = bp.active(0)
+      active(1).reuse = bp.active(1)
+      for(i <- 2 until active.length) active(i) = null
+      for(i <- active.indices)
+        reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
+    }
+
     for(i <- bp.cellOffset until cells.length)
       cells(i) = if(i-bp.cellOffset < bp.cellSyms.length) new Cell(i, bp.cellSyms(i-bp.cellOffset)) else null
-    val branchEnd = m.newLabel
 
-    checkCondition(bp, branchEnd)
     incMetric(s"$branchMetricName", m, ptw)
     val useLoopCont = bp.useLoopCont && bp.unconditionalTail.isEmpty
 
@@ -330,7 +345,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       m.lconst(0).lcmp.if_!=
     }
 
-    createCells(bp.cellCreateInstructions)
+    createCells(bp.instructions, bp)
 
     bp.payloadComps.foreach(computePayload(_))
 
@@ -404,7 +419,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
 
     if(bp.branches.nonEmpty)
-      bp.branches.zipWithIndex.foreach { case (b, i) => emitBranch(b, bp :: parents, s"$branchMetricName.$i") }
+      emitBranches(bp.branches, bp :: parents, branchMetricName)
     else {
       for(w <- reuseBuffers if w != null) w.flush()
       for(ac <- active if ac != null && ac.reuse == -1 && (!ac.sym.isDefined || !ac.sym.isSingleton) && !ac.unboxed) {
@@ -488,8 +503,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
       m.return_
     }
-
-    if(bp.cond.isDefined) m.setLabel(branchEnd)
   }
 
   private def recordSteps(lastBranch: BranchPlan, parents: List[BranchPlan]): Unit = {
@@ -511,22 +524,22 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   def emitRule(): Unit = {
-    rule.branches.zipWithIndex.foreach { case (bp, branchIdx) =>
-      active(0).reuse = bp.active(0)
-      active(1).reuse = bp.active(1)
-      for(i <- 2 until active.length) {
-        active(i) = null
-      }
-      for(i <- active.indices)
-        reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
-      emitBranch(bp, Nil, s"$baseMetricName#$branchIdx")
-    }
+    emitBranches(rule.branches, Nil, baseMetricName)
   }
 
-  private def createCells(instrs: Vector[CreateInstruction]): Unit = {
+  private def createCells(instrs: Vector[Instruction], bp: BranchPlan): Unit = {
     val singletonCache = mutable.HashMap.empty[Symbol, VarIdx]
     val allocMetrics = mutable.HashMap.empty[Int, Int]
     instrs.foreach {
+      case ActivateCell(wire, sym, activeIdx) =>
+        ldTaggedCP(wire)
+        val acname = AbstractCodeGen.encodeName(sym)
+        val vidx = m.storeLocal(cellT, s"ac${activeIdx}_${acname}")
+        val ac = new ActiveCell(m, codeGen, activeIdx, vidx, sym, sym.arity, bp.needsCachedPayloads(activeIdx), codeGen.shouldUnbox(sym), acname)
+        ac.reuse = bp.active(activeIdx)
+        active(activeIdx) = ac
+        reuseBuffers(activeIdx) = if(ac.reuse == -1) null else new WriteBuffer(ac)
+        cachePayload(ac)
       case GetSingletonCell(idx, sym) =>
         assert(!config.unboxedPrimitives)
         cells(idx).tagged = active.find(_.sym == sym) match {
@@ -638,29 +651,14 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       }
   }
 
-  private def checkCondition(bp: BranchPlan, endTarget: Label): Unit = {
-    bp.cond.foreach {
-      case CheckPrincipal(wire: FreeIdx, sym, activeIdx) =>
-        if(codeGen.shouldUnbox(sym)) {
-          ifUnboxed(wire, sym).not.jump(endTarget)
-        } else {
-          ifPrincipal(wire).not.jump(endTarget)
-          ifBoxed(wire, sym).not.jump(endTarget)
-        }
-        ldTaggedCP(wire)
-        val acname = AbstractCodeGen.encodeName(sym)
-        val vidx = m.storeLocal(cellT, s"ac${activeIdx}_${acname}")
-        val ac = new ActiveCell(m, codeGen, activeIdx, vidx, sym, sym.arity, bp.needsCachedPayloads(activeIdx), codeGen.shouldUnbox(sym), acname)
-        ac.reuse = bp.active(activeIdx)
-        active(activeIdx) = ac
-        reuseBuffers(activeIdx) = if(ac.reuse == -1) null else new WriteBuffer(ac)
-        cachePayload(ac)
-      case pc =>
-        computePayload(pc, endTarget)
-    }
-  }
-
   private def computePayload(pc: PayloadComputationPlan, elseTarget: Label = null): Unit = pc match {
+    case CheckPrincipal(wire: FreeIdx, sym, _) =>
+      if(codeGen.shouldUnbox(sym)) {
+        ifUnboxed(wire, sym).not.jump(elseTarget)
+      } else {
+        ifPrincipal(wire).not.jump(elseTarget)
+        ifBoxed(wire, sym).not.jump(elseTarget)
+      }
     case AllocateTemp(ea, boxed) =>
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"
