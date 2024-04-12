@@ -305,13 +305,17 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     m.invoke(ptw_addActive)
   }
 
-  def emitBranches(bps: Vector[BranchPlan], parents: List[BranchPlan], branchMetricName: String): Unit = {
-    bps.zipWithIndex.foreach { case (bp, branchIdx) =>
-      val branchEnd = m.newLabel
-      bp.cond.foreach(computePayload(_, branchEnd))
-      emitBranch(bp, parents, s"$branchMetricName#$branchIdx")
-      if(bp.cond.isDefined) m.setLabel(branchEnd)
-    }
+  def emitStatement(st: RPStatement, parents: List[BranchPlan], branchMetricName: String): Unit = st match {
+    case RPCond(ifThen, els) =>
+      ifThen.zipWithIndex.foreach { case ((i, t), idx) =>
+        val branchEnd = m.newLabel
+        computePayload(i, branchEnd)
+        emitStatement(t, parents, s"$branchMetricName:$idx")
+        m.setLabel(branchEnd)
+      }
+      emitStatement(els, parents, s"$branchMetricName:${ifThen.length}")
+    case bp: BranchPlan =>
+      emitBranch(bp, parents, s"$branchMetricName:b")
   }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
@@ -418,8 +422,8 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
       case Connection(i1: CellIdx, i2: CellIdx) => connectCC(i1, i2)
     }
 
-    if(bp.branches.nonEmpty)
-      emitBranches(bp.branches, bp :: parents, branchMetricName)
+    if(bp.nested.nonEmpty)
+      emitStatement(bp.nested.get, bp :: parents, branchMetricName)
     else {
       for(w <- reuseBuffers if w != null) w.flush()
       for(ac <- active if ac != null && ac.reuse == -1 && (!ac.sym.isDefined || !ac.sym.isSingleton) && !ac.unboxed) {
@@ -523,9 +527,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
     }
   }
 
-  def emitRule(): Unit = {
-    emitBranches(rule.branches, Nil, baseMetricName)
-  }
+  def emitRule(): Unit = emitStatement(rule.statement, Nil, baseMetricName)
 
   private def createCells(instrs: Vector[Instruction], bp: BranchPlan): Unit = {
     val singletonCache = mutable.HashMap.empty[Symbol, VarIdx]

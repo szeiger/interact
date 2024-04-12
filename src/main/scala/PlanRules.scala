@@ -2,7 +2,6 @@ package de.szeiger.interact
 
 import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, Statement, Symbol}
 
-import scala.collection.immutable.Vector
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -13,14 +12,30 @@ class PlanRules(val global: Global) extends Phase {
   override def apply(u: CompilationUnit): CompilationUnit = {
     val rules = u.statements.collect { case r: RuleWiring => (r.key, r) }.toMap
     u.copy(u.statements.map {
-      case n: RuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules, 0, 0, Vector(-1, -1), Vector.empty)), None)
-      case n: InitialRuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, n.branches.map(b => createBranchPlan(Some(n), b, rules, 0, 0, Vector(-1, -1), Vector.empty)), Some(n.free))
+      case n: RuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, planBranchWirings(Some(n), n.branches, rules, 0, 0, Vector(-1, -1), Vector.empty), None)
+      case n: InitialRuleWiring => RulePlan(n.sym1, n.sym2, n.arity1, n.arity2, planBranchWirings(Some(n), n.branches, rules, 0, 0, Vector(-1, -1), Vector.empty), Some(n.free))
       case s => s
     })
   }
 
-  def createBranchPlan(rule: Option[GenericRuleWiring], branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring],
-    baseSingletonUse: Int, baseLabelCreate: Int, baseActive: Vector[Int], parentCells: Vector[Symbol]): BranchPlan = {
+  def planBranchWirings(rule: Option[GenericRuleWiring], branches: Vector[BranchWiring], rules: scala.collection.Map[RuleKey, RuleWiring],
+      baseSingletonUse: Int, baseLabelCreate: Int, baseActive: Vector[Int], parentCells: Vector[Symbol]): RPStatement = {
+    if(branches.length == 1)
+      planBranchWiring(rule, branches.head, rules, baseSingletonUse, baseLabelCreate, baseActive, parentCells)
+    else {
+      val brs = branches.map { bw =>
+        bw.cond.foreach {
+          case pc: PayloadMethodApplication => assert(pc.jMethod.getReturnType == classOf[Boolean])
+          case _: CheckPrincipal =>
+        }
+        (bw.cond.getOrElse(null), planBranchWiring(rule, bw, rules, baseSingletonUse, baseLabelCreate, baseActive, parentCells))
+      }
+      RPCond(brs.init, brs.last._2)
+    }
+  }
+
+  def planBranchWiring(rule: Option[GenericRuleWiring], branch: BranchWiring, rules: scala.collection.Map[RuleKey, RuleWiring],
+    baseSingletonUse: Int, baseLabelCreate: Int, baseActive: Vector[Int], parentCells: Vector[Symbol]): RPStatement = {
     lazy val ruleWiring: Option[RuleWiring] = rule.collect { case r: RuleWiring => r }
     lazy val initialRuleWiring: Option[InitialRuleWiring] = rule.collect { case r: InitialRuleWiring => r }
     val allCells = parentCells ++ branch.cells
@@ -92,13 +107,11 @@ class PlanRules(val global: Global) extends Phase {
       }.toVector
       (pairs.map(_._1).toSet, pairs.map(_._2).toSet, initialRuleWiring.isEmpty && pairs.exists(_._3))
     } else (Set.empty[Symbol], Set.empty[Symbol], false)
-    val branches = branch.branches.map(createBranchPlan(None, _, rules, statSingletonUse, statLabelCreate, active, allCells))
-    branch.cond.foreach {
-      case pc: PayloadMethodApplication => assert(pc.jMethod.getReturnType == classOf[Boolean])
-      case _: CheckPrincipal =>
-    }
-    new BranchPlan(active, branch.cells, branch.cellOffset, branch.cond, sortedConns, payloadComps,
-      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, branches,
+    val nested =
+      if(branch.branches.isEmpty) None
+      else Some(planBranchWirings(None, branch.branches, rules, statSingletonUse, statLabelCreate, active, allCells))
+    new BranchPlan(active, branch.cells, branch.cellOffset, sortedConns, payloadComps,
+      instr1.result(), cellPortsConnected, branch.statSteps, statSingletonUse, statLabelCreate, nested,
       utail, loopOn0, loopOn1, tailSyms0, tailSyms1, useTailCont, branch.tempOffset, needsCachedPayloads)
   }
 
@@ -271,11 +284,11 @@ class PlanRules(val global: Global) extends Phase {
   }
 }
 
-final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, branches: Vector[BranchPlan],
+final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, statement: RPStatement,
   initialSyms: Option[Vector[Symbol]]) extends Statement {
   def initial = initialSyms.isDefined
   def show: String = s"$key, arity1=$arity1, arity2=$arity2, initial=$initial"
-  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += branches
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += statement
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
   def key: RuleKey = new RuleKey(sym1, sym2)
 
@@ -298,10 +311,21 @@ final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, 
   }
 }
 
+trait RPStatement extends Node {
+  def needsCachedPayloads: Set[Int]
+}
+
+case class RPCond(ifThen: Vector[(PayloadComputationPlan, RPStatement)], els: RPStatement) extends RPStatement {
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = {
+    ifThen.zipWithIndex.foreach { case ((i, t), idx) => n += (i, s"if$idx"); n += (t, s"then$idx") }
+    n += (els, "else")
+  }
+  lazy val needsCachedPayloads: Set[Int] = (ifThen.map(_._2) :+ els).flatMap(_.needsCachedPayloads).toSet
+}
+
 class BranchPlan(val active: Vector[Int],
   val cellSyms: Vector[Symbol],
   val cellOffset: Int,
-  val cond: Option[PayloadComputationPlan],
   val sortedConns: Vector[Connection],
   val payloadComps: Vector[PayloadComputationPlan],
   val instructions: Vector[Instruction],
@@ -309,13 +333,13 @@ class BranchPlan(val active: Vector[Int],
   val statSteps: Int,
   val statSingletonUse: Int,
   val statLabelCreate: Int,
-  val branches: Vector[BranchPlan],
+  val nested: Option[RPStatement],
   val unconditionalTail: Option[(Symbol, Symbol)],
   val loopOn0: Boolean, val loopOn1: Boolean,
   val tailSyms0: Set[Symbol], val tailSyms1: Set[Symbol],
   val useTailCont: Boolean,
   val tempOffset: Int,
-  val needsCachedPayloads: Set[Int]) extends Node {
+  val needsCachedPayloads: Set[Int]) extends RPStatement {
 
   def isReuse(cellIdx: CellIdx): Boolean = active.contains(cellIdx.idx)
   def singleDispatchSym0: Symbol = if(tailSyms0.size == 1) tailSyms0.head else Symbol.NoSymbol
@@ -328,7 +352,7 @@ class BranchPlan(val active: Vector[Int],
     s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, sd0=$singleDispatchSym0, sd1=$singleDispatchSym1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (cond, "cond") += (instructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += (branches, "br")
+    n += (instructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += nested
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 }
 

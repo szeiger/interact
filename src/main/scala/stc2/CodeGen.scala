@@ -95,7 +95,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     config.unboxedPrimitives && Interpreter.canUnbox(sym, if(arity == -1) sym.arity else arity)
 
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan): Unit = {
-    val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
+    val needsCachedPayloads = rule.statement.needsCachedPayloads
     val u0 = Unboxing(rule.sym1, rule.arity1)
     val u1 = Unboxing(rule.sym2, rule.arity2)
     val desc = staticReduceDesc(u0, u1)

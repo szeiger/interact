@@ -1,7 +1,7 @@
 package de.szeiger.interact.stc1
 
 import de.szeiger.interact.codegen.{AbstractCodeGen, ClassWriter, ParSupport}
-import de.szeiger.interact.{Config, IntBox, IntBoxImpl, RefBox, RefBoxImpl, RulePlan}
+import de.szeiger.interact.{BranchPlan, Config, IntBox, IntBoxImpl, RPCond, RPStatement, RefBox, RefBoxImpl, RulePlan}
 import de.szeiger.interact.ast.{CompilationUnit, Symbol, Symbols}
 import de.szeiger.interact.codegen.dsl.{Desc => tp, _}
 
@@ -62,7 +62,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
 
   private def implementStaticReduce(classDSL: ClassDSL, rule: RulePlan, mref: MethodRef): Unit = {
     val m = classDSL.method(Acc.PUBLIC.STATIC, mref.name, mref.desc)
-    val needsCachedPayloads = rule.branches.iterator.flatMap(_.needsCachedPayloads).toSet
+    val needsCachedPayloads = rule.statement.needsCachedPayloads
     val active = Vector(
       new ActiveCell(0, m.param("active0", concreteCellTFor(rule.sym1)), rule.sym1, rule.arity1, needsCachedPayloads.contains(0)),
       new ActiveCell(1, m.param("active1", concreteCellTFor(rule.sym2)), rule.sym2, rule.arity2, needsCachedPayloads.contains(1)),
@@ -247,10 +247,15 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     }
   }
 
+  private def bps(st: RPStatement): Iterator[BranchPlan] = st match {
+    case RPCond(ifThen, els) => ifThen.iterator.flatMap { case (_, t) => bps(t) } ++ bps(els)
+    case bp: BranchPlan => Iterator.single(bp)
+  }
+
   private def compileCellCache(): Unit = {
     val syms = ((for {
       r <- rules.valuesIterator
-      b <- r.branches.iterator
+      b <- bps(r.statement)
       s <- b.cellSyms.iterator
     } yield s) ++ (rules.keysIterator.map(_.sym1) ++ rules.keysIterator.map(_.sym2)).filter(_.isDefined)).toVector.distinct.sortBy(_.id)
     val c = DSL.newClass(Acc.PUBLIC.FINAL, cellCacheT.className)
