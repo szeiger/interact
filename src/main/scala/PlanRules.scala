@@ -30,7 +30,40 @@ class PlanRules(val global: Global) extends Phase {
         }
         (bw.cond.getOrElse(null), planBranchWiring(rule, bw, rules, baseSingletonUse, baseLabelCreate, baseActive, parentCells))
       }
-      RPCond(brs.init, brs.last._2)
+      optimizeCondition(RPCond(brs.init, Some(brs.last._2)))
+    }
+  }
+
+  // find sequence of multiple CheckPrincipal conditions on the same wire
+  private def findCPSeq(ifThen: Vector[(PayloadComputationPlan, _)]): Option[(Int, Int)] = {
+    var start = -1
+    var wire: Idx = null
+    for(i <- ifThen.indices) {
+      if(start == -1) {
+        ifThen(i) match {
+          case (CheckPrincipal(w, _, _), _) => wire = w; start = i
+          case _ => ()
+        }
+      } else {
+        ifThen(i) match {
+          case (CheckPrincipal(w, _, _), _) if w == wire => ()
+          case _ => return Some((start, i))
+        }
+      }
+    }
+    if(start == -1) None else Some((start, ifThen.length))
+  }
+
+  def optimizeCondition(cond: RPCond): RPStatement = {
+    findCPSeq(cond.ifThen) match {
+      case Some((start, end)) =>
+        val wire = cond.ifThen(start)._1.asInstanceOf[CheckPrincipal].wire
+        val matches = cond.ifThen.slice(start, end).map { case (CheckPrincipal(_, s , _), t) => (s, t) }
+        val pre = cond.ifThen.slice(0, start)
+        val post = cond.ifThen.drop(end)
+        val m = RPMatchPrincipal(wire.asInstanceOf[FreeIdx], matches, if(post.isEmpty) cond.els else Some(optimizeCondition(RPCond(post, cond.els))))
+        if(pre.isEmpty) m else RPCond(pre, Some(m))
+      case None => cond
     }
   }
 
@@ -296,7 +329,7 @@ final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, 
     var c, t, a = 0
     def f(n: Node): Unit = {
       n match {
-        case n: CheckPrincipal => a = a.max(n.activeIdx)
+        case n: BranchPlan => a = a.max(n.active.length-1)
         case n: PayloadComputationPlan => n.embArgs.foreach {
           case n: EmbArg.Temp => t = t.max(n.idx)
           case _ =>
@@ -311,16 +344,25 @@ final case class RulePlan(sym1: Symbol, sym2: Symbol, arity1: Int, arity2: Int, 
   }
 }
 
-trait RPStatement extends Node {
+sealed trait RPStatement extends Node {
   def needsCachedPayloads: Set[Int]
+  def branchPlans: Iterator[BranchPlan]
 }
 
-case class RPCond(ifThen: Vector[(PayloadComputationPlan, RPStatement)], els: RPStatement) extends RPStatement {
+case class RPCond(ifThen: Vector[(PayloadComputationPlan, RPStatement)], els: Option[RPStatement]) extends RPStatement {
+  def branchPlans: Iterator[BranchPlan] = ifThen.iterator.flatMap { case (_, t) => t.branchPlans } ++ els.iterator.flatMap(_.branchPlans)
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = {
     ifThen.zipWithIndex.foreach { case ((i, t), idx) => n += (i, s"if$idx"); n += (t, s"then$idx") }
     n += (els, "else")
   }
-  lazy val needsCachedPayloads: Set[Int] = (ifThen.map(_._2) :+ els).flatMap(_.needsCachedPayloads).toSet
+  lazy val needsCachedPayloads: Set[Int] = (ifThen.map(_._2) :++ els).flatMap(_.needsCachedPayloads).toSet
+}
+
+case class RPMatchPrincipal(wire: FreeIdx, ifThen: Vector[(Symbol, RPStatement)], els: Option[RPStatement]) extends RPStatement {
+  def branchPlans: Iterator[BranchPlan] = ifThen.iterator.flatMap { case (_, t) => t.branchPlans } ++ els.iterator.flatMap(_.branchPlans)
+  override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(s"$wire, ${ifThen.map(_._1).mkString("[", ", ", "]")}")
+  override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) = n += ifThen.map(_._2) += (els, "else")
+  lazy val needsCachedPayloads: Set[Int] = ifThen.map(_._2).flatMap(_.needsCachedPayloads).toSet
 }
 
 class BranchPlan(val active: Vector[Int],
@@ -341,6 +383,7 @@ class BranchPlan(val active: Vector[Int],
   val tempOffset: Int,
   val needsCachedPayloads: Set[Int]) extends RPStatement {
 
+  def branchPlans: Iterator[BranchPlan] = Iterator.single(this)
   def isReuse(cellIdx: CellIdx): Boolean = active.contains(cellIdx.idx)
   def singleDispatchSym0: Symbol = if(tailSyms0.size == 1) tailSyms0.head else Symbol.NoSymbol
   def singleDispatchSym1: Symbol = if(tailSyms1.size == 1) tailSyms1.head else Symbol.NoSymbol

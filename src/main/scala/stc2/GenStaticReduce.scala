@@ -75,13 +75,17 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
 
   // Temporary caches to reduce repeated loads
   private[this] val idxCPCache = mutable.HashMap.empty[FreeIdx, VarIdx]
-  private def cachedIdx(indices: FreeIdx*)(f: => Unit): MethodDSL = {
-    indices.foreach { idx =>
+  private def storeCachedIdx(idx: FreeIdx): Boolean = {
+    if(!idxCPCache.contains(idx)) {
       ldTaggedCPFRaw(idx)
       idxCPCache.put(idx, m.storeLocal(tp.J, s"cachedIdx_f${idx.active}_${idx.port}"))
-    }
+      true
+    } else false
+  }
+  private def cachedIdx(indices: FreeIdx*)(f: => Unit): MethodDSL = {
+    val stored = indices.filter(storeCachedIdx)
     f
-    indices.foreach(idxCPCache.remove)
+    idxCPCache --= stored
     m
   }
 
@@ -313,7 +317,29 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         emitStatement(t, parents, s"$branchMetricName:$idx")
         m.setLabel(branchEnd)
       }
-      emitStatement(els, parents, s"$branchMetricName:${ifThen.length}")
+      els.foreach(emitStatement(_, parents, s"$branchMetricName:${ifThen.length}"))
+
+    case RPMatchPrincipal(wire, ifThen, els) =>
+      val (unboxed, boxed) = ifThen.zipWithIndex.partition(t => shouldUnbox(t._1._1))
+      //println(s"***** $hasUnboxed, $hasBoxed, ${ifThen.length}")
+      cachedIdx(wire) {
+        if(boxed.nonEmpty) {
+          ifPrincipal(wire).thn {
+            boxed.foreach { case ((sym, t), idx) =>
+              ifBoxed(wire, sym).thn {
+                emitStatement(t, parents, s"$branchMetricName:$idx")
+              }
+            }
+          }
+        }
+        unboxed.foreach { case ((sym, t), idx) =>
+          ifUnboxed(wire, sym).thn {
+            emitStatement(t, parents, s"$branchMetricName:$idx")
+          }
+        }
+      }
+      els.foreach(emitStatement(_, parents, s"$branchMetricName:${ifThen.length}"))
+
     case bp: BranchPlan =>
       emitBranch(bp, parents, s"$branchMetricName:b")
   }
@@ -654,13 +680,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   private def computePayload(pc: PayloadComputationPlan, elseTarget: Label = null): Unit = pc match {
-    case CheckPrincipal(wire: FreeIdx, sym, _) =>
-      if(codeGen.shouldUnbox(sym)) {
-        ifUnboxed(wire, sym).not.jump(elseTarget)
-      } else {
-        ifPrincipal(wire).not.jump(elseTarget)
-        ifBoxed(wire, sym).not.jump(elseTarget)
-      }
     case AllocateTemp(ea, boxed) =>
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"

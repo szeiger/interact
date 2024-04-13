@@ -103,7 +103,18 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
         emitStatement(t, parents, s"$branchMetricName:$idx")
         m.setLabel(branchEnd)
       }
-      emitStatement(els, parents, s"$branchMetricName:${ifThen.length}")
+      els.foreach(emitStatement(_, parents, s"$branchMetricName:${ifThen.length}"))
+
+    case RPMatchPrincipal(wire, ifThen, els) =>
+      ifThen.zipWithIndex.foreach { case ((sym, t), idx) =>
+        val next = m.newLabel
+        ldPort(wire).if_>=.jump(next)
+        ldCell(wire).instanceof(concreteCellTFor(sym)).if_==.jump(next)
+        emitStatement(t, parents, s"$branchMetricName:$idx")
+        m.setLabel(next)
+      }
+      els.foreach(emitStatement(_, parents, s"$branchMetricName:${ifThen.length}"))
+
     case bp: BranchPlan =>
       emitBranch(bp, parents, s"$branchMetricName:b")
   }
@@ -330,10 +341,6 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   }
 
   private def computePayload(pc: PayloadComputationPlan, elseTarget: Label = null): Unit = pc match {
-    case CheckPrincipal(wire, sym, _) =>
-      assert(elseTarget != null)
-      ldPort(wire).if_>=.jump(elseTarget)
-      ldCell(wire).instanceof(concreteCellTFor(sym)).if_==.jump(elseTarget)
     case AllocateTemp(ea, boxed) =>
       assert(elseTarget == null)
       val name = s"temp${ea.idx}"

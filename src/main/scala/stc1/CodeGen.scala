@@ -247,15 +247,10 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
     }
   }
 
-  private def bps(st: RPStatement): Iterator[BranchPlan] = st match {
-    case RPCond(ifThen, els) => ifThen.iterator.flatMap { case (_, t) => bps(t) } ++ bps(els)
-    case bp: BranchPlan => Iterator.single(bp)
-  }
-
   private def compileCellCache(): Unit = {
     val syms = ((for {
       r <- rules.valuesIterator
-      b <- bps(r.statement)
+      b <- r.statement.branchPlans
       s <- b.cellSyms.iterator
     } yield s) ++ (rules.keysIterator.map(_.sym1) ++ rules.keysIterator.map(_.sym2)).filter(_.isDefined)).toVector.distinct.sortBy(_.id)
     val c = DSL.newClass(Acc.PUBLIC.FINAL, cellCacheT.className)
