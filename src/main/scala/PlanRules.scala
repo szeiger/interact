@@ -392,7 +392,7 @@ class BranchPlan(val active: Vector[Int],
   def show: String = {
     val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
     val n = needsCachedPayloads.mkString("{", ", ", "}")
-    s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, sd0=$singleDispatchSym0, sd1=$singleDispatchSym1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n,\n$c"
+    s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, sd0=$singleDispatchSym0, sd1=$singleDispatchSym1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n, steps=$statSteps\n$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (instructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += nested

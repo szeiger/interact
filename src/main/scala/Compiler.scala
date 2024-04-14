@@ -60,6 +60,7 @@ case class Config(
   inlineBranching: Boolean = true, // inline rules that cannot be merged into a single branch (st.c)
   inlineUniqueContinuations: Boolean = true, // st.c
   loop: Boolean = true,
+  repeatedInliningLimit: Int = 0,
 
   // Backend
   backend: Backend = STC1Backend,

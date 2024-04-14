@@ -30,7 +30,7 @@ class Inline(val global: Global) extends Phase {
     val initial = mutable.ArrayBuffer.empty[InitialRuleWiring]
     val st2 = Vector.newBuilder[Statement]
     n.statements.foreach {
-      case r: RuleWiring => st2 += inlineRec(r, Nil, SymCounts.empty, SymCounts.empty, uniqueContSyms, allRules)
+      case r: RuleWiring => st2 += inlineRec(r, Nil, SymCounts.empty, uniqueContSyms, allRules)
       case r: InitialRuleWiring => initial += r
       case s => s
     }
@@ -86,7 +86,7 @@ class Inline(val global: Global) extends Phase {
     }
   }
 
-  private[this] def inlineRec(r: RuleWiring, parents: List[RuleKey], parentAvailable: SymCounts, parentCreated: SymCounts,
+  private[this] def inlineRec(r: RuleWiring, parents: List[RuleKey], parentAvailable: SymCounts,
     uniqueContSyms: Map[RuleKey, Set[Symbol]], allRules: Map[RuleKey, RuleWiring]): RuleWiring = {
     val chain = r.key :: parents
     val prefix = "    " * (parents.length+1)
@@ -95,76 +95,93 @@ class Inline(val global: Global) extends Phase {
     val ruleAvailable = parentAvailable ++ Vector(r.sym1, r.sym2).filterNot(_.isSingleton)
     val uniqueConts = uniqueContSyms.getOrElse(r.key, Set.empty)
     val branches2 = Transform.flatMapC(r.branches) { branch =>
-      val branchCreated = parentCreated ++ branch.cells.filterNot(_.isSingleton)
-      phaseLog(s"$prefix  create ${branchCreated -- ruleAvailable}")
 
-      // direct
-      val possiblePairs = findInlinableActivePairs(branch, allRules).filter { case (_, _, r2) =>
-        !chain.contains(r2.key) || (config.inlineFullAll && r2.branches.length == 1)
+      def inlineDirect(branch: BranchWiring, inlineFullAll: Boolean, countSteps: Boolean): BranchWiring = {
+        val possiblePairs = findInlinableActivePairs(branch, allRules).filter { case (_, _, r2) =>
+          !chain.contains(r2.key) || (inlineFullAll && r2.branches.length == 1)
+        }.toVector.sortBy { case (i1, i2, _) => (i1, i2) }
+        val possiblePairsRecInlined = possiblePairs.map { case (i1, i2, r2) =>
+          phaseLog(s"$prefix  direct simple: ${r2.key}")
+          (i1, i2, inlineRec(r2, chain, ruleAvailable, uniqueContSyms, allRules))
+        }.filter { case (_, _, r2) =>
+          // filter again because inlining could have produced more branches
+          !chain.contains(r2.key) || (inlineFullAll && r2.branches.length == 1)
+        }
+        val (simple, branching) = possiblePairsRecInlined.toList.partition(_._3.branches.length == 1)
+        val simpleFiltered =
+          if(!config.inlineFull) Nil
+          else if(config.backend.allowPayloadTemp) simple
+          else simple.filter { case (_, _, r2) => r2.sym1.payloadType.isEmpty && r2.sym2.payloadType.isEmpty }
+        val direct = simpleFiltered ++
+          (if(config.inlineBranching && config.backend.inlineBranching) branching.take(1) else Nil) //TODO inline multiple branching rules?
+        phaseLog(s"$prefix  Direct inlining ${direct.length} RuleWirings")
+        direct.foreach { case (i1, i2, rw) => phaseLog(rw, s"Direct inlining at ($i1, $i2)", prefix+"  ") }
+        val branch2 = inlineAll(branch, direct, prefix + "  ", countSteps)
+        if(branch2 eq branch) phaseLog(s"$prefix  Direct inlined (no change)")
+        else phaseLog(branch2, "Direct inlined", prefix+"  ")
+        branch2
       }
-      val possiblePairsRecInlined = possiblePairs.map { case (i1, i2, r2) =>
-        phaseLog(s"$prefix  direct simple: ${r2.key}")
-        (i1, i2, inlineRec(r2, chain, ruleAvailable, branchCreated, uniqueContSyms, allRules))
-      }.filter { case (_, _, r2) =>
-        // filter again because inlining could have produced more branches
-        !chain.contains(r2.key) || (config.inlineFullAll && r2.branches.length == 1)
-      }
-      val (simple, branching) = possiblePairsRecInlined.toList.partition(_._3.branches.length == 1)
-      val simpleFiltered =
-        if(!config.inlineFull) Nil
-        else if(config.backend.allowPayloadTemp) simple
-        else simple.filter { case (_, _, r2) => r2.sym1.payloadType.isEmpty && r2.sym2.payloadType.isEmpty }
-      val direct = simpleFiltered ++
-        (if(config.inlineBranching && config.backend.inlineBranching) branching.take(1) else Nil) //TODO inline multiple branching rules?
-      phaseLog(s"$prefix  Direct inlining ${direct.length} RuleWirings")
-      direct.foreach { case (i1, i2, rw) => phaseLog(rw, s"Direct inlining at ($i1, $i2)", prefix+"  ") }
-      val branch2 = inlineAll(branch, direct, prefix + "  ")
-      if(branch2 eq branch) phaseLog(s"$prefix  Direct inlined (no change)")
-      else phaseLog(branch2, "Direct inlined", prefix+"  ")
 
-      // speculative
-      if(uniqueConts.nonEmpty && branch2.cond.isEmpty && branch2.branches.isEmpty) { //TODO inline into already branching rule? Create nested conditions?
-        val candidates = branch2.cells.iterator.zipWithIndex.flatMap {
-          case (s, i) if uniqueConts.contains(s) && !ruleAvailable.contains(s) =>
-            branch2.principalConns(i) match {
-              case f: FreeIdx => Iterator.single((s, i, f))
-              case _ => Iterator.empty
+      def inlineSpeculative(branch2: BranchWiring): Vector[BranchWiring] = {
+        if(uniqueConts.nonEmpty && branch2.cond.isEmpty && branch2.branches.isEmpty) { //TODO inline into already branching rule? Create nested conditions?
+          val candidates = branch2.cells.iterator.zipWithIndex.flatMap {
+            case (s, i) if uniqueConts.contains(s) && !ruleAvailable.contains(s) =>
+              branch2.principalConns(i) match {
+                case f: FreeIdx => Iterator.single((s, i, f))
+                case _ => Iterator.empty
+              }
+            case _ => Iterator.empty
+          }.toVector.distinct.sortBy { case (s, i, f) => (s.id, f.active, f.port, i) }
+          val candidate = candidates.headOption //TODO choose the best candidate or inline multiple ones?
+          val candidateRecInlined = candidate.map { case (usym, _, _) =>
+            val partners = allRules.iterator.filterNot(_._2.derived).collect {
+              case (k, r) if k.sym1 == usym => (k.sym2, r)
+              case (k, r) if k.sym2 == usym => (k.sym1, r)
+            }.toVector.filter { case (s, r) => !chain.contains(r.key) }
+            phaseLog(s"$prefix  cont: $usym")
+            partners.map { case (psym, r2) =>
+              (psym, inlineRec(r2, chain, ruleAvailable + psym, uniqueContSyms, allRules))
             }
-          case _ => Iterator.empty
-        }.toSet
-        val candidate = candidates.headOption //TODO choose the best candidate or inline multiple ones?
-        val candidateRecInlined = candidate.map { case (usym, _, _) =>
-          val partners = allRules.iterator.filterNot(_._2.derived).collect {
-            case (k, r) if k.sym1 == usym => (k.sym2, r)
-            case (k, r) if k.sym2 == usym => (k.sym1, r)
-          }.toVector.filter { case (s, r) => !chain.contains(r.key) }
-          phaseLog(s"$prefix  cont: $usym")
-          partners.map { case (psym, r2) =>
-            (psym, inlineRec(r2, chain, ruleAvailable + psym, branchCreated, uniqueContSyms, allRules))
+          }
+          val branches3 = (candidate, candidateRecInlined) match {
+            case (Some((usym, idx, wire)), Some(partners)) if partners.nonEmpty =>
+              //ShowableNode.print(branch2, name = "Original branch")
+              partners.sortBy { case (s, r) => (s.id, r.sym1.id, r.sym2.id) }.map { case (psym, prule) =>
+                //phaseLog(s"Activating branch of ${rule.key} with ($idx, $usym, $psym, $wire):")
+                val b = makeActive(branch2, psym, wire)
+                val (c1, c2) = if(prule.key.sym1 == usym) (idx, b.cells.length-1) else (b.cells.length-1, idx)
+                assert(b.branches.isEmpty)
+                //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
+                //ShowableNode.print(prule, name = "Inlining")
+                val b2 = inline(b, c1, c2, prule, prefix+"  ", false)._1
+                //ShowableNode.print(b2, name = "Activated")
+                b2
+              } :+ branch2
+            case _ => Vector(branch2)
+          }
+          branches3.foreach(b => phaseLog(b, "Speculative inlined", prefix+"  "))
+          branches3
+        } else {
+          phaseLog(s"$prefix  Speculative inlined (no change)")
+          Vector(branch2)
+        }
+      }
+
+      val branch2 = inlineDirect(branch, config.inlineFullAll, false)
+      val branches3 = inlineSpeculative(branch2)
+      if(branches3.length == 1 && (branches3.head eq branch)) branches3
+      else branches3.map { b =>
+        @tailrec def recDirect(b: BranchWiring, limit: Int): BranchWiring = {
+          if(limit == 0) {
+            phaseLog(s"$prefix  Repeated inlining limit ${config.repeatedInliningLimit} reached")
+            b
+          } else {
+            phaseLog(s"$prefix  Repeated direct inlining pass ${config.repeatedInliningLimit-limit+1}")
+            val b2 = inlineDirect(b, false, true)
+            if(b2 eq b) b2 else recDirect(b2, limit-1)
           }
         }
-
-        val branches3 = (candidate, candidateRecInlined) match {
-          case (Some((usym, idx, wire)), Some(partners)) if partners.nonEmpty =>
-            //ShowableNode.print(branch2, name = "Original branch")
-            partners.map { case (psym, prule) =>
-              //phaseLog(s"Activating branch of ${rule.key} with ($idx, $usym, $psym, $wire):")
-              val b = makeActive(branch2, psym, wire)
-              val (c1, c2) = if(prule.key.sym1 == usym) (idx, b.cells.length-1) else (b.cells.length-1, idx)
-              assert(b.branches.isEmpty)
-              //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
-              //ShowableNode.print(prule, name = "Inlining")
-              val b2 = inline(b, c1, c2, prule, prefix+"  ")._1
-              //ShowableNode.print(b2, name = "Activated")
-              b2
-            } :+ branch2
-          case _ => Vector(branch2)
-        }
-        branches3.foreach(b => phaseLog(b, "Speculative inlined", prefix+"  "))
-        branches3
-      } else {
-        phaseLog(s"$prefix  Speculative inlined (no change)")
-        Vector(branch2)
+        recDirect(b, config.repeatedInliningLimit)
       }
     }
     val res = if(branches2 eq r.branches) r else r.copy(branches = branches2)
@@ -214,10 +231,10 @@ class Inline(val global: Global) extends Phase {
   }
 
   @tailrec
-  private[this] def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)], prefix: String): BranchWiring = ps match {
+  private[this] def inlineAll(n: BranchWiring, ps: List[(Int, Int, RuleWiring)], prefix: String, countSteps: Boolean): BranchWiring = ps match {
     case (c1, c2, r) :: ps =>
-      val (n2, mapping) = inline(n, c1, c2, r, prefix)
-      inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) }, prefix)
+      val (n2, mapping) = inline(n, c1, c2, r, prefix, countSteps)
+      inlineAll(n2, ps.map { case (c1, c2, r) => (mapping(c1), mapping(c2), r) }, prefix, countSteps)
     case Nil => n
   }
 
@@ -239,7 +256,7 @@ class Inline(val global: Global) extends Phase {
     checkThrow()
   }
 
-  private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring, prefix: String): (BranchWiring, Map[Int, Int]) = {
+  private[this] def inline(outer: BranchWiring, c1: Int, c2: Int, inner: RuleWiring, prefix: String, countSteps: Boolean): (BranchWiring, Map[Int, Int]) = {
     //println(s"inline($c1, $c2)")
     assert(outer.cellOffset == 0 && outer.branches.isEmpty)
     //ShowableNode.print(b, name = s"inlining ${r.key} into")
@@ -318,7 +335,7 @@ class Inline(val global: Global) extends Phase {
     val b3 = if(foundLocalCheckPrincipal) resolveCheckPrincipal(b2) else b2
 
     (if(b3.branches.length == 1) {
-      val res = merge(b3)
+      val res = merge(b3, countSteps)
       phaseLog(res, s"Merged", prefix)
       res
     } else {
@@ -349,10 +366,11 @@ class Inline(val global: Global) extends Phase {
     tr(b)
   }
 
-  private[this] def merge(b: BranchWiring): BranchWiring = {
+  private[this] def merge(b: BranchWiring, countSteps: Boolean): BranchWiring = {
     assert(b.branches.length == 1 && b.branches.head.cellOffset == b.cells.length)
     val ib = b.branches.head
-    b.copy(cells = b.cells ++ ib.cells, conns = b.conns ++ ib.conns, payloadComps = b.payloadComps ++ ib.payloadComps, branches = ib.branches)
+    b.copy(cells = b.cells ++ ib.cells, conns = b.conns ++ ib.conns, payloadComps = b.payloadComps ++ ib.payloadComps, branches = ib.branches,
+      statSteps = if(countSteps) b.statSteps + ib.statSteps else b.statSteps)
   }
 
   private[this] def tempCount(pcs: Iterable[PayloadComputation]): Int =
