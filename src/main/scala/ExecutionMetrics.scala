@@ -9,7 +9,7 @@ class ExecutionMetrics {
 
   def getSteps: Int = steps
 
-  @inline def recordStats(steps: Int, cellAllocations: Int, proxyAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
+  def recordStats(steps: Int, cellAllocations: Int, proxyAllocations: Int, cachedCellReuse: Int, singletonUse: Int,
     unboxedCells: Int, loopSave: Int, directTail: Int, singleDispatchTail: Int, labelCreate: Int): Unit = {
     this.steps += steps
     this.cellAlloc += cellAllocations
@@ -23,7 +23,7 @@ class ExecutionMetrics {
     this.labelCreate += labelCreate
   }
 
-  @inline def recordStats(cellAllocations: Int): Unit = steps += 1
+  def recordStats(steps: Int, cellAllocations: Int): Unit = recordStats(steps, cellAllocations, 0, 0, 0, 0, 0, 0, 0, 0)
 
   def recordMetric(metric: String, inc: Int = 1): Unit = {
     val m = metrics.getOrElseUpdate(metric, new MutInt(0))

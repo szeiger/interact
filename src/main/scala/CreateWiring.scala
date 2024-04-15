@@ -107,7 +107,9 @@ class CreateWiring(val global: Global) extends Transform with Phase {
 case class Connection(c1: Idx, c2: Idx) extends Node {
   def isExternal: Boolean = c1.isInstanceOf[FreeIdx] || c2.isInstanceOf[FreeIdx]
 
-  def show = s"${c1.show} <-> ${c2.show}"
+  def show =
+    if(c1.isPrincipal && c2.isPrincipal) s"${c1.show} <=> ${c2.show}"
+    else s"${c1.show} <-> ${c2.show}"
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
 
   override def hashCode: Int = c1.hashCode + c2.hashCode
@@ -132,8 +134,14 @@ object Idx {
 case class CellIdx(idx: Int, port: Int) extends Idx {
   def show = if(idx == -1) s"null:$port" else s"c$idx:$port"
 }
+object CellIdx {
+  implicit val ord: Ordering[CellIdx] = Ordering.by(_.show)
+}
 case class FreeIdx(active: Int, port: Int) extends Idx {
   def show = s"f$active:$port"
+}
+object FreeIdx {
+  implicit val ord: Ordering[FreeIdx] = Ordering.by(_.show)
 }
 
 sealed abstract class EmbArg extends Node
@@ -273,10 +281,10 @@ final case class BranchWiring(cellOffset: Int, cells: Vector[Symbol], conns: Set
 
   def allCreatedCells: Set[Symbol] = cells.toSet ++ branches.flatMap(_.allCreatedCells)
 
-  def show: String = cells.zipWithIndex.map { case (s, i) => s"${i+cellOffset}: $s/${s.arity}"}.mkString(s"tempO=$tempOffset, cellO=$cellOffset, cells = [", ", ", "]")
+  def show: String = cells.zipWithIndex.map { case (s, i) => s"${i+cellOffset}: $s/${s.arity}"}.mkString(s"tempO=$tempOffset, cellO=$cellOffset, cells = [", ", ", s"], steps=$statSteps")
 
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
-    n += (intConns, "i") += (extConns, "e") += (payloadComps, "p") += (cond, "cond") += (branches, "b")
+    n += (cond, "cond") += (payloadComps, "p") += (intConns, "i") += (extConns, "e") += (branches, "b")
   override protected[this] def namedNodes: NamedNodesBuilder = new NamedNodesBuilder(show)
   def copy(cellOffset: Int = cellOffset, cells: Vector[Symbol] = cells, conns: Set[Connection] = conns,
     payloadComps: Vector[PayloadComputation] = payloadComps, cond: Option[PayloadComputation] = cond,

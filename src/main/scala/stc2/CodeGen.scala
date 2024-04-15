@@ -12,6 +12,7 @@ import Interpreter._
 
 class CodeGen(genPackage: String, classWriter: ClassWriter,
   compilationUnit: CompilationUnit, globals: Symbols, val symIds: Map[Symbol, Int], val config: Config) extends AbstractCodeGen(config) { self =>
+  private val sourceFile = "unknown" //TODO extract from symbols
 
   val riT = tp.c[InitialRuleImpl]
   val ptwT = tp.c[Interpreter]
@@ -120,7 +121,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     if(config.collectStats) m.aload(ptw).ldc(metric).iconst(count).invoke(ptw_recordMetric)
 
   private def compileMetaClass(sym: Symbol): Unit = {
-    val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteMetaClassTFor(sym).className, metaClassT)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, concreteMetaClassTFor(sym).className, metaClassT, sourceFile = sourceFile)
 
     c.field(Acc.PUBLIC.STATIC.FINAL, metaClass_singleton(sym))
 
@@ -187,7 +188,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
   }
 
   private def compileDispatch(): Unit = {
-    val c = DSL.newClass(Acc.PUBLIC.FINAL, generatedDispatchT.className, dispatchT)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, generatedDispatchT.className, dispatchT, sourceFile = sourceFile)
     c.emptyNoArgsConstructor()
 
     // staticReduce
@@ -244,7 +245,7 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     val u1 = Unboxing(rule.sym1, rule.arity1)
     val u2 = Unboxing(rule.sym2, rule.arity2)
     val staticMR = initialRuleT(initialIndex).method(staticReduceName, staticReduceDesc(u1, u2))
-    val c = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className, riT)
+    val c = DSL.newClass(Acc.PUBLIC.FINAL, staticMR.owner.className, riT, sourceFile = sourceFile)
     c.emptyNoArgsConstructor(Acc.PUBLIC)
     implementStaticReduce(c, rule)
 
@@ -283,12 +284,12 @@ class CodeGen(genPackage: String, classWriter: ClassWriter,
     c.javaName
   }
 
-  private def compileRule(rule: RulePlan): Unit = {
-    val ric = DSL.newClass(Acc.PUBLIC.FINAL, ruleT(rule.sym1, rule.sym2).className)
+  private def compileRule(rule: RulePlan): Unit = try {
+    val ric = DSL.newClass(Acc.PUBLIC.FINAL, ruleT(rule.sym1, rule.sym2).className, sourceFile = sourceFile)
     ric.emptyNoArgsConstructor(Acc.PRIVATE)
     implementStaticReduce(ric, rule)
     addClass(classWriter, ric)
-  }
+  } catch { case ex: Exception => throw new Exception(s"Error generating rule ${rule.key}", ex) }
 
   def compile(): (Vector[String], String) = {
     val constrs = globals.symbols.filter(_.isCons).toVector.sortBy(_.id)

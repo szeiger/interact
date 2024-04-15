@@ -1,6 +1,6 @@
 package de.szeiger.interact
 
-import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, Statement, Symbol}
+import de.szeiger.interact.ast.{CompilationUnit, NamedNodesBuilder, Node, NodesBuilder, PayloadType, RuleKey, ShowableNode, Statement, Symbol}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -72,30 +72,35 @@ class PlanRules(val global: Global) extends Phase {
     lazy val ruleWiring: Option[RuleWiring] = rule.collect { case r: RuleWiring => r }
     lazy val initialRuleWiring: Option[InitialRuleWiring] = rule.collect { case r: InitialRuleWiring => r }
     val allCells = parentCells ++ branch.cells
-    val (active, skipConns) = rule.map(findReuse(_, branch)).getOrElse((baseActive, Set.empty[Connection]))
+    val (active, skipConns) = rule.map(findReuse(_, branch)).getOrElse {
+      val a = baseActive ++ branch.cond.collect { case _: CheckPrincipal => -1 } //TODO: Allow reuse of active >= 2 in nested branches
+      (a, Set.empty[Connection])
+    }
     //println(s"${rule.map(r => r.sym1 + ", " + r.sym2)} $active")
     val conns = (branch.intConns ++ branch.extConns).filterNot(skipConns.contains)
     val cellCreationOrder = optimizeCellCreationOrder(branch)
     val instr1, instr2 = Vector.newBuilder[Instruction]
     var statSingletonUse = baseSingletonUse
     val cellPortsConnected = mutable.HashSet.empty[CellIdx]
-    var cellPortsNotConnected = 0
     val cellsCreated = new Array[Boolean](branch.cells.length)
     branch.cond.foreach {
       case CheckPrincipal(wire, sym, activeIdx) => instr1 += ActivateCell(wire, sym, activeIdx)
       case _ =>
     }
+    //ShowableNode.print(branch)
     for(idx <- cellCreationOrder) {
       val idxO = idx + branch.cellOffset
-      val activeForIdxO = active.indexOf(idx)
+      val activeForIdxO = active.indexOf(idxO)
       branch.cells(idx) match {
         case sym if activeForIdxO >= 0 && (!config.unboxedPrimitives || !config.backend.canUnbox(sym)) => instr1 += ReuseActiveCell(idxO, activeForIdxO, sym)
         case sym if sym.isSingleton && (!config.unboxedPrimitives || !config.backend.canUnbox(sym)) => statSingletonUse += 1; instr2 += GetSingletonCell(idxO, sym)
         case sym => instr2 += NewCell(idxO, sym, branch.auxConns(idx).iterator.zipWithIndex.map {
-          case (CellIdx(ci, p2), p1) if !cellsCreated(ci) && active.indexOf(ci) < 0 => cellPortsNotConnected += 1; CellIdx(-1, p2)
-          //case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => cellPortsNotConnected += 1; CellIdx(-1, p2)
-          case (CellIdx(ci, p2), p1) => cellPortsConnected += CellIdx(idx, p1); CellIdx(ci, p2)
+          case (CellIdx(ci, p2), p1) if ci >= branch.cellOffset && !cellsCreated(ci-branch.cellOffset) && active.indexOf(ci) < 0 => CellIdx(-1, p2)
+          //case (CellIdx(ci, p2), p1) if !cellsCreated(idx) && ci != reuse1 && ci != reuse2 => CellIdx(-1, p2)
+          case (CellIdx(ci, p2), p1) => cellPortsConnected += CellIdx(idxO, p1); CellIdx(ci, p2)
           case (f: FreeIdx, _) => f
+          case (null, p1) => CellIdx(-1, -2)
+            //CompilerResult.fail(s"auxConns($idx)($p1) is null", branch.pos, atNode = rule.getOrElse(branch), mark = branch)
         }.toVector)
       }
       cellsCreated(idx) = true
@@ -392,7 +397,9 @@ class BranchPlan(val active: Vector[Int],
   def show: String = {
     val c = cellSyms.zipWithIndex.map { case (s, i) => s"${i + cellOffset}: $s/${s.arity}" }.mkString("cells = [", ", ", "]")
     val n = needsCachedPayloads.mkString("{", ", ", "}")
-    s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, sd0=$singleDispatchSym0, sd1=$singleDispatchSym1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n, steps=$statSteps\n$c"
+    s"a=${active.mkString("[", ", ", "]")}, loop0=$loopOn0, loop1=$loopOn1, utail=$unconditionalTail, useTailCont=$useTailCont, sd0=$singleDispatchSym0, sd1=$singleDispatchSym1, cellO=$cellOffset, tempO=$tempOffset, needsCP=$n, steps=$statSteps,\n" +
+      s"cpc=${cellPortsConnected.toVector.map(_.show).sorted.mkString("[",", ","]")},\n" +
+      s"$c"
   }
   override protected[this] def buildNodeChildren[N <: NodesBuilder](n: N) =
     n += (instructions, "cc") += (payloadComps, "p") += (sortedConns, "c") += nested

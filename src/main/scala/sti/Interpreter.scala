@@ -19,8 +19,8 @@ class Cell(val symId: Int, val arity: Int) {
     case b: RefBox => b.getValue
     case _ => ()
   }
-  private[this] final def auxPortsIterator: Iterator[(Cell, Int)] = (-1 until arity).iterator.map(i => (auxCell(i), auxPort(i)))
-  override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${auxPortsIterator.map { w => s"(${if(w._1 == null) "null" else "_"})" }.mkString(", ") })@${System.identityHashCode(this)}"
+  private[this] final def auxPortsIterator: Iterator[(Cell, Int)] = (0 until arity).iterator.map(i => (auxCell(i), auxPort(i)))
+  override def toString = s"Cell($symId, $arity, [$getGenericPayload], ${auxPortsIterator.map { w => s"(${if(w._1 == null) "null" else s"${System.identityHashCode(w._1)}:${w._2}"})" }.mkString(", ") })@${System.identityHashCode(this)}"
   def cellSymbol: Symbol = null // managed via symId in Cells
 }
 object Cell {
@@ -43,7 +43,7 @@ final class CellR(_symId: Int, _arity: Int) extends Cell(_symId, _arity) with Re
 
 final class WireCell(final val sym: Symbol) extends Cell(0, 1) {
   override def cellSymbol: Symbol = sym
-  override def toString = s"WireCell($sym)"
+  override def toString = s"WireCell($sym)@${System.identityHashCode(this)}"
 }
 
 final class RuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[Int], connections: Array[Long],
@@ -166,7 +166,7 @@ final class RuleImpl(s1id: Int, protoCells: Array[Int], freeWiresPorts: Array[In
       i += 1
     }
 
-    if(ptw.metrics != null) ptw.metrics.recordStats(protoCells.length)
+    if(ptw.metrics != null) ptw.metrics.recordStats(1, protoCells.length)
   } catch { case ex: Exception =>
     throw new RuntimeException(s"Error evaluating rule $this: $ex", ex)
   }
@@ -263,6 +263,7 @@ final class Interpreter(globals: Symbols, compilationUnit: CompilationUnit, conf
   // Used by the debugger
   def getRuleImpl(c1: Cell, c2: Cell): RuleImpl = ruleImpls(mkRuleKey(c1, c2))
   def reduce1(c1: Cell, c2: Cell): Unit = {
+    cutBuffer.remove(c1, c2)
     setNext(c1, c2)
     processNext()
     flushNext()
@@ -324,4 +325,18 @@ final class CutBuffer(initialSize: Int) {
       len = 0
     }
   def iterator: Iterator[(Cell, Cell)] = pairs.iterator.take(len).grouped(2).map { case Seq(c1, c2) => (c1, c2) }
+  // used by the debugger:
+  def remove(c1: Cell, c2: Cell): Unit = {
+    var i =0
+    while(i < len) {
+      val p1 = pairs(i)
+      val p2 = pairs(i+1)
+      if((c1 eq p1) && (c2 eq p2) || (c1 eq p2) && (c2 eq p1)) {
+        System.arraycopy(pairs, i+2, pairs, i, len-i-2)
+        len -= 2
+        return
+      }
+      i += 2
+    }
+  }
 }

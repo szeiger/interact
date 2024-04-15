@@ -28,7 +28,7 @@ trait Node extends ShowableNode with Cloneable {
     val ch = namedNodeChildren
     NodeInfo(simpleName, ch.msg,
       children = ch.iterator.map { case (n, s) => (s, n.showNode) }.toSeq,
-      annot = if(pos.isDefined) pos.pretty else "")
+      annot = if(pos.isDefined) pos.pretty else "")(this)
   }
   def namedNodeChildren: NamedNodesBuilder = buildNodeChildren(namedNodes)
   def nodeChildren: Iterator[Node] = buildNodeChildren(new UnnamedNodesBuilder).iterator
@@ -278,7 +278,8 @@ trait ShowableNode {
 object ShowableNode {
   import MaybeColors._
 
-  def print(n: ShowableNode, out: PrintWriter = new PrintWriter(new OutputStreamWriter(System.out)), name: String = "", prefix: String = "", prefix1: String = null, highlightTopLevel: Boolean = true): Unit = {
+  def print(n: ShowableNode, out: PrintWriter = new PrintWriter(new OutputStreamWriter(System.out)), name: String = "",
+    prefix: String = "", prefix1: String = null, highlightTopLevel: Boolean = true, mark: ShowableNode = null): Unit = {
     def f(n: NodeInfo, pf1: String, pf2: String, name: String, depth: Int, highlight: Boolean): Unit = {
       val b = new StringBuilder()
       val namePrefix = if(name.nonEmpty) s"$name: " else ""
@@ -286,7 +287,8 @@ object ShowableNode {
       val msg = n.msg.split('\n')
       val children = n.children.toIndexedSeq
       val cChild = if(depth % 2 == 0) cBlue else cGreen
-      b.append(s"$pf1$highlitNamePrefix$cYellow${n.name}$cNormal ${msg(0)}")
+      val nameColor = if(mark != null && (mark eq n.node)) cRed else cYellow
+      b.append(s"$pf1$highlitNamePrefix$nameColor${n.name}$cNormal ${msg(0)}")
       for(i <- 1 until msg.length) {
         val p = if(children.isEmpty) " " else s"$cChild\u2502"
         val sp = " " * math.max(4, namePrefix.length + n.name.length)
@@ -294,6 +296,7 @@ object ShowableNode {
       }
       if(n.annot.nonEmpty) b.append(s"  $cBlue${n.annot}$cNormal")
       out.println(b.result())
+      out.flush()
       children.zipWithIndex.foreach { case ((name, n), idx) =>
         val (p1, p2) = if(idx == children.size-1) ("\u2514 ", "  ") else ("\u251c ", "\u2502 ")
         f(n, pf2 + cChild + p1, pf2 + cChild + p2, name, depth + 1, true)
@@ -304,10 +307,10 @@ object ShowableNode {
   }
 }
 
-case class NodeInfo(name: String, msg: String = "", children: Iterable[(String, NodeInfo)] = Vector.empty, annot: String = "")
+case class NodeInfo(name: String, msg: String = "", children: Iterable[(String, NodeInfo)] = Vector.empty, annot: String = "")(val node: Node)
 
 object NodeInfo {
-  val empty: NodeInfo = NodeInfo("null")
+  val empty: NodeInfo = NodeInfo("null")(null)
   def apply(s: ShowableNode): NodeInfo = if(s == null) empty else s.showNode
   def get(name: String, o: Option[ShowableNode]): Iterable[(String, NodeInfo)] = o match {
     case Some(n) => Vector(name -> NodeInfo(n))

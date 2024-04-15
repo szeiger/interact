@@ -125,6 +125,8 @@ class CodeGen(genPackage: String, classWriter: ClassWriter, val config: Config,
       val p1 = m.param("p1", tp.I)
       val c2 = m.param("c2", cellT)
       val p2 = m.param("p2", tp.I)
+      //m.iload(p1).iconst(-1).ifI_<.fail("p1 < -1")
+      //m.iload(p1).iconst(sym.arity).ifI_>=.fail("p1 >= sym.arity")
       sym.arity match {
         case 0 => m.return_
         case 1 => m.aload(m.receiver).dup.aload(c2).putfield(cfields(0)).iload(p2).putfield(pfields(0)).return_

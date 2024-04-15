@@ -345,13 +345,16 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
   }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
-    if(parents.isEmpty) {
-      active(0).reuse = bp.active(0)
-      active(1).reuse = bp.active(1)
-      for(i <- 2 until active.length) active(i) = null
-      for(i <- active.indices)
-        reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
+    val parentActiveUsed = parents match {
+      case Nil =>
+        active(0).reuse = bp.active(0)
+        active(1).reuse = bp.active(1)
+        0
+      case b :: _ => b.active.length
     }
+    for(i <- 2.max(parentActiveUsed) until active.length) active(i) = null
+    for(i <- 0.max(parentActiveUsed) until active.length)
+      reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
 
     for(i <- bp.cellOffset until cells.length)
       cells(i) = if(i-bp.cellOffset < bp.cellSyms.length) new Cell(i, bp.cellSyms(i-bp.cellOffset)) else null
@@ -602,7 +605,7 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], level: V
         assert(symIds(sym) >= 0)
         m.dup2.iconst(mkHeader(symIds(sym))).invokestatic(allocator_putInt)
         args.zipWithIndex.foreach {
-          case (CellIdx(-1, _), _) => // principal, nothing to connect
+          case (CellIdx(-1, _), _) => // delayed, nothing to connect yet
           case (_: FreeIdx, _) => // done later when connecting opposite direction
           case (idx, p1) =>
             m.dup2.lconst(auxPtrOffset(p1)).ladd

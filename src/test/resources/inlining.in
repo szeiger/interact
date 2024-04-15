@@ -24,3 +24,25 @@ let
   res1 = f(Int[0])
   res2 = f(Int[1])
   res22 = f(Int[2])
+
+
+cons Z
+cons S(n)
+def f1(_, a) = b
+  | S(x) => g1(a, x)
+def g1(_, a) = b
+  | S(y) => H1(y, b) = a
+cons H1(y, b) = a
+match H1(y, b) = S(t) => b = f1(S(t), y)
+
+
+def pred(_) = r
+  | Z => Z
+  | S(x) => x
+def ack2(_, a) = b
+  | Z => S(a)
+  | S(x) => ack2b(a, S(x))
+def ack2b(_, a) = b
+  | Z => ack2(pred(a), S(Z))
+  | S(y), S(t) => (t1, t2) = dup(t); ack2(pred(S(t1)), ack2(S(t2), y))
+let res3 = ack2(2n, 3n)

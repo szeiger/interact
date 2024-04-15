@@ -667,6 +667,6 @@ final class ThenDSL(posOpcode: Int, negOpcode: Int, m: MethodDSL, l1: Label) {
   }
   def not: ThenDSL = new ThenDSL(negOpcode, posOpcode, m, l1)
   def jump(l: Label): MethodDSL = m.jumpInsn(posOpcode, l)
-  def assert(): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m().V)().athrow)
-  def assert(msg: String): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m(Desc.Object).V)(m.ldc(msg)).athrow)
+  def fail(): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m().V)().athrow)
+  def fail(msg: String): MethodDSL = thn(m.newInitDup(Desc.c[java.lang.AssertionError], Desc.m(Desc.Object).V)(m.ldc(msg)).athrow)
 }

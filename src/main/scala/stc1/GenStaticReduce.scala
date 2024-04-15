@@ -120,13 +120,16 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
   }
 
   def emitBranch(bp: BranchPlan, parents: List[BranchPlan], branchMetricName: String): Unit = {
-    if(parents.isEmpty) {
-      active(0).reuse = bp.active(0)
-      active(1).reuse = bp.active(1)
-      for(i <- 2 until active.length) active(i) = null
-      for(i <- active.indices)
-        reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
+    val parentActiveUsed = parents match {
+      case Nil =>
+        active(0).reuse = bp.active(0)
+        active(1).reuse = bp.active(1)
+        0
+      case b :: _ => b.active.length
     }
+    for(i <- 2.max(parentActiveUsed) until active.length) active(i) = null
+    for(i <- 0.max(parentActiveUsed) until active.length)
+      reuseBuffers(i) = if(active(i) == null || active(i).reuse == -1) null else new WriteBuffer(active(i))
 
     cells.clearFrom(bp.cellOffset)
     bp.cellSyms.copyToArray(cellSyms, bp.cellOffset)
@@ -204,9 +207,9 @@ class GenStaticReduce(m: MethodDSL, _initialActive: Vector[ActiveCell], ptw: Var
     }
     def connectCC(ct1: CellIdx, ct2: CellIdx): Unit = {
       if(ct1.isAux && !bp.cellPortsConnected.contains(ct1))
-        setAux(ct1, ct2, bp.isReuse(ct1))
+        setAux(ct1, ct2, bp.isReuse(ct1) || ct1.idx < bp.cellOffset)
       if(ct2.isAux && !bp.cellPortsConnected.contains(ct2))
-        setAux(ct2, ct1, bp.isReuse(ct2))
+        setAux(ct2, ct1, bp.isReuse(ct2) || ct2.idx < bp.cellOffset)
       if(ct1.isPrincipal && ct2.isPrincipal)
         createCut(ct1, ct2)
     }

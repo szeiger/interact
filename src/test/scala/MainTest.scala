@@ -21,10 +21,10 @@ class MainTest(spec: String) {
   @Test def testSeqDef = check("seq-def", scaleFactor = 50, expectedSteps = 32)
   @Test def testLists = check("lists")
   @Test def testParMult = check("par-mult")
-  @Test def testInlining = check("inlining", expectedSteps = 7)
+  @Test def testInlining = check("inlining", expectedSteps = if(conf.backend.allowPayloadTemp) 99 else 102)
   @Test def testFib = check("fib")
   @Test def testEmbedded = check("embedded")
-  @Test def testAck = check("ack", expectedSteps = if(conf.backend.allowPayloadTemp) 18114079 else 23686073)
+  @Test def testAck = check("ack", expectedSteps = if(conf.backend.allowPayloadTemp) 18114077 else 23686073)
   @Test def testDiverging = check("diverging", fail = true)
 }
 

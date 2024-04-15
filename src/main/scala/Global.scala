@@ -62,7 +62,7 @@ final class Global(val config: Config) {
   }
 }
 
-class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode = null, internal: Boolean = false) {
+class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode = null, internal: Boolean = false, mark: Node = null) {
   def formatted: String = {
     import MaybeColors._
     import Notice._
@@ -83,7 +83,7 @@ class Notice(msg: String, at: Position, severity: Severity, atNode: ShowableNode
       val out = new StringWriter()
       val outw = new PrintWriter(out)
       outw.print(s"\n$cBlue| ${cRed}AST Context:$cNormal\n")
-      ShowableNode.print(atNode, outw, prefix = s"$cBlue|   ")
+      ShowableNode.print(atNode, outw, prefix = s"$cBlue|   ", mark = mark)
       b.append(out.toString)
     }
     b.result()
@@ -131,8 +131,8 @@ object CompilerResult {
     case NonFatal(e) => throw new CompilerResult(Vector(new Notice(e.toString, atNode.pos, Severity.Fatal, internal = true, atNode = atNode)), e)
   }
 
-  def fail(msg: String, at: Position = null, parent: Throwable = null, atNode: Node = null, internal: Boolean = true): Nothing =
-    throw new CompilerResult(Vector(new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal)))
+  def fail(msg: String, at: Position = null, parent: Throwable = null, atNode: Node = null, internal: Boolean = true, mark: Node = null): Nothing =
+    throw new CompilerResult(Vector(new Notice(msg, if(at == null && atNode != null) atNode.pos else at, Severity.Fatal, atNode, internal, mark)))
 }
 
 class ReportedError extends Exception("Internal error: ReportedError thrown by throwError must be caught by a surrounding tryError")

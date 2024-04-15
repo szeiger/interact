@@ -114,7 +114,7 @@ class Inline(val global: Global) extends Phase {
           else simple.filter { case (_, _, r2) => r2.sym1.payloadType.isEmpty && r2.sym2.payloadType.isEmpty }
         val direct = simpleFiltered ++
           (if(config.inlineBranching && config.backend.inlineBranching) branching.take(1) else Nil) //TODO inline multiple branching rules?
-        phaseLog(s"$prefix  Direct inlining ${direct.length} RuleWirings")
+        phaseLog(branch, s"Direct inlining ${direct.length} RuleWirings into", prefix+"  ")
         direct.foreach { case (i1, i2, rw) => phaseLog(rw, s"Direct inlining at ($i1, $i2)", prefix+"  ") }
         val branch2 = inlineAll(branch, direct, prefix + "  ", countSteps)
         if(branch2 eq branch) phaseLog(s"$prefix  Direct inlined (no change)")
@@ -123,7 +123,7 @@ class Inline(val global: Global) extends Phase {
       }
 
       def inlineSpeculative(branch2: BranchWiring): Vector[BranchWiring] = {
-        if(uniqueConts.nonEmpty && branch2.cond.isEmpty && branch2.branches.isEmpty) { //TODO inline into already branching rule? Create nested conditions?
+        val branches3O = if(uniqueConts.nonEmpty && branch2.cond.isEmpty && branch2.branches.isEmpty) { //TODO inline into already branching rule? Create nested conditions?
           val candidates = branch2.cells.iterator.zipWithIndex.flatMap {
             case (s, i) if uniqueConts.contains(s) && !ruleAvailable.contains(s) =>
               branch2.principalConns(i) match {
@@ -133,18 +133,18 @@ class Inline(val global: Global) extends Phase {
             case _ => Iterator.empty
           }.toVector.distinct.sortBy { case (s, i, f) => (s.id, f.active, f.port, i) }
           val candidate = candidates.headOption //TODO choose the best candidate or inline multiple ones?
-          val candidateRecInlined = candidate.map { case (usym, _, _) =>
+          val candidateRecInlined = candidate.map { case (usym, idx, wire) =>
             val partners = allRules.iterator.filterNot(_._2.derived).collect {
               case (k, r) if k.sym1 == usym => (k.sym2, r)
               case (k, r) if k.sym2 == usym => (k.sym1, r)
             }.toVector.filter { case (s, r) => !chain.contains(r.key) }
             phaseLog(s"$prefix  cont: $usym")
-            partners.map { case (psym, r2) =>
+            (usym, idx, wire, partners.map { case (psym, r2) =>
               (psym, inlineRec(r2, chain, ruleAvailable + psym, uniqueContSyms, allRules))
-            }
+            })
           }
-          val branches3 = (candidate, candidateRecInlined) match {
-            case (Some((usym, idx, wire)), Some(partners)) if partners.nonEmpty =>
+          candidateRecInlined.collect {
+            case (usym, idx, wire, partners) if partners.nonEmpty =>
               //ShowableNode.print(branch2, name = "Original branch")
               partners.sortBy { case (s, r) => (s.id, r.sym1.id, r.sym2.id) }.map { case (psym, prule) =>
                 //phaseLog(s"Activating branch of ${rule.key} with ($idx, $usym, $psym, $wire):")
@@ -153,23 +153,25 @@ class Inline(val global: Global) extends Phase {
                 assert(b.branches.isEmpty)
                 //ShowableNode.print(b, name = s"Inlining into at $c1, $c2")
                 //ShowableNode.print(prule, name = "Inlining")
-                val b2 = inline(b, c1, c2, prule, prefix+"  ", false)._1
+                val b2 = inline(b, c1, c2, prule, prefix+"  ", true)._1
                 //ShowableNode.print(b2, name = "Activated")
                 b2
               } :+ branch2
-            case _ => Vector(branch2)
           }
-          branches3.foreach(b => phaseLog(b, "Speculative inlined", prefix+"  "))
-          branches3
-        } else {
-          phaseLog(s"$prefix  Speculative inlined (no change)")
-          Vector(branch2)
+        } else None
+        branches3O match {
+          case Some(bs) =>
+            bs.foreach(b => phaseLog(b, "Speculative inlined", prefix+"  "))
+            bs
+          case None =>
+            phaseLog(s"$prefix  Speculative inlined (no change)")
+            Vector(branch2)
         }
       }
 
       val branch2 = inlineDirect(branch, config.inlineFullAll, false)
       val branches3 = inlineSpeculative(branch2)
-      if(branches3.length == 1 && (branches3.head eq branch)) branches3
+      val branches4 = if(branches3.length == 1 && (branches3.head eq branch)) branches3
       else branches3.map { b =>
         @tailrec def recDirect(b: BranchWiring, limit: Int): BranchWiring = {
           if(limit == 0) {
@@ -182,6 +184,13 @@ class Inline(val global: Global) extends Phase {
           }
         }
         recDirect(b, config.repeatedInliningLimit)
+      }
+
+      // Remove empty top-level branches
+      branches4.flatMap { b =>
+        if(b.branches.nonEmpty && b.cells.isEmpty && b.payloadComps.isEmpty && b.cond.isEmpty && b.conns.isEmpty)
+          b.branches
+        else Vector(b)
       }
     }
     val res = if(branches2 eq r.branches) r else r.copy(branches = branches2)
@@ -225,7 +234,7 @@ class Inline(val global: Global) extends Phase {
       else Vector.empty
     val newConns = (0 until psym.arity).map(i => Connection(CellIdx(topCellLen, i), FreeIdx(activeIdx, i)))
     val b2 = b1.copy(cellOffset = b1.cellOffset-1, cond = Some(CheckPrincipal(pWire, psym, activeIdx)),
-      cells = b1.cells :+ psym, conns = b1.conns ++ newConns, statSteps = b1.statSteps + 1,
+      cells = b1.cells :+ psym, conns = b1.conns ++ newConns,
       payloadComps = newPayloadComps ++ b1.payloadComps)
     b2
   }
@@ -307,6 +316,7 @@ class Inline(val global: Global) extends Phase {
         case n => n
       }
       def remap(idx: Idx) = idx match {
+        case f: FreeIdx if f.active >= 2 => f // no renumbering, assuming outer does not already contain CheckPrincipal
         case f: FreeIdx => innerMapping(f)
         case CellIdx(i, p) => CellIdx(i + innerCellOffset, p)
       }
@@ -335,12 +345,13 @@ class Inline(val global: Global) extends Phase {
     val b3 = if(foundLocalCheckPrincipal) resolveCheckPrincipal(b2) else b2
 
     (if(b3.branches.length == 1) {
+      assert(b3.branches.head.cond.isEmpty)
       val res = merge(b3, countSteps)
-      phaseLog(res, s"Merged", prefix)
+      phaseLog(res, s"Merged ($countSteps)", prefix)
       res
     } else {
-      phaseLog(s"${prefix}Merged: No change")
-      b3
+      phaseLog(s"${prefix}Merged ($countSteps): No change")
+      if(countSteps) b3 else b3.copy(statSteps = b3.statSteps-1)
     }, outerCellsMapping)
   }
 

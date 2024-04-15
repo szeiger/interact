@@ -103,11 +103,11 @@ trait Analyzer[Cell] { self =>
         }
     }
     def show(_c1: Cell, withRet: Boolean): String = {
-      val c1 = if(isFreeWire(_c1)) getConnected(_c1, 0)._1 else _c1
-      shown += c1
+      val (c1, freeP) = if(isFreeWire(_c1)) getConnected(_c1, 0) else (_c1, -2)
+      shown += _c1
       val sym = getSymbol(c1)
       def list(poss: IndexedSeq[Int]) = poss.map { p1 =>
-        if(p1 == -1 && isFreeWire(_c1)) (getSymbol(_c1), nameOrSubst(c1, p1, _c1, 0))
+        if(p1 == freeP && isFreeWire(_c1)) (getSymbol(_c1), nameOrSubst(c1, p1, _c1, 0))
         else all.get(c1, p1) match {
           case Some((c2, p2)) => (getSymbol(c2), nameOrSubst(c1, p1, c2, p2))
           case None => (Symbol.NoSymbol, "?")
